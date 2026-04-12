@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "X Bookmarks Indexer MVP",
+  "description": "Scrape de bookmarks en X + ingesta por lotes en backend propio.",
+  "version": "0.1.0",
+  "permissions": ["storage", "tabs", "activeTab"],
+  "host_permissions": ["https://x.com/*", "http://localhost:8787/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "X Indexer",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://x.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "name": "x-bookmarks-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch src/server.js",
+    "start": "node src/server.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.103.0",
+    "dotenv": "^17.4.1"
+  }
+}
