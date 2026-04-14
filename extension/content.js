@@ -138,7 +138,7 @@ function extractMedia(tweetNode) {
   return Array.from(media);
 }
 
-function extractTweetFromNode(tweetNode) {
+async function extractTweetFromNode(tweetNode) {
   const statusLink = tweetNode.querySelector('a[href*="/status/"]');
   if (!statusLink) {
     return null;
@@ -148,6 +148,19 @@ function extractTweetFromNode(tweetNode) {
   const tweetId = extractTweetIdFromHref(sourceUrl);
   if (!tweetId) {
     return null;
+  }
+
+  // Expansion logic for "Show more" / "Mostrar más"
+  const buttons = Array.from(tweetNode.querySelectorAll('[role="button"]'));
+  const showMoreButton = buttons.find(b => {
+    const txt = b.innerText.toLowerCase();
+    return txt.includes("show more") || txt.includes("mostrar más");
+  });
+
+  if (showMoreButton) {
+    showMoreButton.click();
+    // Wait for DOM update
+    await sleep(400);
   }
 
   const textNode = tweetNode.querySelector('[data-testid="tweetText"]');
@@ -167,12 +180,19 @@ function extractTweetFromNode(tweetNode) {
   };
 }
 
-function extractVisibleTweets() {
+async function extractVisibleTweets(seenTweetIds) {
   const tweetNodes = document.querySelectorAll('[data-testid="tweet"]');
   const tweets = [];
 
   for (const tweetNode of tweetNodes) {
-    const extracted = extractTweetFromNode(tweetNode);
+    // Optimization: Check status link before potentially clicking expand
+    const statusLink = tweetNode.querySelector('a[href*="/status/"]');
+    if (!statusLink) continue;
+    
+    const tid = extractTweetIdFromHref(statusLink.href);
+    if (!tid || seenTweetIds.has(tid)) continue;
+
+    const extracted = await extractTweetFromNode(tweetNode);
     if (extracted) {
       tweets.push(extracted);
     }
@@ -221,10 +241,11 @@ async function runSync() {
   while (scrollRounds < SCRAPER_CONFIG.maxScrollRounds) {
     scrollRounds += 1;
 
-    const visibleTweets = extractVisibleTweets();
+    const visibleTweets = await extractVisibleTweets(seenTweetIds);
     let discoveredThisRound = 0;
 
     for (const tweet of visibleTweets) {
+      // Re-verify since index might change or duplicates
       if (seenTweetIds.has(tweet.tweet_id)) {
         continue;
       }

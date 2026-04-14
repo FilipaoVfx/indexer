@@ -4,7 +4,11 @@
   "description": "Scrape de bookmarks en X + ingesta por lotes en backend propio.",
   "version": "0.1.0",
   "permissions": ["storage", "tabs", "activeTab"],
-  "host_permissions": ["https://x.com/*", "http://localhost:8787/*"],
+  "host_permissions": [
+    "https://x.com/*",
+    "http://localhost:8787/*",
+    "http://127.0.0.1:8787/*"
+  ],
   "background": {
     "service_worker": "background.js"
   },

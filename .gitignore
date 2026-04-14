@@ -1,5 +1,6 @@
 # Dependencies
 backend/node_modules/
+web/node_modules/
 
 # Local data
 backend/data/
@@ -25,3 +26,6 @@ backend/.env
 *.log
 *.sqlite
 *.db
+
+# Next.js build output
+web/.next/
