@@ -1,0 +1,439 @@
+---
+import Layout from "../components/Layout.astro";
+---
+
+<Layout title="Indexbook Search">
+  <main class="page-shell">
+
+    <!-- ═══ HERO ═══ -->
+    <section class="hero-panel">
+      <div class="hero-copy">
+        <span class="eyebrow">v.1.0-alpha / build:2026</span>
+        <h1>INDEXBOOK_[SESSION]</h1>
+        <p class="hero-text">
+          Searchable memory layer. Lexical + Hybrid retrieval active.
+          Terminal interface initialized for high-bandwidth exploration.
+        </p>
+      </div>
+      <div class="hero-metrics">
+        <div class="metric-card">
+          <span class="metric-label">Engine_Status</span>
+          <strong id="m-strategy">---</strong>
+        </div>
+        <div class="metric-card">
+          <span class="metric-label">Response_Time</span>
+          <strong id="m-latency">---</strong>
+        </div>
+        <div class="metric-card">
+          <span class="metric-label">Knowledge_Graph</span>
+          <strong id="m-nodes">??? NODE(S)</strong>
+        </div>
+        <div class="metric-card">
+          <span class="metric-label">DB_Records_<span id="db-status">LIVE</span></span>
+          <strong id="db-count">---</strong>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══ WORKSPACE ═══ -->
+    <section class="workspace">
+
+      <!-- ── sidebar ── -->
+      <aside class="control-panel">
+        <form id="search-form" class="search-form">
+          <label class="field">
+            <span>QUERY_INPUT</span>
+            <input type="text" name="q" placeholder='keyword author:handle -exclude' autofocus />
+          </label>
+
+          <div class="field-grid">
+            <label class="field">
+              <span>FILTER_AUTHOR</span>
+              <input type="text" name="author" placeholder="@handle" />
+            </label>
+            <label class="field">
+              <span>FILTER_DOMAIN</span>
+              <input type="text" name="domain" placeholder="host.com" />
+            </label>
+          </div>
+
+          <div class="field-grid">
+            <label class="field">
+              <span>DATE_START</span>
+              <input type="date" name="from" />
+            </label>
+            <label class="field">
+              <span>DATE_END</span>
+              <input type="date" name="to" />
+            </label>
+          </div>
+
+          <div class="form-actions">
+            <button type="submit">SEARCH.EXE</button>
+            <a id="reset-btn" href="">ABORT_RESET</a>
+          </div>
+        </form>
+
+        <!-- parser debug -->
+        <div class="parser-panel">
+          <div class="parser-header">
+            <span class="eyebrow" style="background:var(--accent-blue)">DEBUG_OUTPUT</span>
+            <p id="summary-text" style="margin-top:0.5rem;font-size:0.75rem">
+              Connect the backend to start exploring your bookmark graph.
+            </p>
+          </div>
+          <div id="chip-group" class="chip-group"></div>
+          <ul class="parser-list" style="font-size:0.7rem">
+            <li>Postgres web-style tsquery parsing enabled.</li>
+            <li>Field extraction prioritized.</li>
+            <li>Hybrid relevance scoring v2 active.</li>
+          </ul>
+        </div>
+      </aside>
+
+      <!-- ── results ── -->
+      <section class="results-panel">
+        <div id="error-area"></div>
+
+        <div class="results-header">
+          <div>
+            <span class="eyebrow" style="background:var(--accent-yellow);color:#000">OUTPUT_STREAM</span>
+            <h2>MATCH_RESULTS</h2>
+          </div>
+          <div class="results-meta">
+            <span>COUNT: <span id="r-count">0</span></span>
+            <span>MODE: <span id="r-mode">---</span></span>
+          </div>
+        </div>
+
+        <div id="result-list" class="result-list">
+          <div class="empty-state">
+            <h3>Waiting for search...</h3>
+            <p>Type a query and press SEARCH.EXE to begin.</p>
+          </div>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <!-- ═══ CLIENT-SIDE ENGINE ═══ -->
+  <script>
+    const API_BASE = localStorage.getItem("INDEXBOOK_API") || "https://indexer-hzto.onrender.com";
+    const POLL_MS = 5000;
+
+    /* ── DOM refs ── */
+    const form        = document.getElementById("search-form") as HTMLFormElement;
+    const resultList  = document.getElementById("result-list")!;
+    const errorArea   = document.getElementById("error-area")!;
+    const chipGroup   = document.getElementById("chip-group")!;
+    const summaryText = document.getElementById("summary-text")!;
+    const mStrategy   = document.getElementById("m-strategy")!;
+    const mLatency    = document.getElementById("m-latency")!;
+    const mNodes      = document.getElementById("m-nodes")!;
+    const rCount      = document.getElementById("r-count")!;
+    const rMode       = document.getElementById("r-mode")!;
+    const dbStatus    = document.getElementById("db-status")!;
+    const dbCount     = document.getElementById("db-count")!;
+    const resetBtn    = document.getElementById("reset-btn") as HTMLAnchorElement;
+
+    /* ── helpers ── */
+    function esc(s: string): string {
+      const el = document.createElement("span");
+      el.textContent = s;
+      return el.innerHTML;
+    }
+
+    function safeHighlight(raw: string): string {
+      return raw
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/&lt;mark&gt;/g, "<mark>")
+        .replace(/&lt;\/mark&gt;/g, "</mark>");
+    }
+
+    function formatDate(v: string | null): string {
+      if (!v) return "Unknown date";
+      const d = new Date(v);
+      if (isNaN(d.getTime())) return "Unknown date";
+      return new Intl.DateTimeFormat("en", { dateStyle: "medium" }).format(d);
+    }
+
+    function fmtScore(v: unknown): string | null {
+      if (typeof v !== "number" || isNaN(v)) return null;
+      return v.toFixed(3);
+    }
+
+    function safeDomain(url: string): string {
+      try { return new URL(url).hostname.replace(/^www\./, ""); }
+      catch { return url; }
+    }
+
+    /* ── set reset link base path ── */
+    resetBtn.href = window.location.pathname;
+
+    /* ── fill form from URL params ── */
+    function syncFormFromUrl() {
+      const p = new URLSearchParams(window.location.search);
+      for (const input of form.querySelectorAll("input") as NodeListOf<HTMLInputElement>) {
+        input.value = p.get(input.name) || "";
+      }
+    }
+
+    /* ── search ── */
+    async function runSearch() {
+      const p = new URLSearchParams(window.location.search);
+      const hasQuery = [...p.values()].some(v => v.trim() !== "");
+
+      if (!hasQuery) {
+        resultList.innerHTML = `<div class="empty-state"><h3>Waiting for search...</h3><p>Type a query and press SEARCH.EXE to begin.</p></div>`;
+        return;
+      }
+
+      /* always include user_id */
+      if (!p.has("user_id") || !p.get("user_id")) p.set("user_id", "local-user");
+      if (!p.has("limit")) p.set("limit", "20");
+
+      errorArea.innerHTML = "";
+      resultList.innerHTML = `<div class="empty-state"><h3>Searching...</h3></div>`;
+
+      try {
+        const url = `${API_BASE}/api/bookmarks/search?${p.toString()}`;
+        const res = await fetch(url, { headers: { Accept: "application/json" } });
+        const data = await res.json();
+
+        if (!res.ok) throw new Error(data?.error?.message || `HTTP ${res.status}`);
+
+        /* metrics */
+        mStrategy.textContent = data.strategy || "---";
+        mLatency.textContent = typeof data.latency_ms === "number" ? `${data.latency_ms} ms` : "---";
+        mNodes.textContent = `${data.total ?? "???"} NODE(S)`;
+        rCount.textContent = String(data.total ?? 0);
+        rMode.textContent = data.strategy || "---";
+
+        /* summary */
+        if (!data.total) {
+          summaryText.textContent = "No results yet. Try a broader keyword, remove a filter, or ingest more bookmarks.";
+        } else {
+          summaryText.textContent = `${data.total} result${data.total === 1 ? "" : "s"} found with ${data.strategy} retrieval.`;
+        }
+
+        /* chips */
+        const pq = data.parsed_query;
+        chipGroup.innerHTML = "";
+        if (pq) {
+          (pq.terms || []).forEach((t: string) => {
+            chipGroup.innerHTML += `<span class="chip">T:${esc(t)}</span>`;
+          });
+          (pq.phrases || []).forEach((p: string) => {
+            chipGroup.innerHTML += `<span class="chip chip-strong">P:"${esc(p)}"</span>`;
+          });
+          (pq.exclude || []).forEach((x: string) => {
+            chipGroup.innerHTML += `<span class="chip chip-warning">X:${esc(x)}</span>`;
+          });
+        }
+
+        /* results */
+        const items: any[] = data.items || [];
+        if (items.length === 0) {
+          resultList.innerHTML = `<div class="empty-state"><h3>No bookmarks matched this search.</h3><p>Try a simpler query, remove a filter, or ingest more bookmarks from the extension.</p></div>`;
+          return;
+        }
+
+        resultList.innerHTML = items.map((item: any) => {
+          const author = esc(item.author_name || item.author_username || "anonymous");
+          const handle = item.author_username ? `<span>@${esc(item.author_username)}</span>` : "";
+          const domainBadge = item.source_domain ? `<span class="badge">${esc(item.source_domain)}</span>` : "";
+          const dateBadge = `<span class="badge">${esc(formatDate(item.created_at))}</span>`;
+          const scoreBadge = fmtScore(item.score) ? `<span class="badge badge-score">relevance:${fmtScore(item.score)}</span>` : "";
+
+          const content = item.highlight?.includes("<mark>")
+            ? `<div class="snippet-highlight">${safeHighlight(item.highlight)}</div>`
+            : `<p class="full-text">${esc(item.text_content || "--- NO CONTENT ---")}</p>`;
+
+          const media = (item.media?.length > 0)
+            ? `<div class="media-grid">${item.media.map((m: string, i: number) => `<div class="media-item"><img src="${esc(m)}" alt="Media ${i}" loading="lazy" /></div>`).join("")}</div>`
+            : "";
+
+          const links = (item.links?.length > 0)
+            ? `<div class="links-section"><div class="links-title">Extracted Links:</div><div class="links-list">${item.links.map((l: string) => `<a href="${esc(l)}" target="_blank" rel="noreferrer" class="badge">${esc(safeDomain(l))}</a>`).join("")}</div></div>`
+            : "";
+
+          const sourceLink = item.source_url
+            ? `<a href="${esc(item.source_url)}" target="_blank" rel="noreferrer" class="source-link">EXEC : OPEN_SOURCE_URL</a>`
+            : "";
+
+          const tweetId = item.tweet_id || item.id?.split(":").pop();
+          const breakdown = item.score_breakdown
+            ? `<span class="breakdown">L:${fmtScore(item.score_breakdown.lexical)} / A:${fmtScore(item.score_breakdown.author)} / F:${fmtScore(item.score_breakdown.freshness)}</span>`
+            : `<span>RETRIEVAL: FALLBACK</span>`;
+
+          return `<article class="result-card">
+            <div class="result-topline">
+              <div class="result-author"><strong>${author}</strong>${handle}</div>
+              <div class="result-badges">${domainBadge}${dateBadge}${scoreBadge}</div>
+            </div>
+            <div class="content-wrapper">${content}</div>
+            ${media}${links}${sourceLink}
+            <div class="result-footer"><span>ID: ${esc(tweetId)}</span>${breakdown}</div>
+          </article>`;
+        }).join("");
+
+      } catch (err: any) {
+        errorArea.innerHTML = `<div class="error-card"><h2>CRITICAL_ERROR</h2><p>${esc(err.message)}</p></div>`;
+        resultList.innerHTML = `<div class="empty-state"><h3>Search failed.</h3><p>Is the backend running at ${esc(API_BASE)}?</p></div>`;
+      }
+    }
+
+    /* ── form submit → update URL → search ── */
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const fd = new FormData(form);
+      const p = new URLSearchParams();
+      for (const [k, v] of fd.entries()) {
+        if (typeof v === "string" && v.trim()) p.set(k, v.trim());
+      }
+      const newUrl = `${window.location.pathname}${p.toString() ? "?" + p.toString() : ""}`;
+      window.history.pushState({}, "", newUrl);
+      runSearch();
+    });
+
+    /* ── back/forward nav ── */
+    window.addEventListener("popstate", () => {
+      syncFormFromUrl();
+      runSearch();
+    });
+
+    /* ── live DB metric polling ── */
+    async function refreshHealth() {
+      try {
+        const res = await fetch(`${API_BASE}/health`, { headers: { Accept: "application/json" } });
+        const data = await res.json();
+        if (!res.ok || !data?.ok) throw new Error();
+        const n = Number(data.total_bookmarks);
+        dbCount.textContent = Number.isFinite(n) && n >= 0 ? `${n} ROW(S)` : "---";
+        dbStatus.textContent = "LIVE";
+      } catch {
+        dbStatus.textContent = "OFFLINE";
+      }
+    }
+
+    /* ── boot ── */
+    syncFormFromUrl();
+    runSearch();
+    refreshHealth();
+    setInterval(refreshHealth, POLL_MS);
+  </script>
+</Layout>
+
+<style>
+  .page-shell { max-width: 1400px; margin: 0 auto; padding: 2rem 1rem; }
+
+  .hero-panel {
+    background: var(--surface);
+    border: 4px solid var(--border-strong);
+    box-shadow: var(--shadow);
+    padding: 2rem;
+    margin-bottom: 3rem;
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: 2rem;
+  }
+  .hero-copy h1 { font-size: 2.5rem; line-height: 1.1; margin: 1rem 0; text-transform: uppercase; color: var(--accent); }
+  .eyebrow { display: inline-block; background: var(--accent-pink); color: #000; padding: 0.2rem 0.6rem; font-weight: 700; font-size: 0.8rem; }
+  .hero-text { color: var(--text-muted); line-height: 1.6; }
+  .hero-metrics { display: grid; grid-template-columns: 1fr; gap: 1rem; }
+  .metric-card { background: var(--bg); border: 2px solid var(--border-strong); padding: 1rem; box-shadow: var(--shadow-small); }
+  .metric-label { font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; }
+  .metric-card strong { display: block; font-size: 1.2rem; color: var(--accent-blue); }
+
+  .workspace { display: grid; grid-template-columns: 380px 1fr; gap: 2rem; }
+  .control-panel { display: flex; flex-direction: column; gap: 2rem; }
+
+  .search-form { background: var(--surface); border: 4px solid var(--border-strong); padding: 1.5rem; box-shadow: var(--shadow); }
+  .field { display: block; margin-bottom: 1.5rem; }
+  .field span { display: block; font-size: 0.8rem; margin-bottom: 0.5rem; font-weight: 700; color: var(--accent-yellow); }
+  .field input {
+    width: 100%; background: #000; border: 2px solid var(--border-strong);
+    color: var(--accent); padding: 0.8rem; font-family: var(--font-mono); outline: none; font-size: 0.9rem;
+  }
+  .field input:focus { border-color: var(--accent); box-shadow: 0 0 10px var(--accent); }
+  .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+
+  .form-actions { display: flex; gap: 1rem; }
+  .form-actions button {
+    background: var(--accent); color: #000; border: 2px solid #000;
+    padding: 0.8rem 1.5rem; font-weight: 700; cursor: pointer;
+    box-shadow: var(--shadow-small); font-family: var(--font-mono); font-size: 0.85rem;
+  }
+  .form-actions button:hover { background: var(--text); color: #000; transform: translate(-2px, -2px); box-shadow: 8px 8px 0px #000; }
+  .form-actions button:active { box-shadow: none; transform: translate(2px, 2px); }
+  .form-actions a { padding: 0.8rem 1.5rem; border: 2px solid var(--border-strong); color: var(--text); font-weight: 700; display: inline-flex; align-items: center; }
+
+  .parser-panel { background: #000; border: 2px solid var(--accent); padding: 1rem; font-size: 0.85rem; }
+  .chip-group { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 1rem 0; }
+  .chip { padding: 0.2rem 0.5rem; border: 1px solid var(--text-muted); font-size: 0.75rem; }
+  .chip-strong { border-color: var(--accent-pink); color: var(--accent-pink); }
+  .chip-warning { border-color: var(--accent-yellow); color: var(--accent-yellow); }
+  .parser-list { list-style: none; padding: 0; color: var(--text-muted); }
+  .parser-list li::before { content: "> "; color: var(--accent); }
+
+  .results-panel { display: flex; flex-direction: column; gap: 2rem; }
+  .results-header { border-bottom: 4px solid var(--border-strong); padding-bottom: 1rem; display: flex; justify-content: space-between; align-items: flex-end; }
+  .results-header h2 { margin: 0; font-size: 2rem; text-transform: uppercase; }
+  .results-meta { display: flex; gap: 1.5rem; font-size: 0.8rem; color: var(--text-muted); }
+
+  .result-list { display: grid; gap: 2rem; }
+
+  .error-card { padding: 1rem; border: 2px solid red; background: #200; margin-bottom: 1rem; }
+  .error-card h2 { color: red; margin-bottom: 0.5rem; }
+  .warning-card { padding: 1rem; border: 2px solid #f59e0b; background: #2a2006; margin-bottom: 1rem; }
+  .warning-card h2 { color: #f59e0b; margin-bottom: 0.5rem; }
+
+  .empty-state { text-align: center; padding: 4rem 2rem; border: 2px dashed var(--border); }
+  .empty-state h3 { margin-bottom: 1rem; color: var(--text-muted); }
+  .empty-state p { color: var(--text-muted); font-size: 0.85rem; }
+
+  @media (max-width: 1080px) {
+    .hero-panel, .workspace { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 600px) {
+    .hero-copy h1 { font-size: 1.8rem; }
+    .field-grid { grid-template-columns: 1fr; }
+  }
+</style>
+
+<!-- global styles for dynamically injected result cards -->
+<style is:global>
+  .result-card {
+    background: var(--surface); border: 4px solid var(--border-strong);
+    padding: 1.5rem; box-shadow: 6px 6px 0px #000; transition: transform 0.1s;
+  }
+  .result-card:hover { transform: translate(-4px, -4px); box-shadow: 10px 10px 0px #000; border-color: var(--accent); }
+  .result-topline { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem; border-bottom: 2px solid #333; padding-bottom: 0.5rem; }
+  .result-author strong { color: #ff00ff; }
+  .result-author span { color: #888; margin-left: 0.5rem; }
+  .result-badges { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+  .badge { background: #000; border: 1px solid #fff; padding: 0.1rem 0.4rem; font-size: 0.7rem; color: #fff; }
+  .badge-score { border-color: #00ccff; color: #00ccff; }
+  .content-wrapper { margin: 1rem 0; }
+  .full-text { font-size: 1.05rem; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+  .snippet-highlight { background: #000; border-left: 4px solid #00ff66; padding: 1rem; margin: 1rem 0; line-height: 1.6; }
+  .media-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 1rem; margin: 1rem 0; }
+  .media-item { aspect-ratio: 16/9; border: 2px solid #fff; overflow: hidden; }
+  .media-item img { width: 100%; height: 100%; object-fit: cover; filter: grayscale(100%); transition: filter 0.3s; }
+  .media-item:hover img { filter: grayscale(0%); }
+  .links-section { margin-top: 1rem; padding: 1rem; background: #000; border: 1px dashed #fff; }
+  .links-title { font-size: 0.8rem; font-weight: 700; margin-bottom: 0.5rem; color: #00ccff; text-transform: uppercase; }
+  .links-list { display: flex; flex-wrap: wrap; gap: 0.8rem; font-size: 0.82rem; }
+  .source-link {
+    display: inline-block; margin-top: 1.5rem; background: #ffff00; color: #000;
+    padding: 0.5rem 1rem; font-weight: 700; border: 2px solid #000; box-shadow: 3px 3px 0px #000;
+  }
+  .source-link:hover { text-decoration: none; background: #fff; }
+  .result-footer { margin-top: 1.5rem; font-size: 0.75rem; color: #888; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; }
+
+  @media (max-width: 600px) {
+    .result-topline { flex-direction: column; }
+  }
+</style>
