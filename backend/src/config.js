@@ -1,5 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import "dotenv/config";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -28,5 +29,8 @@ export const config = {
     path.resolve(__dirname, "..", "data", "bookmarks.json"),
   allowedOrigins: parseOrigins(process.env.ALLOWED_ORIGINS || "*"),
   supabaseUrl: process.env.SUPABASE_URL,
-  supabaseKey: process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY
+  supabaseKey:
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_ANON_KEY
 };

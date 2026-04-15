@@ -3,6 +3,11 @@ import { normalizeBookmark } from "./normalize.js";
 
 export class BookmarkStore {
   constructor(config) {
+    if (!config.supabaseUrl || !config.supabaseKey) {
+      throw new Error(
+        "Missing Supabase config. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or SERVICE_ROLE_KEY)."
+      );
+    }
     this.supabase = createClient(config.supabaseUrl, config.supabaseKey);
     this.isReady = false;
   }
