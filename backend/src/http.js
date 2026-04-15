@@ -28,7 +28,10 @@ export function setCorsHeaders(req, res, allowedOrigins) {
   }
 
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type, X-Supabase-Url, X-Supabase-Key"
+  );
 }
 
 export function sendJson(res, statusCode, payload) {
