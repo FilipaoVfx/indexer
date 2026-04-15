@@ -1,6 +1,6 @@
 import http from "node:http";
 import { URL } from "node:url";
-import { config } from "./config.js";
+import { config, validateConfig } from "./config.js";
 import {
   createHttpError,
   parseJsonBody,
@@ -8,6 +8,8 @@ import {
   setCorsHeaders
 } from "./http.js";
 import { BookmarkStore } from "./store.js";
+
+validateConfig();
 
 const store = new BookmarkStore(config);
 await store.init();
@@ -86,6 +88,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && routePath === "/api/bookmarks/search") {
       const query = requestUrl.searchParams.get("q") || "";
       const author = requestUrl.searchParams.get("author") || "";
+      const domain = requestUrl.searchParams.get("domain") || "";
       const from = requestUrl.searchParams.get("from") || "";
       const to = requestUrl.searchParams.get("to") || "";
       const userId = sanitizeUserId(requestUrl.searchParams.get("user_id") || "");
@@ -96,6 +99,7 @@ const server = http.createServer(async (req, res) => {
         userId: userId || null,
         q: query,
         author,
+        domain,
         from,
         to,
         limit,
@@ -105,7 +109,11 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 200, {
         ok: true,
         total: result.total,
-        items: result.items
+        items: result.items,
+        strategy: result.strategy,
+        latency_ms: result.latency_ms,
+        parsed_query: result.parsed_query,
+        warning: result.warning
       });
       return;
     }

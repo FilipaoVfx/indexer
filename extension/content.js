@@ -134,7 +134,7 @@ function extractMedia(tweetNode) {
   return Array.from(media);
 }
 
-function extractTweetFromNode(tweetNode) {
+async function extractTweetFromNode(tweetNode) {
   const statusLink = tweetNode.querySelector('a[href*="/status/"]');
   if (!statusLink) {
     return null;
@@ -144,6 +144,19 @@ function extractTweetFromNode(tweetNode) {
   const tweetId = extractTweetIdFromHref(sourceUrl);
   if (!tweetId) {
     return null;
+  }
+
+  // Expansion logic for "Show more" / "Mostrar más"
+  const buttons = Array.from(tweetNode.querySelectorAll('[role="button"]'));
+  const showMoreButton = buttons.find(b => {
+    const txt = b.innerText.toLowerCase();
+    return txt.includes("show more") || txt.includes("mostrar más");
+  });
+
+  if (showMoreButton) {
+    showMoreButton.click();
+    // Wait for DOM update
+    await sleep(400);
   }
 
   const textNode = tweetNode.querySelector('[data-testid="tweetText"]');
@@ -163,92 +176,25 @@ function extractTweetFromNode(tweetNode) {
   };
 }
 
-function findTweetNode(startNode) {
-  if (!startNode || !(startNode instanceof Element)) {
-    return null;
-  }
-  return (
-    startNode.closest('article[data-testid="tweet"]') ||
-    startNode.closest('[data-testid="tweet"]') ||
-    startNode.closest("article")
-  );
-}
+async function extractVisibleTweets(seenTweetIds) {
+  const tweetNodes = document.querySelectorAll('[data-testid="tweet"]');
+  const tweets = [];
 
-function findActionElement(startNode) {
-  if (!startNode || !(startNode instanceof Element)) {
-    return null;
-  }
-  return (
-    startNode.closest('[data-testid="bookmark"]') ||
-    startNode.closest('[data-testid="removeBookmark"]') ||
-    startNode.closest("button, [role='button']")
-  );
-}
+  for (const tweetNode of tweetNodes) {
+    // Optimization: Check status link before potentially clicking expand
+    const statusLink = tweetNode.querySelector('a[href*="/status/"]');
+    if (!statusLink) continue;
 
-function classifyBookmarkAction(actionElement, rawTarget) {
-  const dataTestId = normalizeForMatch(
-    actionElement ? actionElement.getAttribute("data-testid") || "" : ""
-  );
-  if (dataTestId === "bookmark") {
-    return "save";
-  }
-  if (dataTestId === "removebookmark") {
-    return "remove";
-  }
+    const tid = extractTweetIdFromHref(statusLink.href);
+    if (!tid || seenTweetIds.has(tid)) continue;
 
-  const attrs = [
-    actionElement ? actionElement.getAttribute("aria-label") || "" : "",
-    actionElement ? actionElement.getAttribute("title") || "" : "",
-    actionElement ? actionElement.textContent || "" : ""
-  ]
-    .map((value) => normalizeForMatch(value))
-    .join(" ");
-
-  if (
-    attrs.includes("remove bookmark") ||
-    attrs.includes("quitar marcador") ||
-    attrs.includes("eliminar marcador")
-  ) {
-    return "remove";
-  }
-
-  if (
-    attrs.includes("bookmark") ||
-    attrs.includes("marcador") ||
-    attrs.includes("guardar")
-  ) {
-    return "save";
-  }
-
-  if (
-    rawTarget instanceof Element &&
-    rawTarget.closest('path[d^="M4 4.5C4 3.12"]')
-  ) {
-    return "save";
-  }
-
-  return "unknown";
-}
-
-function dedupeCapture(tweetId) {
-  const now = Date.now();
-  const lastCapturedAt = recentCapturedAtByTweet.get(tweetId) || 0;
-  if (now - lastCapturedAt < AUTO_CAPTURE_CONFIG.dedupeWindowMs) {
-    return false;
-  }
-
-  recentCapturedAtByTweet.set(tweetId, now);
-
-  if (recentCapturedAtByTweet.size > 250) {
-    const threshold = now - AUTO_CAPTURE_CONFIG.dedupeWindowMs * 4;
-    for (const [id, capturedAt] of recentCapturedAtByTweet.entries()) {
-      if (capturedAt < threshold) {
-        recentCapturedAtByTweet.delete(id);
-      }
+    const extracted = await extractTweetFromNode(tweetNode);
+    if (extracted) {
+      tweets.push(extracted);
     }
   }
 
-  return true;
+  return tweets;
 }
 
 async function tryExpandText(tweetNode) {
@@ -321,15 +267,26 @@ async function handleBookmarkSave(event, source) {
     return;
   }
 
-  const actionType = classifyBookmarkAction(actionElement, target);
-  if (actionType !== "save") {
-    return;
-  }
+    const visibleTweets = await extractVisibleTweets(seenTweetIds);
+    let discoveredThisRound = 0;
 
-  const tweetNode = findTweetNode(actionElement);
-  if (!tweetNode) {
-    return;
-  }
+    for (const tweet of visibleTweets) {
+      // Re-verify since index might change or duplicates
+      if (seenTweetIds.has(tweet.tweet_id)) {
+        continue;
+      }
+      seenTweetIds.add(tweet.tweet_id);
+      pendingBatch.push(tweet);
+      totalExtracted += 1;
+      discoveredThisRound += 1;
+
+      if (pendingBatch.length >= SCRAPER_CONFIG.batchSize) {
+        batchIndex += 1;
+        const chunk = pendingBatch.splice(0, SCRAPER_CONFIG.batchSize);
+        await enqueueBatch(syncId, batchIndex, chunk);
+        totalEnqueued += chunk.length;
+      }
+    }
 
   await sleep(AUTO_CAPTURE_CONFIG.captureDelayMs);
   const tweet = await extractTweetWithRetries(tweetNode);

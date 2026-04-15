@@ -1,5 +1,6 @@
 # Dependencies
 backend/node_modules/
+web/node_modules/
 
 # Local data
 backend/data/
@@ -26,3 +27,11 @@ dist/
 *.log
 *.sqlite
 *.db
+
+# Next.js build output
+web/.next/
+
+# Astro
+web-astro/node_modules/
+web-astro/dist/
+web-astro/.astro/

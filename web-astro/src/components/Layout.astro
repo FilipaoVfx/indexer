@@ -1,0 +1,61 @@
+---
+interface Props {
+  title?: string;
+}
+const { title = "Indexbook Search" } = Astro.props;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{title}</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📇</text></svg>" />
+  </head>
+  <body>
+    <slot />
+  </body>
+</html>
+
+<style is:global>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap');
+
+  :root {
+    --bg: #0a0a0a;
+    --surface: #141414;
+    --text: #ffffff;
+    --text-muted: #888888;
+    --accent: #00ff66;
+    --accent-pink: #ff00ff;
+    --accent-blue: #00ccff;
+    --accent-yellow: #ffff00;
+    --border: #333333;
+    --border-strong: #ffffff;
+    --shadow: 6px 6px 0px #000000;
+    --shadow-small: 3px 3px 0px #000000;
+    --font-mono: 'JetBrains Mono', monospace;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    background-color: var(--bg);
+    color: var(--text);
+    font-family: var(--font-mono);
+    overflow-x: hidden;
+    min-height: 100vh;
+  }
+
+  ::selection { background: var(--accent); color: #000; }
+
+  ::-webkit-scrollbar { width: 12px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border-strong); border: 3px solid var(--bg); }
+  ::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  mark { background: var(--accent); color: #000; padding: 0 2px; }
+</style>
