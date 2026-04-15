@@ -16,7 +16,22 @@ function appendLog(message) {
 
 function setBusy(isBusy) {
   syncButton.disabled = isBusy;
-  syncButton.textContent = isBusy ? "Syncing..." : "Sync now";
+  syncButton.textContent = isBusy ? "Checking..." : "Check auto sync";
+}
+
+function toErrorMessage(error) {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error);
+}
+
+function isMissingContentScriptError(message) {
+  return (
+    typeof message === "string" &&
+    (message.includes("Could not establish connection") ||
+      message.includes("Receiving end does not exist"))
+  );
 }
 
 function sendRuntimeMessage(message) {
@@ -72,38 +87,47 @@ async function flushQueue() {
   appendLog(`Flush requested. Pending queue: ${response && response.pendingQueue}`);
 }
 
-async function startSync() {
+async function getActiveTab() {
+  const tabs = await chrome.tabs.query({
+    active: true,
+    currentWindow: true
+  });
+  return tabs[0] || null;
+}
+
+async function checkAutoSync() {
   setBusy(true);
-  appendLog("Starting sync...");
+  appendLog("Checking auto-sync listener...");
 
   try {
-    const tabs = await chrome.tabs.query({
-      active: true,
-      currentWindow: true
-    });
-    const activeTab = tabs[0];
-
+    const activeTab = await getActiveTab();
     if (!activeTab || !activeTab.id) {
-      throw new Error("No active tab found");
+      throw new Error("No active tab found.");
     }
 
     const response = await chrome.tabs.sendMessage(activeTab.id, {
-      type: "START_SYNC"
+      type: "GET_CAPTURE_STATUS"
     });
 
     if (!response || !response.ok) {
-      throw new Error(
-        response && response.error
-          ? response.error
-          : "Failed to trigger sync. Open x.com/i/bookmarks first."
-      );
+      throw new Error(response && response.error ? response.error : "status_check_failed");
     }
 
     appendLog(
-      `Sync done. Extracted=${response.result.totalExtracted} Enqueued=${response.result.totalEnqueued} Batches=${response.result.totalBatches} Pending=${response.result.pendingQueue}`
+      `Auto listener ready. SyncId=${response.syncId} Captured cache=${response.trackedTweets}`
     );
+
+    const flushResponse = await sendRuntimeMessage({
+      type: "INGEST_FLUSH"
+    });
+    appendLog(`Auto-sync active. Pending queue: ${flushResponse && flushResponse.pendingQueue}`);
   } catch (error) {
-    appendLog(`Sync error: ${error instanceof Error ? error.message : String(error)}`);
+    const message = toErrorMessage(error);
+    if (isMissingContentScriptError(message)) {
+      appendLog("Open any x.com tab first. Auto-listener only runs on x.com.");
+    } else {
+      appendLog(`Sync error: ${message}`);
+    }
   } finally {
     setBusy(false);
   }
@@ -124,31 +148,25 @@ chrome.runtime.onMessage.addListener((message) => {
   if (message.type === "SYNC_ERROR") {
     const payload = message.payload || {};
     appendLog(`Error: ${JSON.stringify(payload)}`);
-    return;
-  }
-
-  if (message.type === "SYNC_DONE") {
-    const payload = message.payload || {};
-    appendLog(`Done event: ${JSON.stringify(payload)}`);
   }
 });
 
 saveButton.addEventListener("click", () => {
   void saveSettings().catch((error) => {
-    appendLog(`Save error: ${error instanceof Error ? error.message : String(error)}`);
+    appendLog(`Save error: ${toErrorMessage(error)}`);
   });
 });
 
 flushButton.addEventListener("click", () => {
   void flushQueue().catch((error) => {
-    appendLog(`Flush error: ${error instanceof Error ? error.message : String(error)}`);
+    appendLog(`Flush error: ${toErrorMessage(error)}`);
   });
 });
 
 syncButton.addEventListener("click", () => {
-  void startSync();
+  void checkAutoSync();
 });
 
 void loadSettings().catch((error) => {
-  appendLog(`Init error: ${error instanceof Error ? error.message : String(error)}`);
+  appendLog(`Init error: ${toErrorMessage(error)}`);
 });

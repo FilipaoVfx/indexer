@@ -103,11 +103,11 @@
   <body>
     <main>
       <h1>X Bookmarks Indexer</h1>
-      <p>Abre x.com/i/bookmarks y ejecuta la ingesta desde aqui.</p>
+      <p>Modo auto-sync: al guardar un post en X se envia solo al backend.</p>
 
       <div class="field">
         <label for="apiBaseUrl">Backend URL</label>
-        <input id="apiBaseUrl" placeholder="http://localhost:8787" />
+        <input id="apiBaseUrl" placeholder="https://indexer-hzto.onrender.com" />
       </div>
 
       <div class="field">
@@ -121,7 +121,7 @@
       </div>
 
       <div class="row">
-        <button id="syncButton">Sync now</button>
+        <button id="syncButton">Check auto sync</button>
       </div>
 
       <pre id="log"></pre>

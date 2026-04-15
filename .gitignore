@@ -20,6 +20,7 @@ backend/.env
 
 # Local extension artifacts
 *.crx
+dist/
 
 # Logs and local databases
 *.log

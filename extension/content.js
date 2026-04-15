@@ -1,20 +1,13 @@
-const SCRAPER_CONFIG = {
-  batchSize: 25,
-  minDelayMs: 1000,
-  maxDelayMs: 2500,
-  maxIdleRounds: 6,
-  maxScrollRounds: 450
+const AUTO_CAPTURE_CONFIG = {
+  captureDelayMs: 700,
+  retryDelayMs: 500,
+  maxExtractRetries: 4,
+  dedupeWindowMs: 12_000
 };
 
-let isSyncRunning = false;
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function randomBetween(min, max) {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
-}
+const recentCapturedAtByTweet = new Map();
+let autoBatchIndex = 0;
+const autoSyncId = `auto-${Date.now().toString(36)}-${Math.random().toString(16).slice(2, 8)}`;
 
 function cleanText(value) {
   if (typeof value !== "string") {
@@ -23,13 +16,24 @@ function cleanText(value) {
   return value.replace(/\s+/g, " ").trim();
 }
 
+function normalizeForMatch(value) {
+  return cleanText(value)
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function safeEmit(message) {
   try {
     chrome.runtime.sendMessage(message, () => {
       void chrome.runtime.lastError;
     });
   } catch (_error) {
-    // Ignore transient popup-not-open errors.
+    // Ignore popup-not-open errors.
   }
 }
 
@@ -47,10 +51,6 @@ function sendRuntimeMessage(message) {
       reject(error);
     }
   });
-}
-
-function buildSyncId() {
-  return `sync-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
 }
 
 function extractTweetIdFromHref(href) {
@@ -82,10 +82,7 @@ function extractAuthorName(userNameNode) {
   const spans = Array.from(userNameNode.querySelectorAll("span"));
   for (const span of spans) {
     const text = cleanText(span.textContent || "");
-    if (!text) {
-      continue;
-    }
-    if (text.startsWith("@") || text === "·") {
+    if (!text || text.startsWith("@")) {
       continue;
     }
     return text;
@@ -99,10 +96,9 @@ function extractLinks(tweetNode) {
 
   for (const anchor of anchorNodes) {
     const href = cleanText(anchor.getAttribute("href") || "");
-    if (!href) {
-      continue;
+    if (href) {
+      links.add(href);
     }
-    links.add(href);
   }
 
   return Array.from(links);
@@ -167,174 +163,265 @@ function extractTweetFromNode(tweetNode) {
   };
 }
 
-function extractVisibleTweets() {
-  const tweetNodes = document.querySelectorAll('[data-testid="tweet"]');
-  const tweets = [];
+function findTweetNode(startNode) {
+  if (!startNode || !(startNode instanceof Element)) {
+    return null;
+  }
+  return (
+    startNode.closest('article[data-testid="tweet"]') ||
+    startNode.closest('[data-testid="tweet"]') ||
+    startNode.closest("article")
+  );
+}
 
-  for (const tweetNode of tweetNodes) {
-    const extracted = extractTweetFromNode(tweetNode);
-    if (extracted) {
-      tweets.push(extracted);
+function findActionElement(startNode) {
+  if (!startNode || !(startNode instanceof Element)) {
+    return null;
+  }
+  return (
+    startNode.closest('[data-testid="bookmark"]') ||
+    startNode.closest('[data-testid="removeBookmark"]') ||
+    startNode.closest("button, [role='button']")
+  );
+}
+
+function classifyBookmarkAction(actionElement, rawTarget) {
+  const dataTestId = normalizeForMatch(
+    actionElement ? actionElement.getAttribute("data-testid") || "" : ""
+  );
+  if (dataTestId === "bookmark") {
+    return "save";
+  }
+  if (dataTestId === "removebookmark") {
+    return "remove";
+  }
+
+  const attrs = [
+    actionElement ? actionElement.getAttribute("aria-label") || "" : "",
+    actionElement ? actionElement.getAttribute("title") || "" : "",
+    actionElement ? actionElement.textContent || "" : ""
+  ]
+    .map((value) => normalizeForMatch(value))
+    .join(" ");
+
+  if (
+    attrs.includes("remove bookmark") ||
+    attrs.includes("quitar marcador") ||
+    attrs.includes("eliminar marcador")
+  ) {
+    return "remove";
+  }
+
+  if (
+    attrs.includes("bookmark") ||
+    attrs.includes("marcador") ||
+    attrs.includes("guardar")
+  ) {
+    return "save";
+  }
+
+  if (
+    rawTarget instanceof Element &&
+    rawTarget.closest('path[d^="M4 4.5C4 3.12"]')
+  ) {
+    return "save";
+  }
+
+  return "unknown";
+}
+
+function dedupeCapture(tweetId) {
+  const now = Date.now();
+  const lastCapturedAt = recentCapturedAtByTweet.get(tweetId) || 0;
+  if (now - lastCapturedAt < AUTO_CAPTURE_CONFIG.dedupeWindowMs) {
+    return false;
+  }
+
+  recentCapturedAtByTweet.set(tweetId, now);
+
+  if (recentCapturedAtByTweet.size > 250) {
+    const threshold = now - AUTO_CAPTURE_CONFIG.dedupeWindowMs * 4;
+    for (const [id, capturedAt] of recentCapturedAtByTweet.entries()) {
+      if (capturedAt < threshold) {
+        recentCapturedAtByTweet.delete(id);
+      }
     }
   }
 
-  return tweets;
+  return true;
 }
 
-async function enqueueBatch(syncId, batchIndex, bookmarks) {
+async function tryExpandText(tweetNode) {
+  const labels = ["mostrar mas", "show more", "read more"];
+  const spans = tweetNode.querySelectorAll("span");
+
+  for (const span of spans) {
+    const label = normalizeForMatch(span.textContent || "");
+    if (!labels.includes(label)) {
+      continue;
+    }
+
+    const clickable = span.closest("button, [role='button'], a");
+    if (!clickable) {
+      continue;
+    }
+
+    try {
+      clickable.click();
+      await sleep(180);
+    } catch (_error) {
+      // Ignore.
+    }
+    return;
+  }
+}
+
+async function extractTweetWithRetries(tweetNode) {
+  for (let attempt = 1; attempt <= AUTO_CAPTURE_CONFIG.maxExtractRetries; attempt += 1) {
+    await tryExpandText(tweetNode);
+    const tweet = extractTweetFromNode(tweetNode);
+    if (tweet && tweet.tweet_id) {
+      return tweet;
+    }
+    await sleep(AUTO_CAPTURE_CONFIG.retryDelayMs);
+  }
+  return null;
+}
+
+async function enqueueSingleBookmark(tweet, source) {
+  autoBatchIndex += 1;
   const response = await sendRuntimeMessage({
     type: "INGEST_ENQUEUE",
     payload: {
-      syncId,
-      batchIndex,
-      bookmarks
+      syncId: autoSyncId,
+      batchIndex: autoBatchIndex,
+      bookmarks: [tweet]
     }
   });
 
   if (!response || !response.ok) {
     throw new Error(response && response.error ? response.error : "enqueue_failed");
   }
-}
-
-async function runSync() {
-  if (!window.location.pathname.includes("/i/bookmarks")) {
-    throw new Error("Open https://x.com/i/bookmarks before sync.");
-  }
-
-  const syncId = buildSyncId();
-  const seenTweetIds = new Set();
-  const pendingBatch = [];
-  let batchIndex = 0;
-  let totalExtracted = 0;
-  let totalEnqueued = 0;
-  let idleRounds = 0;
-  let scrollRounds = 0;
 
   safeEmit({
     type: "SYNC_PROGRESS",
     payload: {
-      stage: "scraping_iniciado",
-      syncId
+      stage: "auto_capture_enqueued",
+      source,
+      tweetId: tweet.tweet_id,
+      pendingQueue: response.pendingQueue
     }
   });
+}
 
-  while (scrollRounds < SCRAPER_CONFIG.maxScrollRounds) {
-    scrollRounds += 1;
+async function handleBookmarkSave(event, source) {
+  const target = event.target;
+  const actionElement = findActionElement(target);
+  if (!actionElement) {
+    return;
+  }
 
-    const visibleTweets = extractVisibleTweets();
-    let discoveredThisRound = 0;
+  const actionType = classifyBookmarkAction(actionElement, target);
+  if (actionType !== "save") {
+    return;
+  }
 
-    for (const tweet of visibleTweets) {
-      if (seenTweetIds.has(tweet.tweet_id)) {
-        continue;
-      }
-      seenTweetIds.add(tweet.tweet_id);
-      pendingBatch.push(tweet);
-      totalExtracted += 1;
-      discoveredThisRound += 1;
+  const tweetNode = findTweetNode(actionElement);
+  if (!tweetNode) {
+    return;
+  }
 
-      if (pendingBatch.length >= SCRAPER_CONFIG.batchSize) {
-        batchIndex += 1;
-        const chunk = pendingBatch.splice(0, SCRAPER_CONFIG.batchSize);
-        await enqueueBatch(syncId, batchIndex, chunk);
-        totalEnqueued += chunk.length;
-      }
-    }
-
+  await sleep(AUTO_CAPTURE_CONFIG.captureDelayMs);
+  const tweet = await extractTweetWithRetries(tweetNode);
+  if (!tweet || !tweet.tweet_id) {
     safeEmit({
-      type: "SYNC_PROGRESS",
+      type: "SYNC_ERROR",
       payload: {
-        stage: "scraping_en_progreso",
-        syncId,
-        scrollRounds,
-        discoveredThisRound,
-        totalExtracted,
-        totalEnqueued
+        stage: "auto_capture_extract_failed",
+        source
       }
     });
+    return;
+  }
 
-    idleRounds = discoveredThisRound === 0 ? idleRounds + 1 : 0;
-    if (idleRounds >= SCRAPER_CONFIG.maxIdleRounds) {
-      break;
-    }
+  if (!dedupeCapture(tweet.tweet_id)) {
+    return;
+  }
 
-    window.scrollTo({
-      top: document.body.scrollHeight,
-      behavior: "smooth"
+  try {
+    await enqueueSingleBookmark(tweet, source);
+  } catch (error) {
+    safeEmit({
+      type: "SYNC_ERROR",
+      payload: {
+        stage: "auto_capture_enqueue_failed",
+        source,
+        tweetId: tweet.tweet_id,
+        error: error instanceof Error ? error.message : String(error)
+      }
     });
-    await sleep(randomBetween(SCRAPER_CONFIG.minDelayMs, SCRAPER_CONFIG.maxDelayMs));
   }
+}
 
-  if (pendingBatch.length > 0) {
-    batchIndex += 1;
-    const lastChunk = pendingBatch.splice(0, pendingBatch.length);
-    await enqueueBatch(syncId, batchIndex, lastChunk);
-    totalEnqueued += lastChunk.length;
+function onDocumentClick(event) {
+  void handleBookmarkSave(event, "click");
+}
+
+function onDocumentKeydown(event) {
+  if (event.key !== "Enter" && event.key !== " ") {
+    return;
   }
+  void handleBookmarkSave(event, "keyboard");
+}
 
-  const flushResponse = await sendRuntimeMessage({
-    type: "INGEST_FLUSH",
-    payload: {
-      syncId
-    }
-  });
-
-  const summary = {
-    syncId,
-    totalExtracted,
-    totalEnqueued,
-    totalBatches: batchIndex,
-    pendingQueue: flushResponse && typeof flushResponse.pendingQueue === "number"
-      ? flushResponse.pendingQueue
-      : null
+function getAutoStatus() {
+  return {
+    mode: "auto_listener",
+    syncId: autoSyncId,
+    trackedTweets: recentCapturedAtByTweet.size
   };
+}
+
+function registerAutoCaptureListeners() {
+  if (window.__xIndexerAutoCaptureReady) {
+    return;
+  }
+  window.__xIndexerAutoCaptureReady = true;
+
+  document.addEventListener("click", onDocumentClick, true);
+  document.addEventListener("keydown", onDocumentKeydown, true);
 
   safeEmit({
-    type: "SYNC_DONE",
-    payload: summary
+    type: "SYNC_PROGRESS",
+    payload: {
+      stage: "auto_capture_ready",
+      ...getAutoStatus()
+    }
   });
-
-  return summary;
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (!message || message.type !== "START_SYNC") {
+  if (!message || typeof message.type !== "string") {
     return false;
   }
 
-  if (isSyncRunning) {
+  if (message.type === "START_SYNC") {
     sendResponse({
       ok: false,
-      error: "sync_already_running"
+      error: "manual_sync_disabled_use_auto_capture"
     });
     return false;
   }
 
-  isSyncRunning = true;
-
-  runSync()
-    .then((result) => {
-      sendResponse({
-        ok: true,
-        result
-      });
-    })
-    .catch((error) => {
-      safeEmit({
-        type: "SYNC_ERROR",
-        payload: {
-          stage: "sync_abortada",
-          error: error instanceof Error ? error.message : String(error)
-        }
-      });
-      sendResponse({
-        ok: false,
-        error: error instanceof Error ? error.message : String(error)
-      });
-    })
-    .finally(() => {
-      isSyncRunning = false;
+  if (message.type === "GET_CAPTURE_STATUS") {
+    sendResponse({
+      ok: true,
+      ...getAutoStatus()
     });
+    return false;
+  }
 
-  return true;
+  return false;
 });
+
+registerAutoCaptureListeners();

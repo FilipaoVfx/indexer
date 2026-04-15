@@ -2,9 +2,14 @@
   "manifest_version": 3,
   "name": "X Bookmarks Indexer MVP",
   "description": "Scrape de bookmarks en X + ingesta por lotes en backend propio.",
-  "version": "0.1.0",
+  "version": "0.2.0",
+  "version_name": "0.2.0-beta.1",
   "permissions": ["storage", "tabs", "activeTab"],
-  "host_permissions": ["https://x.com/*", "http://localhost:8787/*"],
+  "host_permissions": [
+    "https://x.com/*",
+    "http://localhost:8787/*",
+    "https://indexer-hzto.onrender.com/*"
+  ],
   "background": {
     "service_worker": "background.js"
   },

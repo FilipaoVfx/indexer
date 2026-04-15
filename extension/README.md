@@ -21,3 +21,11 @@
 2. Activar `Developer mode`.
 3. Click en `Load unpacked`.
 4. Seleccionar carpeta `extension/`.
+
+## Produccion
+
+1. Actualizar `DEFAULT_API_BASE_URL` en `background.js` con tu backend HTTPS.
+2. Verificar `host_permissions` en `manifest.json` para incluir tu dominio backend.
+3. Empaquetar zip con:
+   - `powershell -ExecutionPolicy Bypass -File .\scripts\package-extension.ps1`
+4. Publicar `dist/x-bookmarks-extension.zip` en Chrome Web Store.
