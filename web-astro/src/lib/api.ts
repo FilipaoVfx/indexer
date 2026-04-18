@@ -8,7 +8,7 @@
 export const API_BASE =
   import.meta.env.PUBLIC_SEARCH_API_BASE ||
   (typeof window !== "undefined" && localStorage.getItem("INDEXBOOK_API")) ||
-  "http://localhost:8787";
+  "https://indexer-hzto.onrender.com";
 
 export type SearchMode = "hybrid" | "goal";
 
