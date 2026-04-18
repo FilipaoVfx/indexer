@@ -2,438 +2,636 @@
 import Layout from "../components/Layout.astro";
 ---
 
-<Layout title="Indexbook Search">
-  <main class="page-shell">
+<Layout title="Knowledge Console">
+  <div class="flex h-screen overflow-hidden">
 
-    <!-- ═══ HERO ═══ -->
-    <section class="hero-panel">
-      <div class="hero-copy">
-        <span class="eyebrow">v.1.0-alpha / build:2026</span>
-        <h1>INDEXBOOK_[SESSION]</h1>
-        <p class="hero-text">
-          Searchable memory layer. Lexical + Hybrid retrieval active.
-          Terminal interface initialized for high-bandwidth exploration.
-        </p>
+    <!-- ═══ SIDEBAR ═══ -->
+    <aside class="hidden md:flex flex-col h-full py-8 px-4 gap-4 bg-[#060e20] bg-gradient-to-r from-[#0b1326] to-transparent w-64 border-r border-outline-variant/15">
+      <div class="mb-8 px-4">
+        <h1 class="text-[#c0c1ff] font-headline font-bold text-2xl tracking-tighter">Console</h1>
+        <p class="text-[#dae2fd] opacity-60 text-xs">Indexbook v1.0</p>
       </div>
-      <div class="hero-metrics">
-        <div class="metric-card">
-          <span class="metric-label">Engine_Status</span>
-          <strong id="m-strategy">---</strong>
+      <nav class="flex flex-col gap-2 flex-grow">
+        <a href="#" data-filter="" class="nav-filter flex items-center gap-3 px-4 py-3 text-[#c0c1ff] font-bold bg-[#31394d] rounded-lg translate-x-1 transition-all">
+          <span class="material-symbols-outlined text-lg">grid_view</span>
+          <span class="text-sm font-medium">All</span>
+        </a>
+        <a href="#" data-sort="recent" class="nav-filter flex items-center gap-3 px-4 py-3 text-[#dae2fd] opacity-60 hover:bg-[#31394d] hover:opacity-100 transition-all rounded-lg">
+          <span class="material-symbols-outlined text-lg">auto_graph</span>
+          <span class="text-sm font-medium">Recent</span>
+        </a>
+        <a href="#" data-filter="media" class="nav-filter flex items-center gap-3 px-4 py-3 text-[#dae2fd] opacity-60 hover:bg-[#31394d] hover:opacity-100 transition-all rounded-lg">
+          <span class="material-symbols-outlined text-lg">auto_stories</span>
+          <span class="text-sm font-medium">With Media</span>
+        </a>
+        <a href="#" data-filter="links" class="nav-filter flex items-center gap-3 px-4 py-3 text-[#dae2fd] opacity-60 hover:bg-[#31394d] hover:opacity-100 transition-all rounded-lg">
+          <span class="material-symbols-outlined text-lg">link</span>
+          <span class="text-sm font-medium">With Links</span>
+        </a>
+      </nav>
+      <div class="mx-4 mt-4 py-3 px-4 bg-surface-container-low rounded-lg border border-outline-variant/20">
+        <div class="text-[10px] uppercase tracking-widest text-on-surface-variant mb-1">DB Status</div>
+        <div class="flex items-center gap-2">
+          <span id="db-dot" class="w-2 h-2 rounded-full bg-secondary animate-pulse"></span>
+          <span id="db-status" class="text-xs font-bold text-secondary">LIVE</span>
         </div>
-        <div class="metric-card">
-          <span class="metric-label">Response_Time</span>
-          <strong id="m-latency">---</strong>
-        </div>
-        <div class="metric-card">
-          <span class="metric-label">Knowledge_Graph</span>
-          <strong id="m-nodes">??? NODE(S)</strong>
-        </div>
-        <div class="metric-card">
-          <span class="metric-label">DB_Records_<span id="db-status">LIVE</span></span>
-          <strong id="db-count">---</strong>
+        <div class="mt-2 text-xs text-on-surface">
+          <span id="db-count">---</span> <span class="text-on-surface-variant">rows</span>
         </div>
       </div>
-    </section>
+      <div class="mt-auto flex flex-col gap-1">
+        <a href="https://github.com/FilipaoVfx/indexer" target="_blank" class="flex items-center gap-3 px-4 py-2 text-[#dae2fd] opacity-60 hover:bg-[#31394d] hover:opacity-100 transition-all rounded-lg">
+          <span class="material-symbols-outlined text-lg">code</span>
+          <span class="text-sm font-medium">Source</span>
+        </a>
+      </div>
+    </aside>
 
-    <!-- ═══ WORKSPACE ═══ -->
-    <section class="workspace">
+    <!-- ═══ MAIN ═══ -->
+    <main class="flex-1 flex flex-col min-w-0 overflow-hidden">
 
-      <!-- ── sidebar ── -->
-      <aside class="control-panel">
-        <form id="search-form" class="search-form">
-          <label class="field">
-            <span>QUERY_INPUT</span>
-            <input type="text" name="q" placeholder='keyword author:handle -exclude' autofocus />
+      <!-- ── HEADER with search ── -->
+      <header class="bg-[#0b1326] backdrop-blur-xl bg-opacity-80 flex justify-between items-center w-full px-8 h-20 z-50 border-b border-outline-variant/15">
+        <div class="flex items-center gap-8 flex-1">
+          <span class="text-xl font-bold text-[#c0c1ff] font-headline tracking-tight hidden lg:block">Knowledge Console</span>
+          <form id="search-form" class="relative w-full max-w-xl">
+            <span class="material-symbols-outlined absolute left-4 top-1/2 -translate-y-1/2 text-on-surface-variant">search</span>
+            <input
+              id="q-input"
+              name="q"
+              type="text"
+              autocomplete="off"
+              placeholder="Search your knowledge base..."
+              class="w-full bg-surface-container-lowest border-none focus:ring-2 focus:ring-primary pl-12 pr-4 py-2.5 rounded-lg text-on-surface text-sm transition-all"
+            />
+            <input type="hidden" name="author" id="author-input" />
+            <input type="hidden" name="domain" id="domain-input" />
+            <input type="hidden" name="from" id="from-input" />
+            <input type="hidden" name="to" id="to-input" />
+          </form>
+        </div>
+        <div class="flex items-center gap-6 ml-6">
+          <button id="filters-toggle" class="text-on-surface-variant hover:text-primary transition-colors" title="Advanced filters">
+            <span class="material-symbols-outlined">tune</span>
+          </button>
+          <div class="flex items-center gap-2 border-l border-outline-variant/15 pl-6">
+            <span class="material-symbols-outlined text-on-surface-variant">bolt</span>
+            <span id="latency-label" class="text-xs text-on-surface-variant">--- ms</span>
+          </div>
+        </div>
+      </header>
+
+      <!-- ── Advanced filters panel (collapsed by default) ── -->
+      <div id="filters-panel" class="hidden bg-surface-container-low border-b border-outline-variant/15 px-8 py-4">
+        <div class="max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-4 gap-4">
+          <label class="block">
+            <span class="text-[10px] uppercase tracking-widest text-on-surface-variant font-bold">Author</span>
+            <input id="author-field" type="text" placeholder="@handle" class="mt-1 w-full bg-surface-container-lowest border-none rounded-md text-sm px-3 py-2 focus:ring-2 focus:ring-primary" />
           </label>
-
-          <div class="field-grid">
-            <label class="field">
-              <span>FILTER_AUTHOR</span>
-              <input type="text" name="author" placeholder="@handle" />
-            </label>
-            <label class="field">
-              <span>FILTER_DOMAIN</span>
-              <input type="text" name="domain" placeholder="host.com" />
-            </label>
-          </div>
-
-          <div class="field-grid">
-            <label class="field">
-              <span>DATE_START</span>
-              <input type="date" name="from" />
-            </label>
-            <label class="field">
-              <span>DATE_END</span>
-              <input type="date" name="to" />
-            </label>
-          </div>
-
-          <div class="form-actions">
-            <button type="submit">SEARCH.EXE</button>
-            <a id="reset-btn" href="">ABORT_RESET</a>
-          </div>
-        </form>
-
-        <!-- parser debug -->
-        <div class="parser-panel">
-          <div class="parser-header">
-            <span class="eyebrow" style="background:var(--accent-blue)">DEBUG_OUTPUT</span>
-            <p id="summary-text" style="margin-top:0.5rem;font-size:0.75rem">
-              Connect the backend to start exploring your bookmark graph.
-            </p>
-          </div>
-          <div id="chip-group" class="chip-group"></div>
-          <ul class="parser-list" style="font-size:0.7rem">
-            <li>Postgres web-style tsquery parsing enabled.</li>
-            <li>Field extraction prioritized.</li>
-            <li>Hybrid relevance scoring v2 active.</li>
-          </ul>
+          <label class="block">
+            <span class="text-[10px] uppercase tracking-widest text-on-surface-variant font-bold">Domain</span>
+            <input id="domain-field" type="text" placeholder="host.com" class="mt-1 w-full bg-surface-container-lowest border-none rounded-md text-sm px-3 py-2 focus:ring-2 focus:ring-primary" />
+          </label>
+          <label class="block">
+            <span class="text-[10px] uppercase tracking-widest text-on-surface-variant font-bold">From</span>
+            <input id="from-field" type="date" class="mt-1 w-full bg-surface-container-lowest border-none rounded-md text-sm px-3 py-2 focus:ring-2 focus:ring-primary" />
+          </label>
+          <label class="block">
+            <span class="text-[10px] uppercase tracking-widest text-on-surface-variant font-bold">To</span>
+            <input id="to-field" type="date" class="mt-1 w-full bg-surface-container-lowest border-none rounded-md text-sm px-3 py-2 focus:ring-2 focus:ring-primary" />
+          </label>
         </div>
-      </aside>
+      </div>
 
-      <!-- ── results ── -->
-      <section class="results-panel">
-        <div id="error-area"></div>
+      <!-- ── CONTENT AREA ── -->
+      <div class="flex-1 overflow-y-auto bg-surface">
 
-        <div class="results-header">
-          <div>
-            <span class="eyebrow" style="background:var(--accent-yellow);color:#000">OUTPUT_STREAM</span>
-            <h2>MATCH_RESULTS</h2>
+        <!-- ═══ EMPTY / DISCOVERY HOME ═══ -->
+        <section id="discovery-home" class="relative w-full min-h-full hidden">
+          <div class="absolute inset-0 pointer-events-none opacity-20 bg-[radial-gradient(circle_at_50%_50%,_#4b4dd8_0%,_transparent_70%)]"></div>
+          <div class="relative z-10 w-full max-w-4xl mx-auto pt-12 px-6">
+            <div class="flex flex-col items-center gap-6 mb-8">
+              <h1 class="font-headline text-4xl md:text-5xl font-bold tracking-tight text-center text-on-surface">
+                Synthesize your knowledge.
+              </h1>
+              <p class="text-on-surface-variant text-center max-w-xl">
+                Type a query above. Find exact matches, related authors, and semantic connections across your bookmark graph.
+              </p>
+            </div>
+            <div id="bubbles-area" class="relative w-full h-[500px] flex items-center justify-center">
+              <!-- dynamic bubbles inserted here from top authors/domains -->
+            </div>
+            <div class="absolute bottom-8 left-1/2 -translate-x-1/2 flex items-center gap-4 text-on-surface-variant/40">
+              <span class="text-xs uppercase tracking-widest">Floating knowledge entities</span>
+              <div class="w-12 h-[1px] bg-outline-variant/20"></div>
+              <span class="text-xs uppercase tracking-widest">Ready for synthesis</span>
+            </div>
           </div>
-          <div class="results-meta">
-            <span>COUNT: <span id="r-count">0</span></span>
-            <span>MODE: <span id="r-mode">---</span></span>
+        </section>
+
+        <!-- ═══ RESULTS VIEW ═══ -->
+        <section id="results-view" class="px-4 md:px-8 py-10 hidden">
+          <div class="max-w-6xl mx-auto flex flex-col lg:flex-row gap-8 lg:gap-12">
+
+            <!-- ── RESULTS COLUMN ── -->
+            <div class="flex-1 space-y-6 min-w-0">
+              <div class="flex items-center justify-between mb-8 flex-wrap gap-3">
+                <div>
+                  <h2 class="text-2xl font-headline font-bold text-on-surface flex items-center gap-3 flex-wrap">
+                    Search Results
+                    <span id="result-count-pill" class="text-sm font-normal text-on-surface-variant bg-surface-container-high px-2 py-0.5 rounded-full">0 found</span>
+                  </h2>
+                  <p id="result-subtitle" class="text-on-surface-variant text-sm mt-1">Showing the most relevant synthesis</p>
+                </div>
+                <div class="flex gap-2">
+                  <span id="strategy-chip" class="flex items-center gap-2 px-3 py-1.5 bg-surface-container-high rounded-lg text-xs font-medium text-on-surface-variant">
+                    <span class="material-symbols-outlined text-sm">psychology</span>
+                    <span id="strategy-label">---</span>
+                  </span>
+                </div>
+              </div>
+
+              <div id="error-area"></div>
+              <div id="result-list" class="space-y-4"></div>
+            </div>
+
+            <!-- ── ASIDE COLUMN ── -->
+            <aside class="w-full lg:w-80 space-y-6 flex-shrink-0">
+
+              <!-- Related Bubbles (parsed query + filters) -->
+              <section class="glass-panel p-6 rounded-2xl border border-outline-variant/15">
+                <h4 class="text-on-surface font-headline font-bold mb-4 text-sm uppercase tracking-wider">Query Parse</h4>
+                <div id="parse-chips" class="flex flex-wrap gap-2 min-h-[2rem]">
+                  <span class="text-xs text-on-surface-variant opacity-50">No terms parsed.</span>
+                </div>
+              </section>
+
+              <!-- Top Contributors (aggregated from results) -->
+              <section class="p-6 rounded-2xl bg-surface-container-low">
+                <h4 class="text-on-surface font-headline font-bold mb-4 text-sm uppercase tracking-wider">Top Contributors</h4>
+                <div id="contributors-list" class="space-y-3">
+                  <p class="text-xs text-on-surface-variant opacity-50">Run a search to see contributors.</p>
+                </div>
+              </section>
+
+              <!-- Active Filters / CTA -->
+              <div id="active-filters-card" class="p-6 rounded-2xl bg-gradient-to-br from-primary-container to-tertiary-container text-on-primary shadow-xl hidden">
+                <h4 class="font-headline font-bold mb-2">Active Filters</h4>
+                <div id="active-filters-list" class="text-sm opacity-90 mb-4 leading-relaxed space-y-1"></div>
+                <button id="clear-filters-btn" class="w-full py-2 bg-on-primary text-primary font-bold rounded text-xs uppercase tracking-widest hover:bg-white transition-colors">Clear filters</button>
+              </div>
+
+            </aside>
           </div>
-        </div>
+        </section>
+      </div>
+    </main>
+  </div>
 
-        <div id="result-list" class="result-list">
-          <div class="empty-state">
-            <h3>Waiting for search...</h3>
-            <p>Type a query and press SEARCH.EXE to begin.</p>
-          </div>
-        </div>
-      </section>
-    </section>
-  </main>
+  <!-- ═══ MOBILE BOTTOM NAV ═══ -->
+  <div class="md:hidden fixed bottom-0 left-0 right-0 h-16 glass-panel border-t border-outline-variant/15 flex items-center justify-around z-50">
+    <button class="flex flex-col items-center gap-1 text-primary">
+      <span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">search</span>
+      <span class="text-[10px] font-medium">Search</span>
+    </button>
+    <button onclick="document.getElementById('filters-toggle').click()" class="flex flex-col items-center gap-1 text-on-surface-variant">
+      <span class="material-symbols-outlined">tune</span>
+      <span class="text-[10px] font-medium">Filters</span>
+    </button>
+    <button onclick="document.getElementById('q-input').focus()" class="flex flex-col items-center gap-1 text-on-surface-variant">
+      <span class="material-symbols-outlined">keyboard</span>
+      <span class="text-[10px] font-medium">Type</span>
+    </button>
+  </div>
 
-  <!-- ═══ CLIENT-SIDE ENGINE ═══ -->
-  <script>
-    const API_BASE = localStorage.getItem("INDEXBOOK_API") || "https://indexer-hzto.onrender.com";
-    const POLL_MS = 5000;
+  <!-- ═══════════ CLIENT SCRIPT ═══════════ -->
+  <script is:inline>
+    (function() {
+      const API_BASE = localStorage.getItem("INDEXBOOK_API") || "https://indexer-hzto.onrender.com";
+      const POLL_MS = 15000;
+      const DEBOUNCE_MS = 400;
 
-    /* ── DOM refs ── */
-    const form        = document.getElementById("search-form") as HTMLFormElement;
-    const resultList  = document.getElementById("result-list")!;
-    const errorArea   = document.getElementById("error-area")!;
-    const chipGroup   = document.getElementById("chip-group")!;
-    const summaryText = document.getElementById("summary-text")!;
-    const mStrategy   = document.getElementById("m-strategy")!;
-    const mLatency    = document.getElementById("m-latency")!;
-    const mNodes      = document.getElementById("m-nodes")!;
-    const rCount      = document.getElementById("r-count")!;
-    const rMode       = document.getElementById("r-mode")!;
-    const dbStatus    = document.getElementById("db-status")!;
-    const dbCount     = document.getElementById("db-count")!;
-    const resetBtn    = document.getElementById("reset-btn") as HTMLAnchorElement;
+      /* ── DOM refs ── */
+      const form           = document.getElementById("search-form");
+      const qInput         = document.getElementById("q-input");
+      const authorField    = document.getElementById("author-field");
+      const domainField    = document.getElementById("domain-field");
+      const fromField      = document.getElementById("from-field");
+      const toField        = document.getElementById("to-field");
+      const filtersToggle  = document.getElementById("filters-toggle");
+      const filtersPanel   = document.getElementById("filters-panel");
+      const discoveryHome  = document.getElementById("discovery-home");
+      const resultsView    = document.getElementById("results-view");
+      const resultList     = document.getElementById("result-list");
+      const errorArea      = document.getElementById("error-area");
+      const countPill      = document.getElementById("result-count-pill");
+      const subtitle       = document.getElementById("result-subtitle");
+      const strategyLabel  = document.getElementById("strategy-label");
+      const latencyLabel   = document.getElementById("latency-label");
+      const parseChips     = document.getElementById("parse-chips");
+      const contribList    = document.getElementById("contributors-list");
+      const activeCard     = document.getElementById("active-filters-card");
+      const activeList     = document.getElementById("active-filters-list");
+      const clearBtn       = document.getElementById("clear-filters-btn");
+      const bubblesArea    = document.getElementById("bubbles-area");
+      const dbDot          = document.getElementById("db-dot");
+      const dbStatus       = document.getElementById("db-status");
+      const dbCount        = document.getElementById("db-count");
 
-    /* ── helpers ── */
-    function esc(s: string): string {
-      const el = document.createElement("span");
-      el.textContent = s;
-      return el.innerHTML;
-    }
-
-    function safeHighlight(raw: string): string {
-      return raw
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/&lt;mark&gt;/g, "<mark>")
-        .replace(/&lt;\/mark&gt;/g, "</mark>");
-    }
-
-    function formatDate(v: string | null): string {
-      if (!v) return "Unknown date";
-      const d = new Date(v);
-      if (isNaN(d.getTime())) return "Unknown date";
-      return new Intl.DateTimeFormat("en", { dateStyle: "medium" }).format(d);
-    }
-
-    function fmtScore(v: unknown): string | null {
-      if (typeof v !== "number" || isNaN(v)) return null;
-      return v.toFixed(3);
-    }
-
-    function safeDomain(url: string): string {
-      try { return new URL(url).hostname.replace(/^www\./, ""); }
-      catch { return url; }
-    }
-
-    /* ── set reset link base path ── */
-    resetBtn.href = window.location.pathname;
-
-    /* ── fill form from URL params ── */
-    function syncFormFromUrl() {
-      const p = new URLSearchParams(window.location.search);
-      for (const input of form.querySelectorAll("input") as NodeListOf<HTMLInputElement>) {
-        input.value = p.get(input.name) || "";
+      /* ── helpers ── */
+      function esc(s) {
+        const el = document.createElement("div");
+        el.textContent = String(s ?? "");
+        return el.innerHTML;
       }
-    }
 
-    /* ── search ── */
-    async function runSearch() {
-      const p = new URLSearchParams(window.location.search);
-      const hasQuery = [...p.values()].some(v => v.trim() !== "");
-
-      if (!hasQuery) {
-        resultList.innerHTML = `<div class="empty-state"><h3>Waiting for search...</h3><p>Type a query and press SEARCH.EXE to begin.</p></div>`;
-        return;
+      function safeHighlight(raw) {
+        return String(raw || "")
+          .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+          .replace(/&lt;mark&gt;/g, "<mark>").replace(/&lt;\/mark&gt;/g, "</mark>");
       }
 
-      /* always include user_id */
-      if (!p.has("user_id") || !p.get("user_id")) p.set("user_id", "local-user");
-      if (!p.has("limit")) p.set("limit", "20");
+      function formatDate(v) {
+        if (!v) return "Unknown date";
+        const d = new Date(v);
+        if (isNaN(d.getTime())) return "Unknown date";
+        return new Intl.DateTimeFormat("en", { dateStyle: "medium" }).format(d);
+      }
 
-      errorArea.innerHTML = "";
-      resultList.innerHTML = `<div class="empty-state"><h3>Searching...</h3></div>`;
+      function safeDomain(url) {
+        try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return url; }
+      }
 
-      try {
-        const url = `${API_BASE}/api/bookmarks/search?${p.toString()}`;
-        const res = await fetch(url, { headers: { Accept: "application/json" } });
-        const data = await res.json();
+      function initials(name) {
+        return String(name || "?").trim().split(/\s+/).slice(0, 2).map(x => x[0]?.toUpperCase() || "").join("") || "?";
+      }
 
-        if (!res.ok) throw new Error(data?.error?.message || `HTTP ${res.status}`);
+      /* ── URL <-> state ── */
+      function syncFromUrl() {
+        const p = new URLSearchParams(window.location.search);
+        qInput.value      = p.get("q") || "";
+        authorField.value = p.get("author") || "";
+        domainField.value = p.get("domain") || "";
+        fromField.value   = p.get("from") || "";
+        toField.value     = p.get("to") || "";
+      }
 
-        /* metrics */
-        mStrategy.textContent = data.strategy || "---";
-        mLatency.textContent = typeof data.latency_ms === "number" ? `${data.latency_ms} ms` : "---";
-        mNodes.textContent = `${data.total ?? "???"} NODE(S)`;
-        rCount.textContent = String(data.total ?? 0);
-        rMode.textContent = data.strategy || "---";
+      function pushUrl() {
+        const p = new URLSearchParams();
+        if (qInput.value.trim())      p.set("q", qInput.value.trim());
+        if (authorField.value.trim()) p.set("author", authorField.value.trim());
+        if (domainField.value.trim()) p.set("domain", domainField.value.trim());
+        if (fromField.value)          p.set("from", fromField.value);
+        if (toField.value)            p.set("to", toField.value);
+        const next = `${window.location.pathname}${p.toString() ? "?" + p.toString() : ""}`;
+        window.history.replaceState({}, "", next);
+      }
 
-        /* summary */
-        if (!data.total) {
-          summaryText.textContent = "No results yet. Try a broader keyword, remove a filter, or ingest more bookmarks.";
-        } else {
-          summaryText.textContent = `${data.total} result${data.total === 1 ? "" : "s"} found with ${data.strategy} retrieval.`;
+      /* ── render parse chips ── */
+      function renderChips(pq) {
+        if (!pq) { parseChips.innerHTML = `<span class="text-xs text-on-surface-variant opacity-50">No terms parsed.</span>`; return; }
+        const parts = [];
+        (pq.terms || []).forEach(t => parts.push(`<span class="px-3 py-1 bg-primary/10 border border-primary/30 rounded-full text-xs font-medium text-primary">${esc(t)}</span>`));
+        (pq.phrases || []).forEach(p => parts.push(`<span class="px-3 py-1 bg-secondary/10 border border-secondary/30 rounded-full text-xs font-medium text-secondary">"${esc(p)}"</span>`));
+        (pq.exclude || []).forEach(x => parts.push(`<span class="px-3 py-1 bg-error/10 border border-error/30 rounded-full text-xs font-medium text-error line-through">${esc(x)}</span>`));
+        const f = pq.filters || {};
+        if (f.author) parts.push(`<span class="px-3 py-1 bg-tertiary/10 border border-tertiary/30 rounded-full text-xs font-medium text-tertiary">author:${esc(f.author)}</span>`);
+        if (f.domain) parts.push(`<span class="px-3 py-1 bg-tertiary/10 border border-tertiary/30 rounded-full text-xs font-medium text-tertiary">domain:${esc(f.domain)}</span>`);
+        if (f.from)   parts.push(`<span class="px-3 py-1 bg-surface-container-highest rounded-full text-xs font-medium text-on-surface-variant">from:${esc(f.from.slice(0,10))}</span>`);
+        if (f.to)     parts.push(`<span class="px-3 py-1 bg-surface-container-highest rounded-full text-xs font-medium text-on-surface-variant">to:${esc(f.to.slice(0,10))}</span>`);
+        parseChips.innerHTML = parts.length ? parts.join("") : `<span class="text-xs text-on-surface-variant opacity-50">No terms parsed.</span>`;
+      }
+
+      /* ── render contributors (aggregate from results) ── */
+      function renderContributors(items) {
+        const map = new Map();
+        for (const it of items) {
+          const key = it.author_username || it.author_name || "anonymous";
+          const entry = map.get(key) || { name: it.author_name || key, handle: it.author_username || "", count: 0 };
+          entry.count += 1;
+          map.set(key, entry);
         }
-
-        /* chips */
-        const pq = data.parsed_query;
-        chipGroup.innerHTML = "";
-        if (pq) {
-          (pq.terms || []).forEach((t: string) => {
-            chipGroup.innerHTML += `<span class="chip">T:${esc(t)}</span>`;
-          });
-          (pq.phrases || []).forEach((p: string) => {
-            chipGroup.innerHTML += `<span class="chip chip-strong">P:"${esc(p)}"</span>`;
-          });
-          (pq.exclude || []).forEach((x: string) => {
-            chipGroup.innerHTML += `<span class="chip chip-warning">X:${esc(x)}</span>`;
-          });
+        const top = [...map.values()].sort((a,b) => b.count - a.count).slice(0, 5);
+        if (top.length === 0) {
+          contribList.innerHTML = `<p class="text-xs text-on-surface-variant opacity-50">No contributors yet.</p>`;
+          return;
         }
+        contribList.innerHTML = top.map(c => `
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-3 min-w-0">
+              <div class="w-8 h-8 rounded bg-surface-container-highest flex items-center justify-center flex-shrink-0">
+                <span class="text-[10px] font-bold text-primary">${esc(initials(c.name))}</span>
+              </div>
+              <span class="text-xs font-medium truncate">${esc(c.name)}</span>
+            </div>
+            <span class="text-[10px] font-bold text-primary bg-primary/10 px-2 py-0.5 rounded flex-shrink-0">${c.count}</span>
+          </div>
+        `).join("");
+      }
 
-        /* results */
-        const items: any[] = data.items || [];
-        if (items.length === 0) {
-          resultList.innerHTML = `<div class="empty-state"><h3>No bookmarks matched this search.</h3><p>Try a simpler query, remove a filter, or ingest more bookmarks from the extension.</p></div>`;
+      /* ── render active filters card ── */
+      function renderActiveFilters() {
+        const entries = [];
+        if (authorField.value.trim()) entries.push(["Author", authorField.value.trim()]);
+        if (domainField.value.trim()) entries.push(["Domain", domainField.value.trim()]);
+        if (fromField.value)          entries.push(["From", fromField.value]);
+        if (toField.value)            entries.push(["To", toField.value]);
+        if (entries.length === 0) { activeCard.classList.add("hidden"); return; }
+        activeCard.classList.remove("hidden");
+        activeList.innerHTML = entries.map(([k,v]) => `<div><span class="font-bold">${esc(k)}:</span> ${esc(v)}</div>`).join("");
+      }
+
+      /* ── render result card ── */
+      function renderCard(item) {
+        const author = item.author_name || item.author_username || "anonymous";
+        const handle = item.author_username ? `@${item.author_username}` : "";
+        const date   = formatDate(item.created_at);
+        const domain = item.source_domain || (item.source_url ? safeDomain(item.source_url) : "");
+
+        const contentHtml = (item.highlight && String(item.highlight).includes("<mark>"))
+          ? `<div class="text-on-surface-variant text-sm leading-relaxed mb-4 line-clamp-3">${safeHighlight(item.highlight)}</div>`
+          : `<p class="text-on-surface-variant text-sm leading-relaxed mb-4 line-clamp-3">${esc(item.text_content || "--- No content ---")}</p>`;
+
+        const tags = [];
+        if (domain) tags.push(domain);
+        if ((item.media || []).length > 0) tags.push(`${item.media.length} media`);
+        if ((item.links || []).length > 0) tags.push(`${item.links.length} links`);
+        const tagsHtml = tags.map(t => `<span class="bg-surface-container-highest text-on-surface-variant px-2.5 py-1 rounded text-xs">${esc(t)}</span>`).join("");
+
+        const kind = (item.media || []).length > 0 ? "Media"
+                   : (item.links || []).length > 0 ? "Reference"
+                   : "Synthesis";
+        const kindColor = kind === "Media" ? "text-tertiary" : kind === "Reference" ? "text-secondary" : "text-primary";
+        const kindBg = kind === "Media" ? "bg-tertiary" : kind === "Reference" ? "bg-secondary" : "bg-primary";
+
+        const scoreBadge = (typeof item.score === "number" && !isNaN(item.score) && item.score > 0)
+          ? `<span class="ml-2 text-[10px] font-bold text-primary bg-primary/10 px-2 py-0.5 rounded">${item.score.toFixed(3)}</span>` : "";
+
+        const openLink = item.source_url
+          ? `<a href="${esc(item.source_url)}" target="_blank" rel="noreferrer" class="text-primary text-sm font-medium flex items-center gap-1 hover:underline">
+               Open source <span class="material-symbols-outlined text-sm">arrow_outward</span>
+             </a>`
+          : `<span class="text-xs text-on-surface-variant">ID: ${esc(item.tweet_id || "")}</span>`;
+
+        const mediaHtml = (item.media && item.media.length > 0)
+          ? `<div class="grid grid-cols-3 gap-2 mb-4">
+               ${item.media.slice(0, 3).map(m => `<div class="aspect-video rounded-lg overflow-hidden bg-surface-container-highest"><img src="${esc(m)}" alt="" loading="lazy" class="w-full h-full object-cover" /></div>`).join("")}
+             </div>` : "";
+
+        return `
+          <article class="group relative bg-surface-container-lowest p-6 rounded-xl hover:bg-surface-container-low transition-all duration-300 border-l-4 border-transparent hover:border-primary">
+            <div class="flex justify-between items-start mb-4 gap-3 flex-wrap">
+              <div class="flex items-center gap-3 min-w-0">
+                <div class="w-10 h-10 rounded-full bg-surface-container-highest flex items-center justify-center flex-shrink-0">
+                  <span class="text-sm font-bold text-primary">${esc(initials(author))}</span>
+                </div>
+                <div class="min-w-0">
+                  <p class="text-on-surface font-semibold text-sm truncate">${esc(author)}</p>
+                  <p class="text-on-surface-variant text-xs truncate">${esc(handle)} ${handle ? "•" : ""} ${esc(date)}</p>
+                </div>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="flex items-center gap-1.5 px-2.5 py-1 bg-surface-container-high ${kindColor} text-[10px] uppercase tracking-widest font-bold rounded">
+                  <span class="w-1.5 h-1.5 rounded-full ${kindBg}"></span>
+                  ${esc(kind)}
+                </span>
+                ${scoreBadge}
+              </div>
+            </div>
+            ${contentHtml}
+            ${mediaHtml}
+            <div class="flex flex-wrap gap-2 items-center justify-between">
+              <div class="flex gap-2 flex-wrap">${tagsHtml}</div>
+              ${openLink}
+            </div>
+          </article>
+        `;
+      }
+
+      /* ── discovery bubbles (empty state) ── */
+      async function renderDiscoveryBubbles() {
+        bubblesArea.innerHTML = `<div class="text-on-surface-variant text-sm">Loading your graph...</div>`;
+        try {
+          const url = `${API_BASE}/api/bookmarks/search?user_id=local-user&limit=50`;
+          const res = await fetch(url);
+          const data = await res.json();
+          if (!res.ok) throw new Error();
+          const items = data.items || [];
+
+          const authors = new Map();
+          const domains = new Map();
+          for (const it of items) {
+            const a = it.author_name || it.author_username;
+            if (a) authors.set(a, (authors.get(a) || 0) + 1);
+            const d = it.source_domain || (it.source_url ? safeDomain(it.source_url) : "");
+            if (d) domains.set(d, (domains.get(d) || 0) + 1);
+          }
+          const topAuthors = [...authors.entries()].sort((a,b)=>b[1]-a[1]).slice(0, 4);
+          const topDomains = [...domains.entries()].sort((a,b)=>b[1]-a[1]).slice(0, 3);
+
+          const positions = [
+            { cls: "top-10 left-20", size: "text-xl", color: "text-primary" },
+            { cls: "top-40 right-10", size: "text-2xl", color: "text-secondary" },
+            { cls: "bottom-10 left-1/4", size: "text-lg", color: "text-tertiary" },
+            { cls: "top-1/2 left-0 -translate-y-1/2", size: "text-base", color: "text-primary" },
+            { cls: "bottom-20 right-1/4", size: "text-xl", color: "text-secondary" },
+            { cls: "top-0 right-1/3", size: "text-sm", color: "text-on-surface" },
+            { cls: "bottom-0 left-10", size: "text-sm", color: "text-tertiary" }
+          ];
+
+          const bubbles = [];
+          topAuthors.forEach(([n, c], i) => {
+            const pos = positions[i % positions.length];
+            bubbles.push(`
+              <button class="absolute ${pos.cls} bubble-entity" data-type="author" data-value="${esc(n)}">
+                <div class="glass-card bubble-glow px-6 py-6 rounded-full flex flex-col items-center justify-center gap-1 border border-outline-variant/10 cursor-pointer hover:scale-105 transition-transform duration-500">
+                  <span class="${pos.color} font-bold font-headline ${pos.size}">${esc(n)}</span>
+                  <span class="text-[10px] text-on-surface-variant uppercase tracking-widest">${c} item${c===1?"":"s"}</span>
+                </div>
+              </button>
+            `);
+          });
+          topDomains.forEach(([d, c], i) => {
+            const pos = positions[(topAuthors.length + i) % positions.length];
+            bubbles.push(`
+              <button class="absolute ${pos.cls} bubble-entity" data-type="domain" data-value="${esc(d)}">
+                <div class="glass-card px-5 py-5 rounded-full flex flex-col items-center justify-center border border-outline-variant/10 cursor-pointer hover:scale-105 transition-transform duration-500">
+                  <span class="text-on-surface font-medium font-headline text-sm">${esc(d)}</span>
+                  <span class="text-[10px] text-on-surface-variant uppercase tracking-widest">${c} bookmark${c===1?"":"s"}</span>
+                </div>
+              </button>
+            `);
+          });
+
+          bubbles.push(`
+            <div class="absolute bottom-2 right-2 flex items-center gap-3 glass-card px-4 py-2 rounded-full border border-outline-variant/20">
+              <div class="w-2 h-2 rounded-full bg-secondary animate-pulse"></div>
+              <span class="text-[10px] uppercase tracking-[0.2em] font-bold text-on-surface-variant">${items.length} total bookmarks</span>
+            </div>
+          `);
+
+          bubblesArea.innerHTML = bubbles.length > 0 ? bubbles.join("") : `<div class="text-on-surface-variant text-sm">No bookmarks yet. Ingest some via the extension.</div>`;
+
+          /* bind bubble clicks */
+          bubblesArea.querySelectorAll(".bubble-entity").forEach(btn => {
+            btn.addEventListener("click", () => {
+              const type = btn.getAttribute("data-type");
+              const value = btn.getAttribute("data-value");
+              if (type === "author") authorField.value = value;
+              if (type === "domain") domainField.value = value;
+              pushUrl();
+              runSearch();
+            });
+          });
+        } catch {
+          bubblesArea.innerHTML = `<div class="text-error text-sm">Could not load the knowledge graph. Is the backend online?</div>`;
+        }
+      }
+
+      /* ── core search ── */
+      function buildParams() {
+        const p = new URLSearchParams();
+        p.set("user_id", "local-user");
+        p.set("limit", "20");
+        if (qInput.value.trim())      p.set("q", qInput.value.trim());
+        if (authorField.value.trim()) p.set("author", authorField.value.trim());
+        if (domainField.value.trim()) p.set("domain", domainField.value.trim());
+        if (fromField.value)          p.set("from", fromField.value);
+        if (toField.value)            p.set("to", toField.value);
+        return p;
+      }
+
+      function hasAnyInput() {
+        return !!(qInput.value.trim() || authorField.value.trim() || domainField.value.trim() || fromField.value || toField.value);
+      }
+
+      async function runSearch() {
+        renderActiveFilters();
+
+        if (!hasAnyInput()) {
+          resultsView.classList.add("hidden");
+          discoveryHome.classList.remove("hidden");
+          renderDiscoveryBubbles();
           return;
         }
 
-        resultList.innerHTML = items.map((item: any) => {
-          const author = esc(item.author_name || item.author_username || "anonymous");
-          const handle = item.author_username ? `<span>@${esc(item.author_username)}</span>` : "";
-          const domainBadge = item.source_domain ? `<span class="badge">${esc(item.source_domain)}</span>` : "";
-          const dateBadge = `<span class="badge">${esc(formatDate(item.created_at))}</span>`;
-          const scoreBadge = fmtScore(item.score) ? `<span class="badge badge-score">relevance:${fmtScore(item.score)}</span>` : "";
+        discoveryHome.classList.add("hidden");
+        resultsView.classList.remove("hidden");
+        errorArea.innerHTML = "";
+        resultList.innerHTML = `
+          <div class="text-center py-16 text-on-surface-variant">
+            <span class="material-symbols-outlined text-4xl animate-pulse">psychology</span>
+            <p class="mt-3 text-sm">Synthesizing...</p>
+          </div>`;
 
-          const content = item.highlight?.includes("<mark>")
-            ? `<div class="snippet-highlight">${safeHighlight(item.highlight)}</div>`
-            : `<p class="full-text">${esc(item.text_content || "--- NO CONTENT ---")}</p>`;
+        try {
+          const url = `${API_BASE}/api/bookmarks/search?${buildParams().toString()}`;
+          const t0 = performance.now();
+          const res = await fetch(url, { headers: { Accept: "application/json" } });
+          const data = await res.json();
+          const elapsed = Math.round(performance.now() - t0);
 
-          const media = (item.media?.length > 0)
-            ? `<div class="media-grid">${item.media.map((m: string, i: number) => `<div class="media-item"><img src="${esc(m)}" alt="Media ${i}" loading="lazy" /></div>`).join("")}</div>`
-            : "";
+          if (!res.ok) throw new Error(data?.error?.message || `HTTP ${res.status}`);
 
-          const links = (item.links?.length > 0)
-            ? `<div class="links-section"><div class="links-title">Extracted Links:</div><div class="links-list">${item.links.map((l: string) => `<a href="${esc(l)}" target="_blank" rel="noreferrer" class="badge">${esc(safeDomain(l))}</a>`).join("")}</div></div>`
-            : "";
+          const items = data.items || [];
+          const total = data.total ?? 0;
+          const queryText = qInput.value.trim() || "your filters";
 
-          const sourceLink = item.source_url
-            ? `<a href="${esc(item.source_url)}" target="_blank" rel="noreferrer" class="source-link">EXEC : OPEN_SOURCE_URL</a>`
-            : "";
+          countPill.textContent = `${total} found`;
+          subtitle.textContent = total > 0
+            ? `Showing the most relevant synthesis for "${queryText}"`
+            : `No synthesis matched "${queryText}". Try broader terms.`;
+          strategyLabel.textContent = data.strategy || "---";
+          latencyLabel.textContent = typeof data.latency_ms === "number" ? `${data.latency_ms} ms` : `${elapsed} ms`;
 
-          const tweetId = item.tweet_id || item.id?.split(":").pop();
-          const breakdown = item.score_breakdown
-            ? `<span class="breakdown">L:${fmtScore(item.score_breakdown.lexical)} / A:${fmtScore(item.score_breakdown.author)} / F:${fmtScore(item.score_breakdown.freshness)}</span>`
-            : `<span>RETRIEVAL: FALLBACK</span>`;
+          renderChips(data.parsed_query);
+          renderContributors(items);
 
-          return `<article class="result-card">
-            <div class="result-topline">
-              <div class="result-author"><strong>${author}</strong>${handle}</div>
-              <div class="result-badges">${domainBadge}${dateBadge}${scoreBadge}</div>
-            </div>
-            <div class="content-wrapper">${content}</div>
-            ${media}${links}${sourceLink}
-            <div class="result-footer"><span>ID: ${esc(tweetId)}</span>${breakdown}</div>
-          </article>`;
-        }).join("");
+          if (items.length === 0) {
+            resultList.innerHTML = `
+              <div class="text-center py-16">
+                <span class="material-symbols-outlined text-5xl text-on-surface-variant opacity-40">search_off</span>
+                <h3 class="mt-4 font-headline font-bold text-on-surface">No matches</h3>
+                <p class="mt-1 text-sm text-on-surface-variant">Try simpler keywords or remove a filter.</p>
+              </div>`;
+            return;
+          }
 
-      } catch (err: any) {
-        errorArea.innerHTML = `<div class="error-card"><h2>CRITICAL_ERROR</h2><p>${esc(err.message)}</p></div>`;
-        resultList.innerHTML = `<div class="empty-state"><h3>Search failed.</h3><p>Is the backend running at ${esc(API_BASE)}?</p></div>`;
+          resultList.innerHTML = items.map(renderCard).join("");
+        } catch (err) {
+          errorArea.innerHTML = `
+            <div class="p-4 rounded-xl bg-error-container/30 border border-error/40 mb-4">
+              <div class="flex items-center gap-2 text-error mb-1">
+                <span class="material-symbols-outlined">error</span>
+                <strong class="font-headline">Search failed</strong>
+              </div>
+              <p class="text-sm text-on-surface-variant">${esc(err.message || String(err))}</p>
+              <p class="text-xs text-on-surface-variant mt-2 opacity-60">Endpoint: ${esc(API_BASE)}</p>
+            </div>`;
+          resultList.innerHTML = "";
+          strategyLabel.textContent = "OFFLINE";
+        }
       }
-    }
 
-    /* ── form submit → update URL → search ── */
-    form.addEventListener("submit", (e) => {
-      e.preventDefault();
-      const fd = new FormData(form);
-      const p = new URLSearchParams();
-      for (const [k, v] of fd.entries()) {
-        if (typeof v === "string" && v.trim()) p.set(k, v.trim());
+      /* ── live DB metric polling ── */
+      async function refreshHealth() {
+        try {
+          const res = await fetch(`${API_BASE}/health`, { headers: { Accept: "application/json" } });
+          const data = await res.json();
+          if (!res.ok || !data?.ok) throw new Error();
+          const n = Number(data.total_bookmarks);
+          dbCount.textContent = Number.isFinite(n) ? n.toLocaleString() : "---";
+          dbStatus.textContent = "LIVE";
+          dbStatus.classList.remove("text-error"); dbStatus.classList.add("text-secondary");
+          dbDot.classList.remove("bg-error"); dbDot.classList.add("bg-secondary");
+        } catch {
+          dbStatus.textContent = "OFFLINE";
+          dbStatus.classList.remove("text-secondary"); dbStatus.classList.add("text-error");
+          dbDot.classList.remove("bg-secondary"); dbDot.classList.add("bg-error");
+        }
       }
-      const newUrl = `${window.location.pathname}${p.toString() ? "?" + p.toString() : ""}`;
-      window.history.pushState({}, "", newUrl);
+
+      /* ── event bindings ── */
+      form.addEventListener("submit", (e) => {
+        e.preventDefault();
+        pushUrl();
+        runSearch();
+      });
+
+      /* debounced live search on typing */
+      let debounceId = null;
+      qInput.addEventListener("input", () => {
+        clearTimeout(debounceId);
+        debounceId = setTimeout(() => {
+          pushUrl();
+          runSearch();
+        }, DEBOUNCE_MS);
+      });
+
+      [authorField, domainField, fromField, toField].forEach(el => {
+        el.addEventListener("change", () => { pushUrl(); runSearch(); });
+      });
+
+      filtersToggle.addEventListener("click", () => {
+        filtersPanel.classList.toggle("hidden");
+      });
+
+      clearBtn.addEventListener("click", () => {
+        authorField.value = "";
+        domainField.value = "";
+        fromField.value = "";
+        toField.value = "";
+        pushUrl();
+        runSearch();
+      });
+
+      window.addEventListener("popstate", () => { syncFromUrl(); runSearch(); });
+
+      /* ── boot ── */
+      syncFromUrl();
       runSearch();
-    });
-
-    /* ── back/forward nav ── */
-    window.addEventListener("popstate", () => {
-      syncFormFromUrl();
-      runSearch();
-    });
-
-    /* ── live DB metric polling ── */
-    async function refreshHealth() {
-      try {
-        const res = await fetch(`${API_BASE}/health`, { headers: { Accept: "application/json" } });
-        const data = await res.json();
-        if (!res.ok || !data?.ok) throw new Error();
-        const n = Number(data.total_bookmarks);
-        dbCount.textContent = Number.isFinite(n) && n >= 0 ? `${n} ROW(S)` : "---";
-        dbStatus.textContent = "LIVE";
-      } catch {
-        dbStatus.textContent = "OFFLINE";
-      }
-    }
-
-    /* ── boot ── */
-    syncFormFromUrl();
-    runSearch();
-    refreshHealth();
-    setInterval(refreshHealth, POLL_MS);
+      refreshHealth();
+      setInterval(refreshHealth, POLL_MS);
+    })();
   </script>
 </Layout>
-
-<style>
-  .page-shell { max-width: 1400px; margin: 0 auto; padding: 2rem 1rem; }
-
-  .hero-panel {
-    background: var(--surface);
-    border: 4px solid var(--border-strong);
-    box-shadow: var(--shadow);
-    padding: 2rem;
-    margin-bottom: 3rem;
-    display: grid;
-    grid-template-columns: 2fr 1fr;
-    gap: 2rem;
-  }
-  .hero-copy h1 { font-size: 2.5rem; line-height: 1.1; margin: 1rem 0; text-transform: uppercase; color: var(--accent); }
-  .eyebrow { display: inline-block; background: var(--accent-pink); color: #000; padding: 0.2rem 0.6rem; font-weight: 700; font-size: 0.8rem; }
-  .hero-text { color: var(--text-muted); line-height: 1.6; }
-  .hero-metrics { display: grid; grid-template-columns: 1fr; gap: 1rem; }
-  .metric-card { background: var(--bg); border: 2px solid var(--border-strong); padding: 1rem; box-shadow: var(--shadow-small); }
-  .metric-label { font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; }
-  .metric-card strong { display: block; font-size: 1.2rem; color: var(--accent-blue); }
-
-  .workspace { display: grid; grid-template-columns: 380px 1fr; gap: 2rem; }
-  .control-panel { display: flex; flex-direction: column; gap: 2rem; }
-
-  .search-form { background: var(--surface); border: 4px solid var(--border-strong); padding: 1.5rem; box-shadow: var(--shadow); }
-  .field { display: block; margin-bottom: 1.5rem; }
-  .field span { display: block; font-size: 0.8rem; margin-bottom: 0.5rem; font-weight: 700; color: var(--accent-yellow); }
-  .field input {
-    width: 100%; background: #000; border: 2px solid var(--border-strong);
-    color: var(--accent); padding: 0.8rem; font-family: var(--font-mono); outline: none; font-size: 0.9rem;
-  }
-  .field input:focus { border-color: var(--accent); box-shadow: 0 0 10px var(--accent); }
-  .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
-
-  .form-actions { display: flex; gap: 1rem; }
-  .form-actions button {
-    background: var(--accent); color: #000; border: 2px solid #000;
-    padding: 0.8rem 1.5rem; font-weight: 700; cursor: pointer;
-    box-shadow: var(--shadow-small); font-family: var(--font-mono); font-size: 0.85rem;
-  }
-  .form-actions button:hover { background: var(--text); color: #000; transform: translate(-2px, -2px); box-shadow: 8px 8px 0px #000; }
-  .form-actions button:active { box-shadow: none; transform: translate(2px, 2px); }
-  .form-actions a { padding: 0.8rem 1.5rem; border: 2px solid var(--border-strong); color: var(--text); font-weight: 700; display: inline-flex; align-items: center; }
-
-  .parser-panel { background: #000; border: 2px solid var(--accent); padding: 1rem; font-size: 0.85rem; }
-  .chip-group { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 1rem 0; }
-  .chip { padding: 0.2rem 0.5rem; border: 1px solid var(--text-muted); font-size: 0.75rem; }
-  .chip-strong { border-color: var(--accent-pink); color: var(--accent-pink); }
-  .chip-warning { border-color: var(--accent-yellow); color: var(--accent-yellow); }
-  .parser-list { list-style: none; padding: 0; color: var(--text-muted); }
-  .parser-list li::before { content: "> "; color: var(--accent); }
-
-  .results-panel { display: flex; flex-direction: column; gap: 2rem; }
-  .results-header { border-bottom: 4px solid var(--border-strong); padding-bottom: 1rem; display: flex; justify-content: space-between; align-items: flex-end; }
-  .results-header h2 { margin: 0; font-size: 2rem; text-transform: uppercase; }
-  .results-meta { display: flex; gap: 1.5rem; font-size: 0.8rem; color: var(--text-muted); }
-
-  .result-list { display: grid; gap: 2rem; }
-
-  .error-card { padding: 1rem; border: 2px solid red; background: #200; margin-bottom: 1rem; }
-  .error-card h2 { color: red; margin-bottom: 0.5rem; }
-  .warning-card { padding: 1rem; border: 2px solid #f59e0b; background: #2a2006; margin-bottom: 1rem; }
-  .warning-card h2 { color: #f59e0b; margin-bottom: 0.5rem; }
-
-  .empty-state { text-align: center; padding: 4rem 2rem; border: 2px dashed var(--border); }
-  .empty-state h3 { margin-bottom: 1rem; color: var(--text-muted); }
-  .empty-state p { color: var(--text-muted); font-size: 0.85rem; }
-
-  @media (max-width: 1080px) {
-    .hero-panel, .workspace { grid-template-columns: 1fr; }
-  }
-  @media (max-width: 600px) {
-    .hero-copy h1 { font-size: 1.8rem; }
-    .field-grid { grid-template-columns: 1fr; }
-  }
-</style>
-
-<!-- global styles for dynamically injected result cards -->
-<style is:global>
-  .result-card {
-    background: var(--surface); border: 4px solid var(--border-strong);
-    padding: 1.5rem; box-shadow: 6px 6px 0px #000; transition: transform 0.1s;
-  }
-  .result-card:hover { transform: translate(-4px, -4px); box-shadow: 10px 10px 0px #000; border-color: var(--accent); }
-  .result-topline { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem; border-bottom: 2px solid #333; padding-bottom: 0.5rem; }
-  .result-author strong { color: #ff00ff; }
-  .result-author span { color: #888; margin-left: 0.5rem; }
-  .result-badges { display: flex; flex-wrap: wrap; gap: 0.5rem; }
-  .badge { background: #000; border: 1px solid #fff; padding: 0.1rem 0.4rem; font-size: 0.7rem; color: #fff; }
-  .badge-score { border-color: #00ccff; color: #00ccff; }
-  .content-wrapper { margin: 1rem 0; }
-  .full-text { font-size: 1.05rem; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
-  .snippet-highlight { background: #000; border-left: 4px solid #00ff66; padding: 1rem; margin: 1rem 0; line-height: 1.6; }
-  .media-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 1rem; margin: 1rem 0; }
-  .media-item { aspect-ratio: 16/9; border: 2px solid #fff; overflow: hidden; }
-  .media-item img { width: 100%; height: 100%; object-fit: cover; filter: grayscale(100%); transition: filter 0.3s; }
-  .media-item:hover img { filter: grayscale(0%); }
-  .links-section { margin-top: 1rem; padding: 1rem; background: #000; border: 1px dashed #fff; }
-  .links-title { font-size: 0.8rem; font-weight: 700; margin-bottom: 0.5rem; color: #00ccff; text-transform: uppercase; }
-  .links-list { display: flex; flex-wrap: wrap; gap: 0.8rem; font-size: 0.82rem; }
-  .source-link {
-    display: inline-block; margin-top: 1.5rem; background: #ffff00; color: #000;
-    padding: 0.5rem 1rem; font-weight: 700; border: 2px solid #000; box-shadow: 3px 3px 0px #000;
-  }
-  .source-link:hover { text-decoration: none; background: #fff; }
-  .result-footer { margin-top: 1.5rem; font-size: 0.75rem; color: #888; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; }
-
-  @media (max-width: 600px) {
-    .result-topline { flex-direction: column; }
-  }
-</style>
