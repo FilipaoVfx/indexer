@@ -56,7 +56,7 @@ button,input{font:inherit;color:inherit}button{border:1px solid var(--line);back
 <div class="f fr"><label for="from">From</label><input id="from" name="from" type="date" /></div>
 <div class="f to"><label for="to">To</label><input id="to" name="to" type="date" /></div>
 <div class="f l"><label for="limit">Limit</label><input id="limit" name="limit" type="number" min="1" max="100" value="40" /></div>
-<div class="f api"><label for="api_base">API base</label><input id="api_base" name="api_base" type="text" value="http://localhost:8787" /></div>
+<div class="f api"><label for="api_base">API base</label><input id="api_base" name="api_base" type="text" value="https://indexer-hzto.onrender.com" /></div>
 </div>
 <div class="actions"><button type="submit" class="primary">Search</button><button type="button" id="reset">Reset filters</button></div>
 </form>
@@ -88,7 +88,7 @@ button,input{font:inherit;color:inherit}button{border:1px solid var(--line);back
 </section>
 </div>
 <script>
-const DEF="http://localhost:8787";
+const DEF="https://indexer-hzto.onrender.com";
 const MAX_EVENTS=10;
 const S={auto:true,base:4000,poll:4000,max:30000,timer:null,sCtrl:null,hCtrl:null,errStreak:0,known:new Set(),newCount:0,lastPayload:null,lastHealth:null,lastMs:0,lastErr:"",events:[]};
 const E={form:document.getElementById("form"),q:document.getElementById("q"),author:document.getElementById("author"),domain:document.getElementById("domain"),user:document.getElementById("user_id"),from:document.getElementById("from"),to:document.getElementById("to"),limit:document.getElementById("limit"),api:document.getElementById("api_base"),auto:document.getElementById("auto"),refresh:document.getElementById("refresh"),reset:document.getElementById("reset"),backend:document.getElementById("backendStatus"),summary:document.getElementById("summary"),mode:document.getElementById("mode"),warn:document.getElementById("warn"),err:document.getElementById("err"),out:document.getElementById("out"),topAuthors:document.getElementById("topAuthors"),topDomains:document.getElementById("topDomains"),timeline:document.getElementById("timeline"),events:document.getElementById("events"),mDb:document.getElementById("mDb"),mTotal:document.getElementById("mTotal"),mCards:document.getElementById("mCards"),mNew:document.getElementById("mNew"),mStrategy:document.getElementById("mStrategy"),mLatency:document.getElementById("mLatency"),mLast:document.getElementById("mLast"),mPoll:document.getElementById("mPoll"),mAuthors:document.getElementById("mAuthors"),mDomains:document.getElementById("mDomains")};

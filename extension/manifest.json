@@ -8,7 +8,8 @@
   "host_permissions": [
     "https://x.com/*",
     "http://localhost:8787/*",
-    "http://127.0.0.1:8787/*"
+    "http://127.0.0.1:8787/*",
+    "https://indexer-hzto.onrender.com/*"
   ],
   "background": {
     "service_worker": "background.js"
