@@ -13,13 +13,135 @@ import {
 import { withBase } from "../lib/url-state";
 
 type SortKey = "count" | "latest" | "owner" | "repo";
+type HistoryMode = "replace" | "push";
+
+interface ViewState {
+  q: string;
+  sort: SortKey;
+  page: number;
+  pageSize: number;
+}
+
+const DEFAULT_PAGE_SIZE = 24;
+const PAGE_SIZE_OPTIONS = [24, 48, 96];
+const VALID_SORTS = new Set<SortKey>(["count", "latest", "owner", "repo"]);
+
+function clampPositiveInt(value: string | null, fallback: number): number {
+  const parsed = Number.parseInt(value || "", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function normalizeState(state: ViewState): ViewState {
+  return {
+    q: state.q,
+    sort: VALID_SORTS.has(state.sort) ? state.sort : "count",
+    page: Math.max(1, state.page),
+    pageSize: PAGE_SIZE_OPTIONS.includes(state.pageSize)
+      ? state.pageSize
+      : DEFAULT_PAGE_SIZE,
+  };
+}
+
+function readViewState(): ViewState {
+  if (typeof window === "undefined") {
+    return {
+      q: "",
+      sort: "count",
+      page: 1,
+      pageSize: DEFAULT_PAGE_SIZE,
+    };
+  }
+
+  const params = new URLSearchParams(window.location.search);
+  const rawSort = (params.get("sort") || "count") as SortKey;
+
+  return normalizeState({
+    q: params.get("q") || "",
+    sort: rawSort,
+    page: clampPositiveInt(params.get("page"), 1),
+    pageSize: clampPositiveInt(params.get("pageSize"), DEFAULT_PAGE_SIZE),
+  });
+}
+
+function writeViewState(state: ViewState, historyMode: HistoryMode = "replace") {
+  if (typeof window === "undefined") return;
+
+  const next = normalizeState(state);
+  const params = new URLSearchParams(window.location.search);
+
+  if (next.q) params.set("q", next.q);
+  else params.delete("q");
+
+  if (next.sort !== "count") params.set("sort", next.sort);
+  else params.delete("sort");
+
+  if (next.page > 1) params.set("page", String(next.page));
+  else params.delete("page");
+
+  if (next.pageSize !== DEFAULT_PAGE_SIZE) {
+    params.set("pageSize", String(next.pageSize));
+  } else {
+    params.delete("pageSize");
+  }
+
+  const nextUrl = `${window.location.pathname}${
+    params.toString() ? `?${params.toString()}` : ""
+  }`;
+
+  if (historyMode === "push") {
+    window.history.pushState({}, "", nextUrl);
+  } else {
+    window.history.replaceState({}, "", nextUrl);
+  }
+}
+
+function getPageWindow(currentPage: number, totalPages: number): Array<number | "ellipsis"> {
+  if (totalPages <= 7) {
+    return Array.from({ length: totalPages }, (_, index) => index + 1);
+  }
+
+  const pages = new Set<number>([1, totalPages, currentPage]);
+  pages.add(Math.max(1, currentPage - 1));
+  pages.add(Math.min(totalPages, currentPage + 1));
+
+  if (currentPage <= 3) {
+    pages.add(2);
+    pages.add(3);
+    pages.add(4);
+  }
+
+  if (currentPage >= totalPages - 2) {
+    pages.add(totalPages - 1);
+    pages.add(totalPages - 2);
+    pages.add(totalPages - 3);
+  }
+
+  const sorted = [...pages].filter((page) => page >= 1 && page <= totalPages).sort((a, b) => a - b);
+  const windowed: Array<number | "ellipsis"> = [];
+
+  sorted.forEach((page, index) => {
+    const previous = sorted[index - 1];
+    if (previous && page - previous > 1) windowed.push("ellipsis");
+    windowed.push(page);
+  });
+
+  return windowed;
+}
+
+function buildCollectionHref(path: "/authors" | "/repos", q: string, pageSize: number) {
+  const params = new URLSearchParams();
+  if (q.trim()) params.set("q", q.trim());
+  if (pageSize !== DEFAULT_PAGE_SIZE) params.set("pageSize", String(pageSize));
+  return withBase(`${path}${params.toString() ? `?${params.toString()}` : ""}`);
+}
 
 export default function ReposList() {
   const [items, setItems] = useState<SearchItem[] | null>(null);
   const [total, setTotal] = useState(0);
   const [err, setErr] = useState<string | null>(null);
-  const [q, setQ] = useState("");
-  const [sort, setSort] = useState<SortKey>("count");
+  const [view, setView] = useState<ViewState>(() => readViewState());
+
+  const { q, sort, page, pageSize } = view;
 
   useEffect(() => {
     getCorpus()
@@ -29,6 +151,20 @@ export default function ReposList() {
       })
       .catch((e) => setErr(e?.message || String(e)));
   }, []);
+
+  useEffect(() => {
+    const onPopState = () => setView(readViewState());
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  function updateView(patch: Partial<ViewState>, historyMode: HistoryMode = "replace") {
+    setView((prev) => {
+      const next = normalizeState({ ...prev, ...patch });
+      writeViewState(next, historyMode);
+      return next;
+    });
+  }
 
   const repos = useMemo<RepoEntity[]>(() => {
     if (!items) return [];
@@ -53,9 +189,49 @@ export default function ReposList() {
     return filtered.sort(sorters[sort]);
   }, [items, q, sort]);
 
+  const totalPages = Math.max(1, Math.ceil(repos.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const visibleRepos = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return repos.slice(start, start + pageSize);
+  }, [currentPage, pageSize, repos]);
+  const pageWindow = useMemo(
+    () => getPageWindow(currentPage, totalPages),
+    [currentPage, totalPages]
+  );
+  const startItem = repos.length === 0 ? 0 : (currentPage - 1) * pageSize + 1;
+  const endItem = Math.min(currentPage * pageSize, repos.length);
+
+  useEffect(() => {
+    if (page !== currentPage) {
+      updateView({ page: currentPage });
+    }
+  }, [currentPage, page]);
+
   return (
     <section className="px-4 md:px-8 py-10">
       <div className="max-w-6xl mx-auto">
+        <nav className="mb-6 flex flex-wrap items-center gap-2 text-xs font-bold uppercase tracking-wide">
+          <a
+            href={withBase("/")}
+            className="rounded-full bg-surface-container-high px-3 py-1.5 text-on-surface-variant transition-colors hover:text-primary"
+          >
+            Buscar
+          </a>
+          <a
+            href={buildCollectionHref("/authors", q, pageSize)}
+            className="rounded-full bg-surface-container-high px-3 py-1.5 text-on-surface-variant transition-colors hover:text-primary"
+          >
+            Autores
+          </a>
+          <a
+            href={buildCollectionHref("/repos", q, pageSize)}
+            className="rounded-full bg-primary px-3 py-1.5 text-on-primary"
+          >
+            Repos
+          </a>
+        </nav>
+
         <header className="flex items-center justify-between mb-8 flex-wrap gap-3">
           <div>
             <h2 className="text-2xl font-headline font-bold text-on-surface flex items-center gap-3 flex-wrap">
@@ -78,20 +254,33 @@ export default function ReposList() {
               </span>
               <input
                 value={q}
-                onChange={(e) => setQ(e.target.value)}
+                onChange={(e) => updateView({ q: e.target.value, page: 1 })}
                 placeholder="Filtrar repos..."
                 className="bg-surface-container-lowest border-none focus:ring-2 focus:ring-primary pl-10 pr-4 py-2 rounded-lg text-on-surface text-sm w-64"
               />
             </div>
             <select
               value={sort}
-              onChange={(e) => setSort(e.target.value as SortKey)}
+              onChange={(e) => updateView({ sort: e.target.value as SortKey, page: 1 })}
               className="bg-surface-container-lowest border-none focus:ring-2 focus:ring-primary px-3 py-2 rounded-lg text-on-surface text-sm"
             >
               <option value="count">Mas referenciados</option>
               <option value="latest">Mas recientes</option>
               <option value="owner">Owner A-Z</option>
               <option value="repo">Repo A-Z</option>
+            </select>
+            <select
+              value={pageSize}
+              onChange={(e) =>
+                updateView({ pageSize: Number(e.target.value), page: 1 })
+              }
+              className="bg-surface-container-lowest border-none focus:ring-2 focus:ring-primary px-3 py-2 rounded-lg text-on-surface text-sm"
+            >
+              {PAGE_SIZE_OPTIONS.map((size) => (
+                <option key={size} value={size}>
+                  {size} por pagina
+                </option>
+              ))}
             </select>
           </div>
         </header>
@@ -117,8 +306,22 @@ export default function ReposList() {
           </p>
         )}
 
+        {repos.length > 0 && (
+          <div className="mb-4 flex items-center justify-between gap-3 flex-wrap rounded-xl bg-surface-container-low px-4 py-3 text-sm text-on-surface-variant">
+            <p>
+              Mostrando <span className="font-bold text-on-surface">{startItem}</span> a{" "}
+              <span className="font-bold text-on-surface">{endItem}</span> de{" "}
+              <span className="font-bold text-on-surface">{repos.length}</span> repos.
+            </p>
+            <p>
+              Pagina <span className="font-bold text-on-surface">{currentPage}</span> de{" "}
+              <span className="font-bold text-on-surface">{totalPages}</span>
+            </p>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {repos.map((r) => (
+          {visibleRepos.map((r) => (
             <div
               key={`${r.owner}/${r.repo}`}
               className="glass-card p-4 rounded-xl border border-outline-variant/15 hover:border-primary/40 transition-all flex items-start gap-3"
@@ -172,6 +375,53 @@ export default function ReposList() {
             </div>
           ))}
         </div>
+
+        {repos.length > pageSize && (
+          <nav
+            aria-label="Paginacion de repositorios"
+            className="mt-8 flex flex-wrap items-center justify-center gap-2"
+          >
+            <button
+              type="button"
+              onClick={() => updateView({ page: currentPage - 1 }, "push")}
+              disabled={currentPage === 1}
+              className="rounded-lg bg-surface-container-high px-3 py-2 text-sm text-on-surface transition-colors disabled:cursor-not-allowed disabled:opacity-40 hover:text-primary"
+            >
+              Anterior
+            </button>
+            {pageWindow.map((entry, index) =>
+              entry === "ellipsis" ? (
+                <span
+                  key={`ellipsis-${index}`}
+                  className="px-2 text-sm text-on-surface-variant"
+                >
+                  ...
+                </span>
+              ) : (
+                <button
+                  key={entry}
+                  type="button"
+                  onClick={() => updateView({ page: entry }, "push")}
+                  className={`min-w-10 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                    entry === currentPage
+                      ? "bg-primary text-on-primary"
+                      : "bg-surface-container-high text-on-surface hover:text-primary"
+                  }`}
+                >
+                  {entry}
+                </button>
+              )
+            )}
+            <button
+              type="button"
+              onClick={() => updateView({ page: currentPage + 1 }, "push")}
+              disabled={currentPage === totalPages}
+              className="rounded-lg bg-surface-container-high px-3 py-2 text-sm text-on-surface transition-colors disabled:cursor-not-allowed disabled:opacity-40 hover:text-primary"
+            >
+              Siguiente
+            </button>
+          </nav>
+        )}
       </div>
     </section>
   );

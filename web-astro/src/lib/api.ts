@@ -332,7 +332,7 @@ export async function searchGoal(
 }
 
 export async function fetchAllBookmarks(
-  hardLimit = 5000
+  hardLimit = Number.POSITIVE_INFINITY
 ): Promise<{ items: SearchItem[]; total: number }> {
   const all: SearchItem[] = [];
   const batch = 100;

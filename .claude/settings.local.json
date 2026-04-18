@@ -7,7 +7,8 @@
       "WebFetch(domain:api.stitch.withseam.com)",
       "WebFetch(domain:stitch.withseam.com)",
       "WebFetch(domain:www.stitch.withseam.com)",
-      "Bash(npm run:*)"
+      "Bash(npm run:*)",
+      "Bash(python -c \"import reportlab; print\\(reportlab.Version\\)\")"
     ]
   }
 }
