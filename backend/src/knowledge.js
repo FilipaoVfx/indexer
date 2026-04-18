@@ -16,7 +16,13 @@ const GH_NON_USERS = new Set([
 ]);
 
 const GH_REGEX =
-  /(?:https?:\/\/)?(?:www\.)?github\.com\/([A-Za-z0-9][A-Za-z0-9-]{0,38})\/([A-Za-z0-9][A-Za-z0-9._-]{0,99}?)(?=[/?#]|\s|$|\.git\b)/gi;
+  /(?:https?:\/\/)?(?:www\.)?github\.com\/([A-Za-z0-9][A-Za-z0-9-]{0,38})\/([A-Za-z0-9][A-Za-z0-9._-]{0,119}?)(?=[/?#]|\.git\b|[\s\u2026.,;:!?)\]"'“”]|$)/gi;
+
+function sanitizeGithubRepoSegment(value) {
+  return String(value || "")
+    .replace(/\.git$/i, "")
+    .replace(/[^A-Za-z0-9._-]+$/g, "");
+}
 
 const INTENT_PATTERNS = [
   { intent: "build", regex: /\b(build|create|make|ship|launch|prototype)\b/i },
@@ -106,7 +112,7 @@ function extractGithubRepos(item) {
 
   while ((match = GH_REGEX.exec(haystack)) !== null) {
     const owner = match[1];
-    const repo = match[2].replace(/\.git$/i, "");
+    const repo = sanitizeGithubRepoSegment(match[2]);
     if (!repo || GH_NON_USERS.has(owner.toLowerCase())) continue;
     repos.set(`${owner}/${repo}`, { owner, repo });
   }

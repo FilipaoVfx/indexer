@@ -122,7 +122,13 @@ const GH_NON_USERS = new Set([
 ]);
 
 const GH_REGEX =
-  /(?:https?:\/\/)?(?:www\.)?github\.com\/([A-Za-z0-9][A-Za-z0-9-]{0,38})\/([A-Za-z0-9][A-Za-z0-9._-]{0,99}?)(?=[/?#]|\.git\b|\s|$)/gi;
+  /(?:https?:\/\/)?(?:www\.)?github\.com\/([A-Za-z0-9][A-Za-z0-9-]{0,38})\/([A-Za-z0-9][A-Za-z0-9._-]{0,119}?)(?=[/?#]|\.git\b|[\s\u2026.,;:!?)\]"'“”]|$)/gi;
+
+function sanitizeGithubRepoSegment(value: string): string {
+  return String(value || "")
+    .replace(/\.git$/i, "")
+    .replace(/[^A-Za-z0-9._-]+$/g, "");
+}
 
 export function extractGithubRepos(items: SearchItem[]): Map<string, RepoEntity> {
   const repos = new Map<string, RepoEntity>();
@@ -141,7 +147,7 @@ export function extractGithubRepos(items: SearchItem[]): Map<string, RepoEntity>
 
     while ((match = GH_REGEX.exec(joined)) !== null) {
       const owner = match[1];
-      const repo = match[2].replace(/\.git$/i, "");
+      const repo = sanitizeGithubRepoSegment(match[2]);
       if (GH_NON_USERS.has(owner.toLowerCase()) || !repo) continue;
 
       const key = `${owner}/${repo}`;
