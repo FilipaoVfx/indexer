@@ -266,6 +266,79 @@ import Layout from "../components/Layout.astro";
         return String(name || "?").trim().split(/\s+/).slice(0, 2).map(x => x[0]?.toUpperCase() || "").join("") || "?";
       }
 
+      /* ── robust GitHub repo extractor ──
+         scans any string (URL, text) for github.com/<owner>/<repo> references.
+         Handles: http(s), www, trailing .git, query strings, fragments, nested paths. */
+      const GH_NON_USERS = new Set([
+        "orgs","sponsors","features","settings","notifications","pulls","issues",
+        "topics","collections","marketplace","explore","trending","login","signup",
+        "about","search","new","pricing","customer-stories","enterprise","security",
+        "site","contact","readme","site-map","watching","stars","following","followers"
+      ]);
+      const GH_REGEX = /(?:https?:\/\/)?(?:www\.)?github\.com\/([A-Za-z0-9][A-Za-z0-9-]{0,38})\/([A-Za-z0-9][A-Za-z0-9._-]{0,99}?)(?=[\/?#]|\.git\b|\s|$)/gi;
+
+      function extractGithubRepos(items) {
+        const repos = new Map(); // "owner/repo" -> { count, owner, repo, sample_author, latest_date }
+        for (const it of items) {
+          const haystack = [];
+          if (it.source_url) haystack.push(it.source_url);
+          if (Array.isArray(it.links)) haystack.push(...it.links);
+          if (it.text_content) haystack.push(it.text_content);
+          const joined = haystack.filter(Boolean).join(" \n ");
+          if (!joined) continue;
+          GH_REGEX.lastIndex = 0;
+          let m;
+          while ((m = GH_REGEX.exec(joined)) !== null) {
+            const owner = m[1];
+            let repo = m[2].replace(/\.git$/i, "");
+            if (GH_NON_USERS.has(owner.toLowerCase())) continue;
+            if (!repo || repo.length < 1) continue;
+            const key = `${owner}/${repo}`;
+            const prev = repos.get(key) || { count: 0, owner, repo, sample_author: null, latest_date: null };
+            prev.count += 1;
+            prev.sample_author = prev.sample_author || it.author_username || it.author_name || null;
+            if (it.created_at && (!prev.latest_date || new Date(it.created_at) > new Date(prev.latest_date))) {
+              prev.latest_date = it.created_at;
+            }
+            repos.set(key, prev);
+          }
+        }
+        return repos;
+      }
+
+      function extractAllAuthors(items) {
+        const map = new Map();
+        for (const it of items) {
+          const handle = it.author_username || null;
+          const name = it.author_name || handle || "anonymous";
+          const key = handle || name;
+          const entry = map.get(key) || { name, handle, count: 0 };
+          entry.count += 1;
+          map.set(key, entry);
+        }
+        return map;
+      }
+
+      /* ── paginated fetch of ALL bookmarks (no cap of 50) ── */
+      async function fetchAllBookmarks(hardLimit = 5000) {
+        const all = [];
+        const batch = 100;
+        let offset = 0;
+        let total = Infinity;
+        while (all.length < hardLimit && offset < total) {
+          const url = `${API_BASE}/api/bookmarks/search?user_id=local-user&limit=${batch}&offset=${offset}`;
+          const res = await fetch(url);
+          if (!res.ok) break;
+          const data = await res.json();
+          const items = data.items || [];
+          if (typeof data.total === "number") total = data.total;
+          all.push(...items);
+          if (items.length < batch) break;
+          offset += batch;
+        }
+        return { items: all, total: total === Infinity ? all.length : total };
+      }
+
       /* ── URL <-> state ── */
       function syncFromUrl() {
         const p = new URLSearchParams(window.location.search);
@@ -358,6 +431,19 @@ import Layout from "../components/Layout.astro";
         if ((item.links || []).length > 0) tags.push(`${item.links.length} links`);
         const tagsHtml = tags.map(t => `<span class="bg-surface-container-highest text-on-surface-variant px-2.5 py-1 rounded text-xs">${esc(t)}</span>`).join("");
 
+        /* github repos found inside this card's content */
+        const cardRepos = [...extractGithubRepos([item]).values()].slice(0, 4);
+        const reposHtml = cardRepos.length > 0
+          ? `<div class="flex flex-wrap gap-1.5 mb-3">
+               ${cardRepos.map(r => `
+                 <a href="https://github.com/${esc(r.owner)}/${esc(r.repo)}" target="_blank" rel="noreferrer"
+                    class="inline-flex items-center gap-1 bg-primary/10 border border-primary/30 text-primary text-[11px] font-medium px-2 py-0.5 rounded hover:bg-primary/20 transition-colors">
+                   <span class="material-symbols-outlined text-xs">code</span>
+                   ${esc(r.owner)}/${esc(r.repo)}
+                 </a>`).join("")}
+             </div>`
+          : "";
+
         const kind = (item.media || []).length > 0 ? "Media"
                    : (item.links || []).length > 0 ? "Reference"
                    : "Synthesis";
@@ -400,6 +486,7 @@ import Layout from "../components/Layout.astro";
             </div>
             ${contentHtml}
             ${mediaHtml}
+            ${reposHtml}
             <div class="flex flex-wrap gap-2 items-center justify-between">
               <div class="flex gap-2 flex-wrap">${tagsHtml}</div>
               ${openLink}
@@ -408,45 +495,48 @@ import Layout from "../components/Layout.astro";
         `;
       }
 
-      /* ── discovery bubbles (empty state) ── */
+      /* cache full corpus — reused across renders */
+      let _corpusCache = null;
+
+      /* ── discovery bubbles (empty state) — now paginates ALL bookmarks ── */
       async function renderDiscoveryBubbles() {
         bubblesArea.innerHTML = `<div class="text-on-surface-variant text-sm">Loading your graph...</div>`;
         try {
-          const url = `${API_BASE}/api/bookmarks/search?user_id=local-user&limit=50`;
-          const res = await fetch(url);
-          const data = await res.json();
-          if (!res.ok) throw new Error();
-          const items = data.items || [];
+          const { items, total } = _corpusCache || (_corpusCache = await fetchAllBookmarks());
 
-          const authors = new Map();
-          const domains = new Map();
+          /* aggregate authors (from author_username + author_name), domains */
+          const authorsMap = extractAllAuthors(items);
+          const domainsMap = new Map();
           for (const it of items) {
-            const a = it.author_name || it.author_username;
-            if (a) authors.set(a, (authors.get(a) || 0) + 1);
             const d = it.source_domain || (it.source_url ? safeDomain(it.source_url) : "");
-            if (d) domains.set(d, (domains.get(d) || 0) + 1);
+            if (d) domainsMap.set(d, (domainsMap.get(d) || 0) + 1);
           }
-          const topAuthors = [...authors.entries()].sort((a,b)=>b[1]-a[1]).slice(0, 4);
-          const topDomains = [...domains.entries()].sort((a,b)=>b[1]-a[1]).slice(0, 3);
+          const reposMap = extractGithubRepos(items);
+
+          const topAuthors = [...authorsMap.values()].sort((a,b)=>b.count - a.count).slice(0, 8);
+          const topDomains = [...domainsMap.entries()].sort((a,b)=>b[1]-a[1]).slice(0, 5);
+          const topRepos   = [...reposMap.values()].sort((a,b)=>b.count - a.count).slice(0, 6);
 
           const positions = [
-            { cls: "top-10 left-20", size: "text-xl", color: "text-primary" },
-            { cls: "top-40 right-10", size: "text-2xl", color: "text-secondary" },
-            { cls: "bottom-10 left-1/4", size: "text-lg", color: "text-tertiary" },
+            { cls: "top-6 left-8",                 size: "text-xl",  color: "text-primary" },
+            { cls: "top-32 right-6",               size: "text-2xl", color: "text-secondary" },
+            { cls: "bottom-12 left-1/4",           size: "text-lg",  color: "text-tertiary" },
             { cls: "top-1/2 left-0 -translate-y-1/2", size: "text-base", color: "text-primary" },
-            { cls: "bottom-20 right-1/4", size: "text-xl", color: "text-secondary" },
-            { cls: "top-0 right-1/3", size: "text-sm", color: "text-on-surface" },
-            { cls: "bottom-0 left-10", size: "text-sm", color: "text-tertiary" }
+            { cls: "bottom-24 right-1/4",          size: "text-xl",  color: "text-secondary" },
+            { cls: "top-0 right-1/3",              size: "text-sm",  color: "text-on-surface" },
+            { cls: "bottom-2 left-10",             size: "text-sm",  color: "text-tertiary" },
+            { cls: "top-16 left-1/2 -translate-x-1/2", size: "text-base", color: "text-secondary" }
           ];
 
           const bubbles = [];
-          topAuthors.forEach(([n, c], i) => {
+          topAuthors.forEach((a, i) => {
             const pos = positions[i % positions.length];
+            const label = a.handle ? `@${a.handle}` : a.name;
             bubbles.push(`
-              <button class="absolute ${pos.cls} bubble-entity" data-type="author" data-value="${esc(n)}">
+              <button class="absolute ${pos.cls} bubble-entity" data-type="author" data-value="${esc(a.handle || a.name)}">
                 <div class="glass-card bubble-glow px-6 py-6 rounded-full flex flex-col items-center justify-center gap-1 border border-outline-variant/10 cursor-pointer hover:scale-105 transition-transform duration-500">
-                  <span class="${pos.color} font-bold font-headline ${pos.size}">${esc(n)}</span>
-                  <span class="text-[10px] text-on-surface-variant uppercase tracking-widest">${c} item${c===1?"":"s"}</span>
+                  <span class="${pos.color} font-bold font-headline ${pos.size}">${esc(label)}</span>
+                  <span class="text-[10px] text-on-surface-variant uppercase tracking-widest">${a.count} item${a.count===1?"":"s"}</span>
                 </div>
               </button>
             `);
@@ -466,11 +556,15 @@ import Layout from "../components/Layout.astro";
           bubbles.push(`
             <div class="absolute bottom-2 right-2 flex items-center gap-3 glass-card px-4 py-2 rounded-full border border-outline-variant/20">
               <div class="w-2 h-2 rounded-full bg-secondary animate-pulse"></div>
-              <span class="text-[10px] uppercase tracking-[0.2em] font-bold text-on-surface-variant">${items.length} total bookmarks</span>
+              <span class="text-[10px] uppercase tracking-[0.2em] font-bold text-on-surface-variant">
+                ${items.length} loaded / ${total} total • ${authorsMap.size} authors • ${reposMap.size} repos
+              </span>
             </div>
           `);
 
-          bubblesArea.innerHTML = bubbles.length > 0 ? bubbles.join("") : `<div class="text-on-surface-variant text-sm">No bookmarks yet. Ingest some via the extension.</div>`;
+          bubblesArea.innerHTML = bubbles.length > 0
+            ? bubbles.join("")
+            : `<div class="text-on-surface-variant text-sm">No bookmarks yet. Ingest some via the extension.</div>`;
 
           /* bind bubble clicks */
           bubblesArea.querySelectorAll(".bubble-entity").forEach(btn => {
@@ -483,16 +577,58 @@ import Layout from "../components/Layout.astro";
               runSearch();
             });
           });
-        } catch {
-          bubblesArea.innerHTML = `<div class="text-error text-sm">Could not load the knowledge graph. Is the backend online?</div>`;
+
+          /* render the GitHub repos panel below the bubbles */
+          renderReposPanel(topRepos, reposMap.size);
+        } catch (err) {
+          bubblesArea.innerHTML = `<div class="text-error text-sm">Could not load the knowledge graph. Is the backend online? (${esc(err?.message || "error")})</div>`;
         }
+      }
+
+      /* ── github repos panel (injected below bubbles on discovery home) ── */
+      function renderReposPanel(topRepos, totalRepos) {
+        let panel = document.getElementById("repos-panel");
+        if (!panel) {
+          panel = document.createElement("section");
+          panel.id = "repos-panel";
+          panel.className = "relative z-10 w-full max-w-4xl mx-auto px-6 pb-16";
+          discoveryHome.querySelector(".relative.z-10").appendChild(panel);
+        }
+        if (!topRepos || topRepos.length === 0) { panel.innerHTML = ""; return; }
+
+        const cards = topRepos.map(r => `
+          <a href="https://github.com/${esc(r.owner)}/${esc(r.repo)}" target="_blank" rel="noreferrer"
+             class="group glass-card p-4 rounded-xl border border-outline-variant/15 hover:border-primary/40 transition-all flex items-start gap-3">
+            <span class="material-symbols-outlined text-primary text-lg flex-shrink-0 mt-0.5">code</span>
+            <div class="min-w-0 flex-1">
+              <p class="text-on-surface font-bold text-sm truncate group-hover:text-primary transition-colors">${esc(r.repo)}</p>
+              <p class="text-on-surface-variant text-xs truncate">${esc(r.owner)}</p>
+              <div class="flex items-center gap-2 mt-2">
+                <span class="text-[10px] font-bold text-primary bg-primary/10 px-2 py-0.5 rounded">${r.count}×</span>
+                ${r.sample_author ? `<span class="text-[10px] text-on-surface-variant truncate">via ${esc(r.sample_author)}</span>` : ""}
+              </div>
+            </div>
+          </a>
+        `).join("");
+
+        panel.innerHTML = `
+          <div class="mb-4 flex items-center justify-between gap-3 flex-wrap">
+            <h3 class="font-headline font-bold text-lg text-on-surface flex items-center gap-2">
+              <span class="material-symbols-outlined text-primary">hub</span>
+              GitHub references
+            </h3>
+            <span class="text-xs text-on-surface-variant">${totalRepos} unique repos detected</span>
+          </div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            ${cards}
+          </div>`;
       }
 
       /* ── core search ── */
       function buildParams() {
         const p = new URLSearchParams();
         p.set("user_id", "local-user");
-        p.set("limit", "20");
+        p.set("limit", "100");
         if (qInput.value.trim())      p.set("q", qInput.value.trim());
         if (authorField.value.trim()) p.set("author", authorField.value.trim());
         if (domainField.value.trim()) p.set("domain", domainField.value.trim());
