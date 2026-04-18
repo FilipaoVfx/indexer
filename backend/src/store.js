@@ -30,6 +30,32 @@ function extractDomainFromUrl(value) {
   }
 }
 
+function countTerms(values = [], limit = 8) {
+  const counts = new Map();
+
+  for (const value of values) {
+    for (const term of Array.isArray(value) ? value : []) {
+      const normalized = String(term || "").trim().toLowerCase();
+      if (!normalized) continue;
+      counts.set(normalized, (counts.get(normalized) || 0) + 1);
+    }
+  }
+
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, limit)
+    .map(([term]) => term);
+}
+
+function groupGoalResults(items) {
+  return {
+    tools: items.filter((item) => item.asset_type === "tool").slice(0, 5),
+    tutorials: items.filter((item) => item.asset_type === "tutorial").slice(0, 5),
+    repos: items.filter((item) => item.asset_type === "repo").slice(0, 5),
+    examples: items.filter((item) => item.asset_type === "thread").slice(0, 5)
+  };
+}
+
 export class BookmarkStore {
   constructor(config) {
     if (!config.supabaseUrl || !config.supabaseKey) {
@@ -92,6 +118,21 @@ export class BookmarkStore {
       // We can distinguish between inserted and updated if we query before, 
       // but for simplicity in a batch we'll count total successes.
       inserted = data.length;
+
+      const { error: refreshError } = await this.supabase.rpc(
+        "refresh_goal_search_index",
+        {
+          target_user_id: userId
+        }
+      );
+
+      if (refreshError) {
+        throw new Error(
+          "Bookmarks were stored but the goal-search index refresh failed. " +
+            "Apply backend/sql/003_goal_search_schema.sql in Supabase first. " +
+            `Details: ${refreshError.message}`
+        );
+      }
     }
 
     const { count: totalStored } = await this.supabase
@@ -147,30 +188,17 @@ export class BookmarkStore {
         throw error;
       }
 
-      const items = (data || []).map((row) => ({
-        id: row.id,
-        user_id: row.user_id,
-        sync_id: row.sync_id,
-        tweet_id: row.tweet_id,
-        text_content: row.text_content,
-        author_username: row.author_username,
-        author_name: row.author_name,
-        created_at: row.created_at,
-        links: row.links || [],
-        media: row.media || [],
-        source_url: row.source_url,
-        ingested_at: row.ingested_at,
-        updated_at: row.updated_at,
-        inserted_at: row.inserted_at,
-        source_domain: extractDomainFromUrl(row.source_url),
-        highlight: row.highlight || null,
-        score: Number(row.score || 0),
-        score_breakdown: {
-          lexical: Number(row.text_rank || 0),
-          author: Number(row.author_boost || 0),
-          freshness: Number(row.freshness_boost || 0)
-        }
-      }));
+      const items = (data || []).map((row) =>
+        this.mapBookmarkRow(row, {
+          highlight: row.highlight || null,
+          score: Number(row.score || 0),
+          score_breakdown: {
+            lexical: Number(row.text_rank || 0),
+            author: Number(row.author_boost || 0),
+            freshness: Number(row.freshness_boost || 0)
+          }
+        })
+      );
 
       return {
         total: Number(data?.[0]?.total_count || 0),
@@ -208,6 +236,126 @@ export class BookmarkStore {
       throw new Error(`Failed to count bookmarks: ${error.message}`);
     }
     return count;
+  }
+
+  mapGoalSearchRow(row) {
+    return {
+      id: row.bookmark_id,
+      asset_id: row.asset_id,
+      user_id: row.user_id,
+      tweet_id: row.tweet_id,
+      text_content: row.text_content,
+      author_username: row.author_username,
+      author_name: row.author_name,
+      created_at: row.created_at,
+      links: row.links || [],
+      media: row.media || [],
+      source_url: row.source_url,
+      source_domain: row.source_domain || extractDomainFromUrl(row.source_url),
+      asset_type: row.asset_type,
+      title: row.title,
+      summary: row.summary,
+      topics: row.topics || [],
+      subtopics: row.subtopics || [],
+      intent_tags: row.intent_tags || [],
+      required_components: row.required_components || [],
+      difficulty: row.difficulty,
+      score: Number(row.score || 0),
+      why_this_result: row.why_this_result || [],
+      score_breakdown: {
+        text: Number(row.text_score || 0),
+        topics: Number(row.topic_score || 0),
+        components: Number(row.component_score || 0),
+        intent: Number(row.intent_score || 0),
+        graph: Number(row.relation_score || 0),
+        freshness: Number(row.freshness_score || 0)
+      }
+    };
+  }
+
+  async goalSearch({
+    goal,
+    userId,
+    author = "",
+    domain = "",
+    from = "",
+    to = "",
+    limit = 20,
+    offset = 0
+  }) {
+    await this.init();
+
+    const parsedQuery = parseSearchQuery({
+      q: goal,
+      author,
+      domain,
+      from,
+      to
+    });
+    const normalizedLimit = clampNumber(limit, 20, 1, 100);
+    const normalizedOffset = clampNumber(offset, 0, 0, 10_000);
+    const startedAt = Date.now();
+
+    const { data: goalPlan, error: goalPlanError } = await this.supabase.rpc(
+      "parse_goal_query",
+      {
+        p_goal: goal
+      }
+    );
+
+    if (goalPlanError) {
+      throw new Error(
+        "Goal search schema is not installed in Supabase yet. " +
+          "Apply backend/sql/003_goal_search_schema.sql first. " +
+          `Details: ${goalPlanError.message}`
+      );
+    }
+
+    const { data, error } = await this.supabase.rpc("search_goal_assets", {
+      p_goal: goal,
+      p_user_id: userId || null,
+      p_author: author || null,
+      p_domain: domain || null,
+      p_from: parsedQuery.filters.from || null,
+      p_to: parsedQuery.filters.to || null,
+      p_limit: normalizedLimit,
+      p_offset: normalizedOffset
+    });
+
+    if (error) {
+      throw new Error(
+        "Goal search query failed in Supabase. " +
+          "Confirm backend/sql/003_goal_search_schema.sql is applied. " +
+          `Details: ${error.message}`
+      );
+    }
+
+    const plan = Array.isArray(goalPlan) ? goalPlan[0] || null : null;
+    const items = (data || []).map((row) => this.mapGoalSearchRow(row));
+
+    return {
+      total: Number(data?.[0]?.total_count || 0),
+      items,
+      grouped_results: groupGoalResults(items),
+      goal_parse: {
+        intent: plan?.intent || "explore",
+        topics:
+          items.length > 0
+            ? countTerms(items.map((item) => item.topics), 8)
+            : plan?.goal_terms || [],
+        required_components: plan?.goal_components || [],
+        parsed_query: parsedQuery
+      },
+      next_steps:
+        Array.isArray(plan?.next_steps) && plan.next_steps.length > 0
+          ? plan.next_steps
+          : [
+              "Start from the highest-scoring repo or tutorial, then compare adjacent results for implementation tradeoffs."
+            ],
+      strategy: "goal_sql_v2",
+      latency_ms: Date.now() - startedAt,
+      warning: null
+    };
   }
 
   async searchFallback({ userId, parsedQuery, limit, offset }) {
@@ -262,14 +410,157 @@ export class BookmarkStore {
 
     return {
       total: count || 0,
-      items: (data || []).map((row) => ({
-        ...row,
-        source_domain: extractDomainFromUrl(row.source_url),
-        highlight: row.text_content || null,
-        score: null,
-        score_breakdown: null
-      })),
+      items: (data || []).map((row) =>
+        this.mapBookmarkRow(row, {
+          highlight: row.text_content || null,
+          score: null,
+          score_breakdown: null
+        })
+      ),
       parsed_query: parsedQuery
     };
+  }
+
+  mapBookmarkRow(row, overrides = {}) {
+    return {
+      id: row.id,
+      user_id: row.user_id,
+      sync_id: row.sync_id,
+      tweet_id: row.tweet_id,
+      text_content: row.text_content,
+      author_username: row.author_username,
+      author_name: row.author_name,
+      created_at: row.created_at,
+      links: row.links || [],
+      media: row.media || [],
+      source_url: row.source_url,
+      ingested_at: row.ingested_at,
+      updated_at: row.updated_at,
+      inserted_at: row.inserted_at,
+      source_domain: extractDomainFromUrl(row.source_url),
+      highlight: null,
+      score: null,
+      score_breakdown: null,
+      ...overrides
+    };
+  }
+
+  async listBookmarks({
+    userId,
+    author = "",
+    domain = "",
+    from = "",
+    to = "",
+    limit = 100,
+    offset = 0,
+    ascending = false
+  } = {}) {
+    await this.init();
+
+    let queryBuilder = this.supabase
+      .from("bookmarks")
+      .select("*", { count: "exact" });
+
+    if (userId) {
+      queryBuilder = queryBuilder.eq("user_id", userId);
+    }
+
+    if (from) {
+      queryBuilder = queryBuilder.gte("created_at", from);
+    }
+
+    if (to) {
+      queryBuilder = queryBuilder.lte("created_at", to);
+    }
+
+    if (author) {
+      const authorValue = escapeForOrLike(author);
+      if (authorValue) {
+        queryBuilder = queryBuilder.or(
+          `author_username.ilike.%${authorValue}%,author_name.ilike.%${authorValue}%`
+        );
+      }
+    }
+
+    if (domain) {
+      queryBuilder = queryBuilder.ilike("source_url", `%${domain}%`);
+    }
+
+    const normalizedLimit = clampNumber(limit, 100, 1, 500);
+    const normalizedOffset = clampNumber(offset, 0, 0, 10_000);
+    const { data, count, error } = await queryBuilder
+      .order("created_at", { ascending })
+      .range(normalizedOffset, normalizedOffset + normalizedLimit - 1);
+
+    if (error) {
+      throw new Error(`Failed to list bookmarks: ${error.message}`);
+    }
+
+    return {
+      total: count || 0,
+      items: (data || []).map((row) => this.mapBookmarkRow(row))
+    };
+  }
+
+  async getCorpus({
+    userId,
+    author = "",
+    domain = "",
+    from = "",
+    to = "",
+    hardLimit = 1000,
+    batchSize = 200
+  } = {}) {
+    const all = [];
+    let offset = 0;
+    let total = Infinity;
+
+    while (all.length < hardLimit && offset < total) {
+      const page = await this.listBookmarks({
+        userId,
+        author,
+        domain,
+        from,
+        to,
+        limit: Math.min(batchSize, hardLimit - all.length),
+        offset
+      });
+
+      total = page.total;
+      all.push(...page.items);
+      if (page.items.length === 0 || page.items.length < batchSize) {
+        break;
+      }
+
+      offset += page.items.length;
+    }
+
+    return {
+      total: total === Infinity ? all.length : total,
+      items: all
+    };
+  }
+
+  async getBookmarkById({ id, userId } = {}) {
+    await this.init();
+    if (!id) return null;
+
+    let queryBuilder = this.supabase
+      .from("bookmarks")
+      .select("*")
+      .eq("id", id)
+      .limit(1);
+
+    if (userId) {
+      queryBuilder = queryBuilder.eq("user_id", userId);
+    }
+
+    const { data, error } = await queryBuilder.maybeSingle();
+
+    if (error) {
+      throw new Error(`Failed to fetch bookmark: ${error.message}`);
+    }
+
+    return data ? this.mapBookmarkRow(data) : null;
   }
 }

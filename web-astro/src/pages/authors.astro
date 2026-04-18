@@ -1,0 +1,8 @@
+---
+import AuthorsList from "../components/AuthorsList";
+import PageFrame from "../components/PageFrame.astro";
+---
+
+<PageFrame current="authors" title="Consola de conocimiento | Autores">
+  <AuthorsList client:load />
+</PageFrame>

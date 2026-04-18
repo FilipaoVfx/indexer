@@ -2,14 +2,15 @@
 interface Props {
   title?: string;
 }
-const { title = "Knowledge Console" } = Astro.props;
+const { title = "Consola de conocimiento" } = Astro.props;
 ---
 
 <!doctype html>
-<html class="dark" lang="en">
+<html class="dark" lang="es">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="astro-base" content={import.meta.env.BASE_URL} />
     <title>{title}</title>
     <script is:inline src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap" />

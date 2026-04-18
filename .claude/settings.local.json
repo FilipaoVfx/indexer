@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install:*)",
+      "Bash(npx astro:*)",
+      "Bash(git add:*)",
+      "WebFetch(domain:api.stitch.withseam.com)",
+      "WebFetch(domain:stitch.withseam.com)",
+      "WebFetch(domain:www.stitch.withseam.com)",
+      "Bash(npm run:*)"
+    ]
+  }
+}

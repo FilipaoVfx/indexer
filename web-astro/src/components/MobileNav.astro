@@ -1,0 +1,35 @@
+---
+interface Props {
+  current?: "all" | "recent" | "media" | "links" | "authors" | "repos";
+}
+
+const { current = "all" } = Astro.props;
+const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+
+const items = [
+  { key: "all", label: "Buscar", icon: "search", href: `${base || ""}/` },
+  { key: "authors", label: "Autores", icon: "group", href: `${base || ""}/authors` },
+  { key: "repos", label: "Repos", icon: "hub", href: `${base || ""}/repos` },
+];
+---
+
+<nav class="md:hidden fixed bottom-0 left-0 right-0 h-16 glass-panel border-t border-outline-variant/15 flex items-center justify-around z-50">
+  {
+    items.map((item) => {
+      const active = item.key === current;
+
+      return (
+        <a
+          href={item.href}
+          class:list={[
+            "flex flex-col items-center gap-1 transition-colors",
+            active ? "text-primary" : "text-on-surface-variant",
+          ]}
+        >
+          <span class="material-symbols-outlined">{item.icon}</span>
+          <span class="text-[10px] font-medium">{item.label}</span>
+        </a>
+      );
+    })
+  }
+</nav>

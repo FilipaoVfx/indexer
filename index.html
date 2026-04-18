@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>IndexBook Live Console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Sora:wght@600;700;800&display=swap" rel="stylesheet" />
+<style>
+:root{--bg:#071019;--bg2:#12263a;--panel:rgba(11,28,43,.76);--line:rgba(145,196,255,.26);--txt:#f1f8ff;--muted:#98b3c9;--brand:#66d9ff;--ok:#35e0a1;--warn:#ffb454;--bad:#ff6b7d;--r:14px;--head:"Sora",sans-serif;--body:"IBM Plex Sans",sans-serif}
+*{box-sizing:border-box}html,body{margin:0;min-height:100%;color:var(--txt);font-family:var(--body);background:radial-gradient(circle at 12% 10%,#1e4764 0,transparent 35%),radial-gradient(circle at 84% 0,#15403b 0,transparent 30%),linear-gradient(160deg,var(--bg),#0d1b2a 45%,var(--bg2))}body{padding:16px}
+.app{max-width:1460px;margin:0 auto;display:grid;gap:14px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);box-shadow:0 18px 45px rgba(0,0,0,.34);backdrop-filter:blur(12px)}
+.top{padding:16px;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center}.brand{display:flex;gap:10px;align-items:center}.dot{width:11px;height:11px;border-radius:999px;background:var(--ok);box-shadow:0 0 0 5px rgba(53,224,161,.18);animation:p 1.8s infinite}.brand h1{margin:0;font:700 clamp(1.05rem,2.5vw,1.45rem)/1.2 var(--head)}.brand p{margin:2px 0 0;color:var(--muted);font-size:.82rem}
+.controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.chip{border:1px solid var(--line);border-radius:999px;padding:7px 11px;font-size:.78rem;background:rgba(11,28,43,.9);color:var(--muted);display:inline-flex;gap:8px;align-items:center}.chip strong{color:var(--txt)}
+button,input{font:inherit;color:inherit}button{border:1px solid var(--line);background:rgba(12,31,48,.95);color:var(--txt);border-radius:10px;padding:8px 11px;cursor:pointer}button:hover{border-color:rgba(102,217,255,.75)}.primary{background:linear-gradient(135deg,#2fd4f8,#3ce39a);color:#04202f;border:none;font-weight:700}
+.layout{display:grid;grid-template-columns:1.1fr 1fr;gap:14px}.search{padding:14px;display:grid;gap:12px}.grid{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:9px}.f{display:grid;gap:5px}.f label{font-size:.74rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}.f input{width:100%;padding:10px;border-radius:10px;border:1px solid rgba(130,181,228,.3);background:rgba(8,22,34,.95);outline:none}.f input:focus{border-color:rgba(102,217,255,.86);box-shadow:0 0 0 2px rgba(102,217,255,.2)}
+.s{grid-column:span 12}.a,.d,.u{grid-column:span 4}.fr,.to{grid-column:span 3}.l{grid-column:span 2}.api{grid-column:span 4}.actions{display:flex;gap:8px;flex-wrap:wrap}
+.metrics{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:9px}.m{border:1px solid var(--line);border-radius:12px;background:rgba(7,24,36,.92);padding:9px;min-height:78px}.m .k{display:block;font-size:.7rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}.m .v{display:block;font:700 clamp(.98rem,1.9vw,1.28rem)/1.15 var(--head)}
+.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}
+.content{display:grid;grid-template-columns:290px 1fr;gap:14px;min-height:63vh}.side{padding:12px;display:grid;gap:11px;align-content:start}.card{border:1px solid var(--line);border-radius:12px;background:rgba(8,23,35,.92);padding:11px}.card h3{margin:0 0 10px;font-size:.83rem;text-transform:uppercase;letter-spacing:.07em;color:var(--muted)}
+.list{list-style:none;margin:0;padding:0;display:grid;gap:7px;max-height:176px;overflow:auto}.list button{width:100%;text-align:left;display:flex;justify-content:space-between;align-items:center;background:rgba(14,36,54,.95)}.list button span:last-child{color:var(--brand);font-weight:700}
+.timeline{display:grid;grid-template-columns:repeat(10,minmax(0,1fr));gap:7px;align-items:end;min-height:86px;padding-top:8px}.bar{border-radius:8px 8px 3px 3px;background:linear-gradient(to top,#1f8eb4,#53e0b4);min-height:8px;position:relative}.bar::after{content:attr(data-label);position:absolute;left:50%;transform:translateX(-50%);bottom:-17px;color:var(--muted);font-size:.65rem}
+.events{list-style:none;margin:0;padding:0;display:grid;gap:7px;max-height:145px;overflow:auto}.event{font-size:.79rem;color:var(--muted);border-left:2px solid rgba(130,181,228,.4);padding-left:8px}.event strong{color:var(--txt)}
+.results{padding:12px;display:grid;gap:9px;align-content:start}.head{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}.head h2{margin:0;font:700 1.06rem/1.2 var(--head)}.head p{margin:4px 0 0;color:var(--muted);font-size:.85rem}
+.warnbox,.errbox{border-radius:12px;padding:10px;font-size:.84rem}.warnbox{border:1px solid rgba(255,180,84,.45);background:rgba(94,60,21,.45);color:#ffd8a8}.errbox{border:1px solid rgba(255,107,125,.55);background:rgba(110,27,40,.45);color:#ffc0c8}
+.out{display:grid;gap:9px}.item{border:1px solid rgba(130,181,228,.3);border-radius:13px;background:rgba(7,22,34,.94);padding:11px}.itop{display:flex;justify-content:space-between;gap:9px;flex-wrap:wrap;margin-bottom:7px}.auth{display:grid;gap:2px}.auth strong{font:700 .93rem var(--head)}.auth span{color:var(--muted);font-size:.8rem}.badges{display:flex;gap:6px;flex-wrap:wrap}.badge{border:1px solid var(--line);border-radius:999px;padding:4px 8px;font-size:.71rem;color:var(--muted);background:rgba(14,34,51,.95)}
+.text{white-space:pre-wrap;color:#e6f2ff;line-height:1.47;font-size:.91rem;margin:8px 0 9px}mark{background:rgba(102,217,255,.26);color:#ecf8ff;border-radius:4px;padding:0 2px}
+.media{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px}.media img{width:100%;aspect-ratio:16/10;object-fit:cover;border-radius:10px;border:1px solid rgba(130,181,228,.35);background:#0e2333}
+.links{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.item a{color:#7fe7ff;text-decoration:none;font-size:.79rem}.item a:hover{text-decoration:underline}
+.foot{margin-top:10px;border-top:1px solid rgba(130,181,228,.2);padding-top:8px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;color:var(--muted);font-size:.74rem}
+.empty{border:1px dashed var(--line);border-radius:12px;padding:16px;color:var(--muted);text-align:center}.loading{opacity:.55;pointer-events:none}
+@media (max-width:1240px){.layout,.content{grid-template-columns:1fr}.metrics{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (max-width:760px){body{padding:10px}.a,.d,.u,.fr,.to,.l,.api{grid-column:span 12}.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.timeline{grid-template-columns:repeat(8,minmax(0,1fr))}}
+@keyframes p{0%,100%{transform:scale(1)}50%{transform:scale(1.25)}}
+</style>
+</head>
+<body>
+<div class="app">
+<header class="panel top">
+<div class="brand"><span class="dot"></span><div><h1>IndexBook / Live Query Console</h1><p>UI conectada a tu data real con filtros, ranking y polling.</p></div></div>
+<div class="controls">
+<span class="chip">Backend: <strong id="backendStatus">BOOTING</strong></span>
+<label class="chip" for="auto"><input id="auto" type="checkbox" checked /> Auto refresh</label>
+<button id="refresh" class="primary" type="button">Refresh now</button>
+</div>
+</header>
+<section class="layout">
+<div class="panel search">
+<form id="form">
+<div class="grid">
+<div class="f s"><label for="q">Query</label><input id="q" name="q" type="text" placeholder="ej: ai agents author:ErickSky domain:x.com" /></div>
+<div class="f a"><label for="author">Author</label><input id="author" name="author" type="text" placeholder="ErickSky" /></div>
+<div class="f d"><label for="domain">Domain</label><input id="domain" name="domain" type="text" placeholder="x.com" /></div>
+<div class="f u"><label for="user_id">User ID</label><input id="user_id" name="user_id" type="text" value="local-user" /></div>
+<div class="f fr"><label for="from">From</label><input id="from" name="from" type="date" /></div>
+<div class="f to"><label for="to">To</label><input id="to" name="to" type="date" /></div>
+<div class="f l"><label for="limit">Limit</label><input id="limit" name="limit" type="number" min="1" max="100" value="40" /></div>
+<div class="f api"><label for="api_base">API base</label><input id="api_base" name="api_base" type="text" value="http://localhost:8787" /></div>
+</div>
+<div class="actions"><button type="submit" class="primary">Search</button><button type="button" id="reset">Reset filters</button></div>
+</form>
+<section class="metrics">
+<article class="m"><span class="k">Total in DB</span><span class="v" id="mDb">--</span></article>
+<article class="m"><span class="k">Results found</span><span class="v" id="mTotal">--</span></article>
+<article class="m"><span class="k">Rendered cards</span><span class="v" id="mCards">--</span></article>
+<article class="m"><span class="k">New since open</span><span class="v" id="mNew">0</span></article>
+<article class="m"><span class="k">Strategy</span><span class="v" id="mStrategy">--</span></article>
+<article class="m"><span class="k">Latency</span><span class="v" id="mLatency">--</span></article>
+<article class="m"><span class="k">Last update</span><span class="v" id="mLast">--</span></article>
+<article class="m"><span class="k">Polling every</span><span class="v" id="mPoll">4s</span></article>
+<article class="m"><span class="k">Unique authors</span><span class="v" id="mAuthors">--</span></article>
+<article class="m"><span class="k">Unique domains</span><span class="v" id="mDomains">--</span></article>
+</section>
+</div>
+<section class="content">
+<aside class="panel side">
+<article class="card"><h3>Top Authors</h3><ul class="list" id="topAuthors"></ul></article>
+<article class="card"><h3>Top Domains</h3><ul class="list" id="topDomains"></ul></article>
+<article class="card"><h3>Activity (10 days)</h3><div class="timeline" id="timeline"></div></article>
+<article class="card"><h3>Live Events</h3><ul class="events" id="events"></ul></article>
+</aside>
+<main class="panel results">
+<div class="head"><div><h2>Live Search Output</h2><p id="summary">Conectando...</p></div><span class="chip" id="mode">mode: waiting</span></div>
+<div id="warn"></div><div id="err"></div><section class="out" id="out"></section>
+</main>
+</section>
+</section>
+</div>
+<script>
+const DEF="http://localhost:8787";
+const MAX_EVENTS=10;
+const S={auto:true,base:4000,poll:4000,max:30000,timer:null,sCtrl:null,hCtrl:null,errStreak:0,known:new Set(),newCount:0,lastPayload:null,lastHealth:null,lastMs:0,lastErr:"",events:[]};
+const E={form:document.getElementById("form"),q:document.getElementById("q"),author:document.getElementById("author"),domain:document.getElementById("domain"),user:document.getElementById("user_id"),from:document.getElementById("from"),to:document.getElementById("to"),limit:document.getElementById("limit"),api:document.getElementById("api_base"),auto:document.getElementById("auto"),refresh:document.getElementById("refresh"),reset:document.getElementById("reset"),backend:document.getElementById("backendStatus"),summary:document.getElementById("summary"),mode:document.getElementById("mode"),warn:document.getElementById("warn"),err:document.getElementById("err"),out:document.getElementById("out"),topAuthors:document.getElementById("topAuthors"),topDomains:document.getElementById("topDomains"),timeline:document.getElementById("timeline"),events:document.getElementById("events"),mDb:document.getElementById("mDb"),mTotal:document.getElementById("mTotal"),mCards:document.getElementById("mCards"),mNew:document.getElementById("mNew"),mStrategy:document.getElementById("mStrategy"),mLatency:document.getElementById("mLatency"),mLast:document.getElementById("mLast"),mPoll:document.getElementById("mPoll"),mAuthors:document.getElementById("mAuthors"),mDomains:document.getElementById("mDomains")};
+const clamp=(v,f,min,max)=>{const n=Number(v);if(!Number.isFinite(n))return f;return Math.min(Math.max(n,min),max)};
+const normBase=v=>(String(v||"").trim()||DEF).replace(/\/+$/,"");
+const safeMs=v=>{const t=new Date(v).getTime();return Number.isFinite(t)?t:0};
+const rel=ms=>{if(!ms)return"--";const s=Math.floor((Date.now()-ms)/1000);if(s<5)return"justo ahora";if(s<60)return`${s}s`;const m=Math.floor(s/60);if(m<60)return`${m}m`;const h=Math.floor(m/60);if(h<24)return`${h}h`;return`${Math.floor(h/24)}d`};
+const fmt=v=>{const d=new Date(v);if(Number.isNaN(d.getTime()))return"unknown";return new Intl.DateTimeFormat("es-CO",{dateStyle:"medium",timeStyle:"short"}).format(d)};
+const esc=v=>String(v||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;").replace(/'/g,"&#039;");
+const hi=v=>esc(v||"").replace(/&lt;mark&gt;/g,"<mark>").replace(/&lt;\/mark&gt;/g,"</mark>");
+const domain=v=>{try{return new URL(v).hostname.replace(/^www\./,"")}catch{return""}};
+const api=(path,p={})=>{const u=new URL(path,`${normBase(E.api.value)}/`);Object.entries(p).forEach(([k,v])=>{if(v!==""&&v!=null)u.searchParams.set(k,String(v))});return u};
+const filters=()=>({q:E.q.value.trim(),author:E.author.value.trim(),domain:E.domain.value.trim(),from:E.from.value,to:E.to.value,user_id:E.user.value.trim()||"local-user",limit:clamp(E.limit.value,40,1,100)});
+const stat=(txt,c)=>{E.backend.classList.remove("ok","warn","bad");E.backend.textContent=txt;if(c)E.backend.classList.add(c)};
+function log(msg){S.events.unshift({msg,time:new Date()});if(S.events.length>MAX_EVENTS)S.events.pop();renderEvents()}
+function renderEvents(){E.events.innerHTML="";if(!S.events.length){const li=document.createElement("li");li.className="event";li.innerHTML="<strong>Esperando actividad.</strong>";E.events.appendChild(li);return;}S.events.forEach(it=>{const li=document.createElement("li");li.className="event";li.innerHTML=`<strong>${esc(it.msg)}</strong> <span>${fmt(it.time)}</span>`;E.events.appendChild(li)})}
+function by(items,pick){const m=new Map();for(const i of items){const k=pick(i);if(!k)continue;m.set(k,(m.get(k)||0)+1)}return [...m.entries()].sort((a,b)=>b[1]-a[1])}
+function mini(node,data,onPick){node.innerHTML="";if(!data.length){const li=document.createElement("li");li.className="event";li.textContent="Sin datos";node.appendChild(li);return;}data.slice(0,8).forEach(([k,v])=>{const li=document.createElement("li"),b=document.createElement("button");b.type="button";b.innerHTML=`<span>${esc(k)}</span><span>${v}</span>`;b.addEventListener("click",()=>onPick(k));li.appendChild(b);node.appendChild(li)})}
+function bars(items){const now=new Date(),days=[];for(let i=9;i>=0;i--){const d=new Date(now);d.setHours(0,0,0,0);d.setDate(d.getDate()-i);days.push({k:d.toISOString().slice(5,10),s:d.getTime(),c:0})}for(const it of items){const ms=safeMs(it.created_at||it.ingested_at);if(!ms)continue;for(let i=days.length-1;i>=0;i--){const st=days[i].s;if(ms>=st&&ms<st+86400000){days[i].c+=1;break}}}const max=Math.max(...days.map(d=>d.c),1);E.timeline.innerHTML="";days.forEach(d=>{const b=document.createElement("div");b.className="bar";b.style.height=`${Math.max((d.c/max)*100,8)}%`;b.dataset.label=d.k;b.title=`${d.k}: ${d.c}`;E.timeline.appendChild(b)})}
+function media(list){if(!Array.isArray(list))return[];return list.filter(u=>/^https?:\/\//i.test(u||"")).filter(u=>!/\/emoji\//i.test(u)).slice(0,4)}
+function renderOut(items){E.out.innerHTML="";if(!items.length){const e=document.createElement("div");e.className="empty";e.textContent="No hay resultados para esta busqueda.";E.out.appendChild(e);return;}const f=document.createDocumentFragment();items.forEach(it=>{const a=document.createElement("article");a.className="item";const d=it.source_domain||domain(it.source_url)||"no-domain";const score=typeof it.score==="number"?it.score.toFixed(3):null;const created=fmt(it.created_at||it.ingested_at);const ing=safeMs(it.ingested_at);const name=it.author_name||it.author_username||"anonymous";const handle=it.author_username?`@${it.author_username}`:"sin handle";const text=it.highlight&&it.highlight.includes("<mark>")?hi(it.highlight):esc(it.text_content||"Sin texto");a.innerHTML=`<div class="itop"><div class="auth"><strong>${esc(name)}</strong><span>${esc(handle)}</span></div><div class="badges"><span class="badge">${esc(d)}</span><span class="badge">${esc(created)}</span>${score?`<span class="badge">score ${score}</span>`:""}</div></div><div class="text">${text}</div><div class="media"></div><div class="links"></div><div class="foot"><span>tweet: ${esc(it.tweet_id||String(it.id||"").split(":").pop()||"--")}</span><span>ingested: ${ing?rel(ing):"--"}</span>${it.source_url?`<a href="${esc(it.source_url)}" target="_blank" rel="noreferrer">abrir fuente</a>`:""}</div>`;const mg=a.querySelector(".media");const mu=media(it.media);if(!mu.length)mg.remove();else mu.forEach(u=>{const img=document.createElement("img");img.src=u;img.loading="lazy";img.alt="bookmark media";mg.appendChild(img)});const links=a.querySelector(".links");if(Array.isArray(it.links)&&it.links.length){it.links.slice(0,6).forEach(l=>{const x=document.createElement("a");x.href=l;x.target="_blank";x.rel="noreferrer";x.textContent=domain(l)||"external";links.appendChild(x)})}else links.remove();f.appendChild(a)});E.out.appendChild(f)}
+function renderInsights(items){const a=by(items,i=>i.author_username||i.author_name),d=by(items,i=>i.source_domain||domain(i.source_url));mini(E.topAuthors,a,v=>{E.author.value=v.replace(/^@/,"");void manual()});mini(E.topDomains,d,v=>{E.domain.value=v;void manual()});bars(items);E.mAuthors.textContent=String(a.length);E.mDomains.textContent=String(d.length)}
+function summary(p){const t=Number(p?.total||0),s=p?.strategy||"--",lat=Number(p?.latency_ms||0),items=Array.isArray(p?.items)?p.items:[];E.mTotal.textContent=String(t);E.mCards.textContent=String(items.length);E.mStrategy.textContent=s;E.mLatency.textContent=lat?`${lat}ms`:"--";E.mNew.textContent=String(S.newCount);E.mLast.textContent=S.lastMs?rel(S.lastMs):"--";E.mPoll.textContent=`${Math.round(S.poll/1000)}s`;E.mode.textContent=`mode: ${s}`;E.summary.textContent=t?`${t} resultados en total. Mostrando ${items.length}.`:"Sin resultados en esta busqueda.";E.warn.innerHTML=p?.warning?`<div class="warnbox">${esc(p.warning)}</div>`:"";renderOut(items);renderInsights(items)}
+const showErr=m=>E.err.innerHTML=m?`<div class="errbox">${esc(m)}</div>`:"";
+function backendUI(){const ok=Boolean(S.lastHealth?.ok);if(ok){stat("LIVE","ok");E.mDb.textContent=String(S.lastHealth.total_bookmarks??"--")}else if(S.lastErr){stat("ERROR","bad")}else stat("PENDING","warn")}
+function urlSync(){const p=new URLSearchParams(),f=filters();Object.entries(f).forEach(([k,v])=>{if(v===""||v==null)return;if(k==="user_id"&&v==="local-user")return;if(k==="limit"&&Number(v)===40)return;p.set(k,String(v))});const b=normBase(E.api.value);if(b!==DEF)p.set("api_base",b);if(!S.auto)p.set("refresh","off");const q=p.toString();history.replaceState(null,"",q?`${location.pathname}?${q}`:location.pathname)}
+function hydrate(){const p=new URLSearchParams(location.search);E.q.value=p.get("q")||"";E.author.value=p.get("author")||"";E.domain.value=p.get("domain")||"";E.from.value=p.get("from")||"";E.to.value=p.get("to")||"";E.user.value=p.get("user_id")||"local-user";E.limit.value=p.get("limit")||"40";E.api.value=normBase(p.get("api_base")||localStorage.getItem("indexbook_api_base")||DEF);const rf=p.get("refresh"),persist=localStorage.getItem("indexbook_auto_refresh");S.auto=rf?rf!=="off":persist!=="false";E.auto.checked=S.auto}
+async function health(reason="poll"){if(S.hCtrl)S.hCtrl.abort();const c=new AbortController();S.hCtrl=c;try{const r=await fetch(api("/health"),{cache:"no-store",signal:c.signal,headers:{Accept:"application/json"}});const p=await r.json().catch(()=>null);if(!r.ok||!p?.ok)throw new Error(p?.error?.message||`Health failed (${r.status})`);S.lastHealth=p;if(reason==="manual")log(`health ok: ${p.total_bookmarks} bookmarks`);return true}catch(e){if(e.name==="AbortError")return false;S.lastErr=e.message||"Health failed";return false}finally{if(S.hCtrl===c)S.hCtrl=null;backendUI()}}
+async function search(reason="poll"){if(S.sCtrl)S.sCtrl.abort();const f=filters();E.limit.value=String(f.limit);const c=new AbortController();S.sCtrl=c;const t0=performance.now();E.form.classList.add("loading");try{const r=await fetch(api("/api/bookmarks/search",f),{cache:"no-store",signal:c.signal,headers:{Accept:"application/json"}});const p=await r.json().catch(()=>null);if(!r.ok||!p?.ok)throw new Error(p?.error?.message||`Search failed (${r.status})`);const items=Array.isArray(p.items)?p.items:[];const nowIds=new Set(items.map(i=>i.id).filter(Boolean));if(reason==="manual"){S.known=nowIds;S.newCount=0}else{let n=0;nowIds.forEach(id=>{if(!S.known.has(id))n+=1});if(n>0){S.newCount+=n;log(`${n} nuevos items detectados`)}S.known=nowIds}p.latency_ms=p.latency_ms||Math.round(performance.now()-t0);S.lastPayload=p;S.lastMs=Date.now();S.lastErr="";showErr("");summary(p);if(reason==="manual")log(`query ejecutada: ${p.total} matches`);return true}catch(e){if(e.name==="AbortError")return false;S.lastErr=e.message||"Search failed";showErr(S.lastErr);stat("ERROR","bad");return false}finally{if(S.sCtrl===c)S.sCtrl=null;E.form.classList.remove("loading")}}
+async function refreshAll(reason="poll"){urlSync();const [okS,okH]=await Promise.all([search(reason),health(reason)]);const ok=okS&&okH;if(ok){S.errStreak=0;S.poll=S.base}else{S.errStreak+=1;S.poll=Math.min(S.base*Math.pow(2,Math.min(S.errStreak,4)),S.max);log(`error detectado, backoff a ${Math.round(S.poll/1000)}s`)}backendUI();E.mPoll.textContent=`${Math.round(S.poll/1000)}s`;return ok}
+async function manual(){S.errStreak=0;S.poll=S.base;await refreshAll("manual");schedule()}
+function schedule(){if(S.timer){clearTimeout(S.timer);S.timer=null}if(!S.auto)return;const mult=document.hidden?2.5:1;const wait=Math.round(S.poll*mult+Math.random()*500);S.timer=setTimeout(async()=>{if(!navigator.onLine){log("sin internet local, reintentando...");schedule();return}await refreshAll("poll");schedule()},wait)}
+function reset(){E.q.value="";E.author.value="";E.domain.value="";E.from.value="";E.to.value="";E.user.value="local-user";E.limit.value="40"}
+function bind(){E.form.addEventListener("submit",e=>{e.preventDefault();void manual()});E.refresh.addEventListener("click",()=>{void manual()});E.reset.addEventListener("click",()=>{reset();void manual()});E.auto.addEventListener("change",()=>{S.auto=E.auto.checked;localStorage.setItem("indexbook_auto_refresh",String(S.auto));urlSync();if(S.auto){log("auto refresh activado");schedule()}else{log("auto refresh pausado");if(S.timer)clearTimeout(S.timer)}});E.api.addEventListener("change",()=>{const b=normBase(E.api.value);E.api.value=b;localStorage.setItem("indexbook_api_base",b);log(`api base cambiada: ${b}`);void manual()});document.addEventListener("visibilitychange",()=>{if(!document.hidden)void refreshAll("poll");schedule()});window.addEventListener("online",()=>{log("conexion restablecida");void refreshAll("poll")});window.addEventListener("offline",()=>{log("sin conexion de red")})}
+async function init(){hydrate();bind();renderEvents();log("console inicializada");await manual()}
+init().catch(e=>{showErr(e.message||"Initialization failed");stat("ERROR","bad")});
+setInterval(()=>{if(S.lastMs)E.mLast.textContent=rel(S.lastMs)},1000);
+</script>
+</body>
+</html>

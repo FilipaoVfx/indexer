@@ -32,7 +32,8 @@ export const config = {
     path.resolve(__dirname, "..", "data", "bookmarks.json"),
   allowedOrigins: parseOrigins(process.env.ALLOWED_ORIGINS || "*"),
   supabaseUrl: process.env.SUPABASE_URL,
-  supabaseKey: process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY
+  // The backend should prefer the service role key so DB-side RLS can stay enabled.
+  supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY
 };
 
 export function validateConfig() {
