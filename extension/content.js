@@ -225,13 +225,36 @@ async function tryExpandText(tweetNode) {
 async function extractTweetWithRetries(tweetNode) {
   for (let attempt = 1; attempt <= AUTO_CAPTURE_CONFIG.maxExtractRetries; attempt += 1) {
     await tryExpandText(tweetNode);
-    const tweet = extractTweetFromNode(tweetNode);
+    const tweet = await extractTweetFromNode(tweetNode);
     if (tweet && tweet.tweet_id) {
       return tweet;
     }
     await sleep(AUTO_CAPTURE_CONFIG.retryDelayMs);
   }
   return null;
+}
+
+function findActionElement(target) {
+  if (!target || typeof target.closest !== "function") {
+    return null;
+  }
+  return target.closest('[data-testid="bookmark"]');
+}
+
+function dedupeCapture(tweetId) {
+  const now = Date.now();
+  const last = recentCapturedAtByTweet.get(tweetId);
+  if (typeof last === "number" && now - last < AUTO_CAPTURE_CONFIG.dedupeWindowMs) {
+    return false;
+  }
+  recentCapturedAtByTweet.set(tweetId, now);
+  const expiryCutoff = now - AUTO_CAPTURE_CONFIG.dedupeWindowMs * 4;
+  for (const [id, ts] of recentCapturedAtByTweet) {
+    if (ts < expiryCutoff) {
+      recentCapturedAtByTweet.delete(id);
+    }
+  }
+  return true;
 }
 
 async function enqueueSingleBookmark(tweet, source) {
@@ -261,32 +284,15 @@ async function enqueueSingleBookmark(tweet, source) {
 }
 
 async function handleBookmarkSave(event, source) {
-  const target = event.target;
-  const actionElement = findActionElement(target);
+  const actionElement = findActionElement(event.target);
   if (!actionElement) {
     return;
   }
 
-    const visibleTweets = await extractVisibleTweets(seenTweetIds);
-    let discoveredThisRound = 0;
-
-    for (const tweet of visibleTweets) {
-      // Re-verify since index might change or duplicates
-      if (seenTweetIds.has(tweet.tweet_id)) {
-        continue;
-      }
-      seenTweetIds.add(tweet.tweet_id);
-      pendingBatch.push(tweet);
-      totalExtracted += 1;
-      discoveredThisRound += 1;
-
-      if (pendingBatch.length >= SCRAPER_CONFIG.batchSize) {
-        batchIndex += 1;
-        const chunk = pendingBatch.splice(0, SCRAPER_CONFIG.batchSize);
-        await enqueueBatch(syncId, batchIndex, chunk);
-        totalEnqueued += chunk.length;
-      }
-    }
+  const tweetNode = actionElement.closest('article[data-testid="tweet"]');
+  if (!tweetNode) {
+    return;
+  }
 
   await sleep(AUTO_CAPTURE_CONFIG.captureDelayMs);
   const tweet = await extractTweetWithRetries(tweetNode);
