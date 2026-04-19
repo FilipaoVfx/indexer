@@ -5,10 +5,29 @@
  * - goal: objective-driven retrieval backed by Supabase knowledge assets
  */
 
-export const API_BASE =
-  import.meta.env.PUBLIC_SEARCH_API_BASE ||
-  (typeof window !== "undefined" && localStorage.getItem("INDEXBOOK_API")) ||
-  "https://indexer-hzto.onrender.com";
+export const DEFAULT_USER_ID = "";
+
+const DEFAULT_LOCAL_API_BASE = "http://localhost:8787";
+const DEFAULT_REMOTE_API_BASE = "https://indexer-hzto.onrender.com";
+
+function isLocalBrowserRuntime(): boolean {
+  if (typeof window === "undefined") return false;
+  return ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
+}
+
+function resolveApiBase(): string {
+  const browserOverride =
+    typeof window !== "undefined" ? localStorage.getItem("INDEXBOOK_API") : "";
+  if (browserOverride) return browserOverride;
+
+  if (isLocalBrowserRuntime()) {
+    return DEFAULT_LOCAL_API_BASE;
+  }
+
+  return import.meta.env.PUBLIC_SEARCH_API_BASE || DEFAULT_REMOTE_API_BASE;
+}
+
+export const API_BASE = resolveApiBase();
 
 export type SearchMode = "hybrid" | "goal";
 
@@ -26,6 +45,7 @@ export interface ParsedQuery {
 
 export interface SearchItem {
   id?: string | number;
+  user_id?: string;
   asset_id?: string;
   tweet_id?: string;
   text_content?: string;
@@ -110,7 +130,13 @@ export interface RepoEntity {
 
 export interface HealthResponse {
   ok: boolean;
+  user_id?: string | null;
   total_bookmarks?: number;
+}
+
+export interface UserSummary {
+  user_id: string;
+  count: number;
 }
 
 const GH_NON_USERS = new Set([
@@ -224,6 +250,20 @@ export function extractDomains(items: SearchItem[]): Map<string, number> {
   return domains;
 }
 
+export function extractUsers(items: SearchItem[]): UserSummary[] {
+  const counts = new Map<string, number>();
+
+  for (const item of items) {
+    const userId = String(item.user_id || "").trim();
+    if (!userId) continue;
+    counts.set(userId, (counts.get(userId) || 0) + 1);
+  }
+
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([user_id, count]) => ({ user_id, count }));
+}
+
 export function safeDomain(url: string): string {
   try {
     return new URL(url).hostname.replace(/^www\./, "");
@@ -251,6 +291,7 @@ export function initials(name: string): string {
 }
 
 export interface SearchParams {
+  user_id?: string;
   q?: string;
   author?: string;
   domain?: string;
@@ -275,9 +316,9 @@ export async function searchHybrid(
   params: SearchParams = {}
 ): Promise<HybridSearchResponse & { elapsed_ms: number }> {
   const query = new URLSearchParams();
-  query.set("user_id", "local-user");
   query.set("limit", String(params.limit ?? 100));
 
+  if (params.user_id) query.set("user_id", params.user_id);
   if (params.offset) query.set("offset", String(params.offset));
   if (params.q) query.set("q", params.q);
   if (params.author) query.set("author", params.author);
@@ -312,7 +353,7 @@ export async function searchGoal(
     },
     body: JSON.stringify({
       goal: params.q || "",
-      user_id: "local-user",
+      user_id: params.user_id || undefined,
       author: params.author || undefined,
       domain: params.domain || undefined,
       from: params.from || undefined,
@@ -332,7 +373,8 @@ export async function searchGoal(
 }
 
 export async function fetchAllBookmarks(
-  hardLimit = Number.POSITIVE_INFINITY
+  hardLimit = Number.POSITIVE_INFINITY,
+  userId = DEFAULT_USER_ID
 ): Promise<{ items: SearchItem[]; total: number }> {
   const all: SearchItem[] = [];
   const batch = 100;
@@ -340,8 +382,12 @@ export async function fetchAllBookmarks(
   let total = Infinity;
 
   while (all.length < hardLimit && offset < total) {
+    const query = new URLSearchParams();
+    if (userId) query.set("user_id", userId);
+    query.set("limit", String(batch));
+    query.set("offset", String(offset));
     const res = await fetch(
-      `${API_BASE}/api/bookmarks/search?user_id=local-user&limit=${batch}&offset=${offset}`
+      `${API_BASE}/api/bookmarks/search?${query.toString()}`
     );
     if (!res.ok) break;
     const data = (await res.json()) as HybridSearchResponse;
@@ -355,8 +401,10 @@ export async function fetchAllBookmarks(
   return { items: all, total: total === Infinity ? all.length : total };
 }
 
-export async function fetchHealth(): Promise<HealthResponse> {
-  const res = await fetch(`${API_BASE}/health`, {
+export async function fetchHealth(userId = DEFAULT_USER_ID): Promise<HealthResponse> {
+  const query = new URLSearchParams();
+  if (userId) query.set("user_id", userId);
+  const res = await fetch(`${API_BASE}/health${query.toString() ? `?${query.toString()}` : ""}`, {
     headers: { Accept: "application/json" },
   });
   const data = (await res.json()) as HealthResponse;
@@ -364,9 +412,22 @@ export async function fetchHealth(): Promise<HealthResponse> {
   return data;
 }
 
-let _corpusPromise: Promise<{ items: SearchItem[]; total: number }> | null = null;
+const corpusCache = new Map<string, Promise<{ items: SearchItem[]; total: number }>>();
 
-export function getCorpus(force = false) {
-  if (force || !_corpusPromise) _corpusPromise = fetchAllBookmarks();
-  return _corpusPromise;
+export function getCorpus(force = false, userId = DEFAULT_USER_ID) {
+  const key = userId || "__all__";
+  if (force || !corpusCache.has(key)) {
+    corpusCache.set(key, fetchAllBookmarks(Number.POSITIVE_INFINITY, userId));
+  }
+  return corpusCache.get(key)!;
+}
+
+export async function fetchUsers(limit = 100): Promise<UserSummary[]> {
+  const query = new URLSearchParams();
+  query.set("limit", String(limit));
+  const res = await fetch(`${API_BASE}/users?${query.toString()}`, {
+    headers: { Accept: "application/json" },
+  });
+  const data = await parseJsonOrThrow(res);
+  return Array.isArray(data?.items) ? data.items : [];
 }

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 
 export type Filters = {
   mode: "hybrid" | "goal";
+  user: string;
   q: string;
   author: string;
   domain: string;
@@ -20,6 +21,7 @@ const VALID_MODES = new Set<Filters["mode"]>(["hybrid", "goal"]);
 
 const EMPTY: Filters = {
   mode: "hybrid",
+  user: "",
   q: "",
   author: "",
   domain: "",
@@ -38,6 +40,7 @@ function readUrl(): Filters {
 
   return {
     mode: VALID_MODES.has(rawMode) ? rawMode : "hybrid",
+    user: p.get("user") || "",
     q: p.get("q") || "",
     author: p.get("author") || "",
     domain: p.get("domain") || "",
@@ -51,6 +54,7 @@ function readUrl(): Filters {
 function writeUrl(f: Filters) {
   const p = new URLSearchParams();
   if (f.mode && f.mode !== "hybrid") p.set("mode", f.mode);
+  if (f.user) p.set("user", f.user);
   if (f.q) p.set("q", f.q);
   if (f.author) p.set("author", f.author);
   if (f.domain) p.set("domain", f.domain);
@@ -88,7 +92,7 @@ export function useFilters(): [Filters, (patch: Partial<Filters>) => void, () =>
 }
 
 export function hasAnySearchInput(f: Filters): boolean {
-  return !!(f.q || f.author || f.domain || f.from || f.to || f.kind || f.sort);
+  return !!(f.user || f.q || f.author || f.domain || f.from || f.to || f.kind || f.sort);
 }
 
 export function hasRemoteSearchInput(f: Filters): boolean {

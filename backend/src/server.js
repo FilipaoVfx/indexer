@@ -73,12 +73,27 @@ const server = http.createServer(async (req, res) => {
     const routePath = requestUrl.pathname;
 
     if (req.method === "GET" && routePath === "/health") {
-      const total = await store.count();
+      const userId = sanitizeUserId(requestUrl.searchParams.get("user_id") || "");
+      const total = await store.count({ userId: userId || null });
       sendJson(res, 200, {
         ok: true,
         service: "x-bookmarks-backend",
         timestamp: new Date().toISOString(),
+        user_id: userId || null,
         total_bookmarks: total
+      });
+      return;
+    }
+
+    if (req.method === "GET" && routePath === "/users") {
+      const query = requestUrl.searchParams.get("q") || "";
+      const limit = clampNumber(requestUrl.searchParams.get("limit"), 50, 1, 500);
+      const users = await store.listUsers({ query });
+
+      sendJson(res, 200, {
+        ok: true,
+        total: users.length,
+        items: users.slice(0, limit)
       });
       return;
     }
@@ -234,7 +249,7 @@ const server = http.createServer(async (req, res) => {
         throw createHttpError(400, "missing_goal", "Field goal is required");
       }
 
-      const userId = sanitizeUserId(body.user_id || "") || "local-user";
+      const userId = sanitizeUserId(body.user_id || "");
       const author = typeof body.author === "string" ? body.author : "";
       const domain = typeof body.domain === "string" ? body.domain : "";
       const from = typeof body.from === "string" ? body.from : "";
@@ -244,7 +259,7 @@ const server = http.createServer(async (req, res) => {
 
       const result = await store.goalSearch({
         goal,
-        userId,
+        userId: userId || null,
         author,
         domain,
         from,
@@ -269,48 +284,48 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "GET" && routePath === "/discover") {
-      const userId = sanitizeUserId(requestUrl.searchParams.get("user_id") || "") || "local-user";
+      const userId = sanitizeUserId(requestUrl.searchParams.get("user_id") || "");
       const limit = clampNumber(requestUrl.searchParams.get("limit"), 8, 1, 20);
       const corpusLimit = clampNumber(requestUrl.searchParams.get("corpus_limit"), 1000, 50, 2500);
-      const corpus = await store.getCorpus({ userId, hardLimit: corpusLimit });
+      const corpus = await store.getCorpus({ userId: userId || null, hardLimit: corpusLimit });
 
       sendJson(res, 200, buildDiscoverResponse({ items: corpus.items, limit }));
       return;
     }
 
     if (req.method === "GET" && routePath === "/clusters") {
-      const userId = sanitizeUserId(requestUrl.searchParams.get("user_id") || "") || "local-user";
+      const userId = sanitizeUserId(requestUrl.searchParams.get("user_id") || "");
       const type = normalizeClusterType(requestUrl.searchParams.get("type") || "domain");
       const limit = clampNumber(requestUrl.searchParams.get("limit"), 10, 1, 50);
       const corpusLimit = clampNumber(requestUrl.searchParams.get("corpus_limit"), 1000, 50, 2500);
-      const corpus = await store.getCorpus({ userId, hardLimit: corpusLimit });
+      const corpus = await store.getCorpus({ userId: userId || null, hardLimit: corpusLimit });
 
       sendJson(res, 200, buildClustersResponse({ items: corpus.items, type, limit }));
       return;
     }
 
     if (req.method === "GET" && routePath === "/trending") {
-      const userId = sanitizeUserId(requestUrl.searchParams.get("user_id") || "") || "local-user";
+      const userId = sanitizeUserId(requestUrl.searchParams.get("user_id") || "");
       const limit = clampNumber(requestUrl.searchParams.get("limit"), 10, 1, 50);
       const corpusLimit = clampNumber(requestUrl.searchParams.get("corpus_limit"), 1000, 50, 2500);
-      const corpus = await store.getCorpus({ userId, hardLimit: corpusLimit });
+      const corpus = await store.getCorpus({ userId: userId || null, hardLimit: corpusLimit });
 
       sendJson(res, 200, buildTrendingResponse({ items: corpus.items, limit }));
       return;
     }
 
     if (req.method === "GET" && /^\/related\/.+/.test(routePath)) {
-      const userId = sanitizeUserId(requestUrl.searchParams.get("user_id") || "") || "local-user";
+      const userId = sanitizeUserId(requestUrl.searchParams.get("user_id") || "");
       const itemId = decodePathParam(routePath.replace(/^\/related\//, ""));
       const limit = clampNumber(requestUrl.searchParams.get("limit"), 10, 1, 50);
       const corpusLimit = clampNumber(requestUrl.searchParams.get("corpus_limit"), 1000, 50, 2500);
-      const target = await store.getBookmarkById({ id: itemId, userId });
+      const target = await store.getBookmarkById({ id: itemId, userId: userId || null });
 
       if (!target) {
         throw createHttpError(404, "bookmark_not_found", "Bookmark not found");
       }
 
-      const corpus = await store.getCorpus({ userId, hardLimit: corpusLimit });
+      const corpus = await store.getCorpus({ userId: userId || null, hardLimit: corpusLimit });
       const response = buildRelatedResponse({
         itemId,
         items: mergeTargetIntoCorpus(target, corpus.items),
@@ -326,17 +341,17 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "GET" && /^\/graph\/.+/.test(routePath)) {
-      const userId = sanitizeUserId(requestUrl.searchParams.get("user_id") || "") || "local-user";
+      const userId = sanitizeUserId(requestUrl.searchParams.get("user_id") || "");
       const itemId = decodePathParam(routePath.replace(/^\/graph\//, ""));
       const limit = clampNumber(requestUrl.searchParams.get("limit"), 12, 1, 50);
       const corpusLimit = clampNumber(requestUrl.searchParams.get("corpus_limit"), 1000, 50, 2500);
-      const target = await store.getBookmarkById({ id: itemId, userId });
+      const target = await store.getBookmarkById({ id: itemId, userId: userId || null });
 
       if (!target) {
         throw createHttpError(404, "bookmark_not_found", "Bookmark not found");
       }
 
-      const corpus = await store.getCorpus({ userId, hardLimit: corpusLimit });
+      const corpus = await store.getCorpus({ userId: userId || null, hardLimit: corpusLimit });
       const response = buildGraphResponse({
         itemId,
         items: mergeTargetIntoCorpus(target, corpus.items),

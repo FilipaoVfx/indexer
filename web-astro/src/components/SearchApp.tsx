@@ -8,6 +8,8 @@ import {
   extractAllAuthors,
   extractDomains,
   extractGithubRepos,
+  extractUsers,
+  fetchUsers,
   getCorpus,
   searchGoal,
   searchHybrid,
@@ -16,6 +18,7 @@ import {
   type SearchItem,
   type SearchResponse,
   type SearchMode,
+  type UserSummary,
 } from "../lib/api";
 import {
   type Filters,
@@ -86,6 +89,7 @@ export default function SearchApp() {
     null
   );
   const [corpusError, setCorpusError] = useState<string | null>(null);
+  const [users, setUsers] = useState<UserSummary[]>([]);
 
   const debounceRef = useRef<number | null>(null);
   const remoteSearch = hasRemoteSearchInput(filters);
@@ -106,6 +110,7 @@ export default function SearchApp() {
 
     try {
       const params = {
+        user_id: filters.user || undefined,
         q: filters.q,
         author: filters.author,
         domain: filters.domain,
@@ -138,11 +143,29 @@ export default function SearchApp() {
   }, [remoteSearch, runSearch]);
 
   useEffect(() => {
+    let mounted = true;
+    fetchUsers()
+      .then((items) => {
+        if (!mounted) return;
+        setUsers(items);
+      })
+      .catch(() => {
+        if (!mounted) return;
+        setUsers([]);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
     if (remoteSearch || showGoalPrompt) return;
 
     let mounted = true;
+    setCorpus(null);
     setCorpusError(null);
-    getCorpus()
+    getCorpus(false, filters.user)
       .then((nextCorpus) => {
         if (!mounted) return;
         setCorpus(nextCorpus);
@@ -156,7 +179,7 @@ export default function SearchApp() {
     return () => {
       mounted = false;
     };
-  }, [remoteSearch, showGoalPrompt]);
+  }, [filters.user, remoteSearch, showGoalPrompt]);
 
   const visibleItems = useMemo(() => {
     const source = showLocalResults ? corpus?.items || [] : response?.items || [];
@@ -180,11 +203,16 @@ export default function SearchApp() {
       ? `local_${filters.kind}`
       : "local"
     : response?.strategy || "---";
+  const availableUsers = useMemo(
+    () => (users.length > 0 ? users : extractUsers(corpus?.items || [])),
+    [corpus, users]
+  );
 
   return (
     <>
       <Header
         filters={filters}
+        users={availableUsers}
         onChange={update}
         onSubmit={runSearch}
         showFilters={showFilters}
@@ -202,6 +230,7 @@ export default function SearchApp() {
         {onDiscovery ? (
           <DiscoveryHome
             corpus={corpus}
+            users={availableUsers}
             error={corpusError}
             onPick={(patch) => update(patch)}
           />
@@ -232,6 +261,7 @@ export default function SearchApp() {
 
 interface HeaderProps {
   filters: Filters;
+  users: UserSummary[];
   onChange: (patch: Partial<Filters>) => void;
   onSubmit: () => void;
   showFilters: boolean;
@@ -241,6 +271,7 @@ interface HeaderProps {
 
 function Header({
   filters,
+  users,
   onChange,
   onSubmit,
   showFilters,
@@ -310,7 +341,19 @@ function Header({
 
       {showFilters && (
         <div className="bg-surface-container-low border-b border-outline-variant/15 px-8 py-4">
-          <div className="max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-5 gap-4">
+            <SelectField
+              label="Usuario"
+              value={filters.user}
+              onChange={(value) => onChange({ user: value })}
+              options={[
+                { value: "", label: "Todos los usuarios" },
+                ...users.map((user) => ({
+                  value: user.user_id,
+                  label: `${user.user_id} (${user.count})`,
+                })),
+              ]}
+            />
             <FilterField
               label="Autor"
               value={filters.author}
@@ -407,12 +450,45 @@ function FilterField({
   );
 }
 
+function SelectField({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: Array<{ value: string; label: string }>;
+}) {
+  return (
+    <label className="block">
+      <span className="text-[10px] uppercase tracking-widest text-on-surface-variant font-bold">
+        {label}
+      </span>
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="mt-1 w-full bg-surface-container-lowest border-none rounded-md text-sm px-3 py-2 focus:ring-2 focus:ring-primary"
+      >
+        {options.map((option) => (
+          <option key={`${label}-${option.value || "all"}`} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 function DiscoveryHome({
   corpus,
+  users,
   error,
   onPick,
 }: {
   corpus: { items: SearchItem[]; total: number } | null;
+  users: UserSummary[];
   error: string | null;
   onPick: (patch: Partial<Filters>) => void;
 }) {
@@ -468,10 +544,37 @@ function DiscoveryHome({
             <div className="w-2 h-2 rounded-full bg-secondary animate-pulse" />
             <span className="text-[10px] uppercase tracking-[0.2em] font-bold text-on-surface-variant">
               {corpus.items.length} cargados / {corpus.total} total • {authors.length}{" "}
-              autores • {repos.length} repos
+              autores • {repos.length} repos • {users.length} usuarios
             </span>
           </div>
         </div>
+
+        {users.length > 0 && (
+          <div className="mb-12">
+            <div className="mb-4 flex items-center justify-between gap-3 flex-wrap">
+              <h3 className="font-headline font-bold text-lg text-on-surface flex items-center gap-2">
+                <span className="material-symbols-outlined text-primary">badge</span>
+                Usuarios de la base
+              </h3>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              {users.slice(0, 8).map((user) => (
+                <button
+                  key={user.user_id}
+                  onClick={() => onPick({ mode: "hybrid", user: user.user_id })}
+                  className="glass-card p-4 rounded-xl flex flex-col items-start gap-1 border border-outline-variant/10 cursor-pointer hover:border-primary/40 hover:scale-[1.02] transition-all text-left"
+                >
+                  <span className="text-primary font-bold font-headline text-sm truncate w-full">
+                    {user.user_id}
+                  </span>
+                  <span className="text-[10px] text-on-surface-variant uppercase tracking-widest">
+                    {user.count} marcador{user.count === 1 ? "" : "es"}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 mb-12">
           {authors.slice(0, 8).map((author) => (
@@ -620,6 +723,11 @@ function ResultsView({
                 <span className="text-sm font-normal text-on-surface-variant bg-surface-container-high px-2 py-0.5 rounded-full">
                   {total} encontrados
                 </span>
+                {filters.user && (
+                  <span className="text-sm font-normal text-tertiary bg-tertiary/10 px-2 py-0.5 rounded-full">
+                    usuario {filters.user}
+                  </span>
+                )}
                 {kindFilter && mode === "hybrid" && (
                   <span className="text-sm font-normal text-secondary bg-secondary/10 px-2 py-0.5 rounded-full">
                     {formatKindLabel(kindFilter)}
@@ -912,6 +1020,7 @@ function ActiveFiltersCard({
   reset: () => void;
 }) {
   const entries: [string, string][] = [["Modo", formatModeLabel(filters.mode)]];
+  if (filters.user) entries.push(["Usuario", filters.user]);
   if (filters.author) entries.push(["Autor", filters.author]);
   if (filters.domain) entries.push(["Dominio", filters.domain]);
   if (filters.from) entries.push(["Desde", filters.from]);

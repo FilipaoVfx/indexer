@@ -226,16 +226,60 @@ export class BookmarkStore {
     }
   }
 
-  async count() {
+  async count({ userId } = {}) {
     await this.init();
-    const { count, error } = await this.supabase
+    let queryBuilder = this.supabase
       .from("bookmarks")
       .select("*", { count: "exact", head: true });
+
+    if (userId) {
+      queryBuilder = queryBuilder.eq("user_id", userId);
+    }
+
+    const { count, error } = await queryBuilder;
     
     if (error) {
       throw new Error(`Failed to count bookmarks: ${error.message}`);
     }
     return count;
+  }
+
+  async listUsers({ query = "", hardLimit = 10_000, batchSize = 1000 } = {}) {
+    await this.init();
+
+    const normalizedQuery = String(query || "").trim().toLowerCase();
+    const counts = new Map();
+    let offset = 0;
+    let total = Infinity;
+
+    while (offset < total && offset < hardLimit) {
+      const limit = Math.min(batchSize, hardLimit - offset);
+      const { data, count, error } = await this.supabase
+        .from("bookmarks")
+        .select("user_id", { count: "exact" })
+        .range(offset, offset + limit - 1);
+
+      if (error) {
+        throw new Error(`Failed to list users: ${error.message}`);
+      }
+
+      total = typeof count === "number" ? count : total;
+      const rows = Array.isArray(data) ? data : [];
+
+      for (const row of rows) {
+        const userId = String(row.user_id || "").trim();
+        if (!userId) continue;
+        if (normalizedQuery && !userId.toLowerCase().includes(normalizedQuery)) continue;
+        counts.set(userId, (counts.get(userId) || 0) + 1);
+      }
+
+      if (rows.length < limit) break;
+      offset += rows.length;
+    }
+
+    return [...counts.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([user_id, count]) => ({ user_id, count }));
   }
 
   mapGoalSearchRow(row) {

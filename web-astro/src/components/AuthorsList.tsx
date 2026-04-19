@@ -2,14 +2,17 @@
  * AuthorsList — dedicated view listing all authors across the corpus.
  * Aligns with featureGoal.md §12.1 (entity-based exploration).
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   extractAllAuthors,
+  extractUsers,
+  fetchUsers,
   formatDate,
   getCorpus,
   initials,
   type AuthorEntity,
   type SearchItem,
+  type UserSummary,
 } from "../lib/api";
 import { withBase } from "../lib/url-state";
 
@@ -17,6 +20,7 @@ type SortKey = "count" | "latest" | "name";
 type HistoryMode = "replace" | "push";
 
 interface ViewState {
+  user: string;
   q: string;
   sort: SortKey;
   page: number;
@@ -34,6 +38,7 @@ function clampPositiveInt(value: string | null, fallback: number): number {
 
 function normalizeState(state: ViewState): ViewState {
   return {
+    user: state.user,
     q: state.q,
     sort: VALID_SORTS.has(state.sort) ? state.sort : "count",
     page: Math.max(1, state.page),
@@ -47,6 +52,7 @@ function readViewState(): ViewState {
   if (typeof window === "undefined") {
     return {
       q: "",
+      user: "",
       sort: "count",
       page: 1,
       pageSize: DEFAULT_PAGE_SIZE,
@@ -57,6 +63,7 @@ function readViewState(): ViewState {
   const rawSort = (params.get("sort") || "count") as SortKey;
 
   return normalizeState({
+    user: params.get("user") || "",
     q: params.get("q") || "",
     sort: rawSort,
     page: clampPositiveInt(params.get("page"), 1),
@@ -69,6 +76,9 @@ function writeViewState(state: ViewState, historyMode: HistoryMode = "replace") 
 
   const next = normalizeState(state);
   const params = new URLSearchParams(window.location.search);
+
+  if (next.user) params.set("user", next.user);
+  else params.delete("user");
 
   if (next.q) params.set("q", next.q);
   else params.delete("q");
@@ -129,28 +139,62 @@ function getPageWindow(currentPage: number, totalPages: number): Array<number | 
   return windowed;
 }
 
-function buildCollectionHref(path: "/authors" | "/repos", q: string, pageSize: number) {
+function buildCollectionHref(
+  path: "/authors" | "/repos",
+  user: string,
+  q: string,
+  pageSize: number
+) {
   const params = new URLSearchParams();
+  if (user.trim()) params.set("user", user.trim());
   if (q.trim()) params.set("q", q.trim());
   if (pageSize !== DEFAULT_PAGE_SIZE) params.set("pageSize", String(pageSize));
   return withBase(`${path}${params.toString() ? `?${params.toString()}` : ""}`);
+}
+
+function buildSearchHref(values: Record<string, string>) {
+  const params = new URLSearchParams();
+  Object.entries(values).forEach(([key, value]) => {
+    if (value) params.set(key, value);
+  });
+  return withBase(`/${params.toString() ? `?${params.toString()}` : ""}`);
 }
 
 export default function AuthorsList() {
   const [items, setItems] = useState<SearchItem[] | null>(null);
   const [total, setTotal] = useState(0);
   const [err, setErr] = useState<string | null>(null);
+  const [users, setUsers] = useState<UserSummary[]>([]);
   const [view, setView] = useState<ViewState>(() => readViewState());
+  const topRef = useRef<HTMLDivElement | null>(null);
 
-  const { q, sort, page, pageSize } = view;
+  const { user, q, sort, page, pageSize } = view;
 
   useEffect(() => {
-    getCorpus()
+    setItems(null);
+    setErr(null);
+    getCorpus(false, user)
       .then((c) => {
         setItems(c.items);
         setTotal(c.total);
       })
       .catch((e) => setErr(e?.message || String(e)));
+  }, [user]);
+
+  useEffect(() => {
+    let mounted = true;
+    fetchUsers()
+      .then((items) => {
+        if (!mounted) return;
+        setUsers(items);
+      })
+      .catch(() => {
+        if (!mounted) return;
+        setUsers([]);
+      });
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -187,6 +231,10 @@ export default function AuthorsList() {
     };
     return filtered.sort(sorters[sort]);
   }, [items, q, sort]);
+  const availableUsers = useMemo(
+    () => (users.length > 0 ? users : extractUsers(items || [])),
+    [items, users]
+  );
 
   const totalPages = Math.max(1, Math.ceil(authors.length / pageSize));
   const currentPage = Math.min(page, totalPages);
@@ -201,6 +249,15 @@ export default function AuthorsList() {
   const startItem = authors.length === 0 ? 0 : (currentPage - 1) * pageSize + 1;
   const endItem = Math.min(currentPage * pageSize, authors.length);
 
+  function goToPage(nextPage: number) {
+    const safePage = Math.max(1, Math.min(totalPages, nextPage));
+    if (safePage === currentPage) return;
+    updateView({ page: safePage }, "push");
+    window.requestAnimationFrame(() => {
+      topRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }
+
   useEffect(() => {
     if (page !== currentPage) {
       updateView({ page: currentPage });
@@ -208,23 +265,23 @@ export default function AuthorsList() {
   }, [currentPage, page]);
 
   return (
-    <section className="px-4 md:px-8 py-10">
-      <div className="max-w-6xl mx-auto">
+    <section className="px-4 md:px-8 py-10 pb-24 md:pb-10">
+      <div ref={topRef} className="max-w-6xl mx-auto">
         <nav className="mb-6 flex flex-wrap items-center gap-2 text-xs font-bold uppercase tracking-wide">
           <a
-            href={withBase("/")}
+            href={buildSearchHref({ user })}
             className="rounded-full bg-surface-container-high px-3 py-1.5 text-on-surface-variant transition-colors hover:text-primary"
           >
             Buscar
           </a>
           <a
-            href={buildCollectionHref("/authors", q, pageSize)}
+            href={buildCollectionHref("/authors", user, q, pageSize)}
             className="rounded-full bg-primary px-3 py-1.5 text-on-primary"
           >
             Autores
           </a>
           <a
-            href={buildCollectionHref("/repos", q, pageSize)}
+            href={buildCollectionHref("/repos", user, q, pageSize)}
             className="rounded-full bg-surface-container-high px-3 py-1.5 text-on-surface-variant transition-colors hover:text-primary"
           >
             Repos
@@ -247,6 +304,18 @@ export default function AuthorsList() {
             </p>
           </div>
           <div className="flex gap-3 items-center">
+            <select
+              value={user}
+              onChange={(e) => updateView({ user: e.target.value, page: 1 })}
+              className="bg-surface-container-lowest border-none focus:ring-2 focus:ring-primary px-3 py-2 rounded-lg text-on-surface text-sm"
+            >
+              <option value="">Todos los usuarios</option>
+              {availableUsers.map((entry) => (
+                <option key={entry.user_id} value={entry.user_id}>
+                  {entry.user_id} ({entry.count})
+                </option>
+              ))}
+            </select>
             <div className="relative">
               <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant text-lg">
                 filter_alt
@@ -322,9 +391,10 @@ export default function AuthorsList() {
           {visibleAuthors.map((a) => (
             <a
               key={a.handle || a.name}
-              href={withBase(
-                `/?author=${encodeURIComponent(a.handle || a.name)}`
-              )}
+              href={buildSearchHref({
+                user,
+                author: a.handle || a.name,
+              })}
               className="group glass-card p-4 rounded-xl border border-outline-variant/15 hover:border-primary/40 transition-all flex items-start gap-3"
             >
               <div className="w-10 h-10 rounded-full bg-surface-container-highest flex items-center justify-center flex-shrink-0">
@@ -374,50 +444,52 @@ export default function AuthorsList() {
         </div>
 
         {authors.length > pageSize && (
-          <nav
-            aria-label="Paginacion de autores"
-            className="mt-8 flex flex-wrap items-center justify-center gap-2"
-          >
-            <button
-              type="button"
-              onClick={() => updateView({ page: currentPage - 1 }, "push")}
-              disabled={currentPage === 1}
-              className="rounded-lg bg-surface-container-high px-3 py-2 text-sm text-on-surface transition-colors disabled:cursor-not-allowed disabled:opacity-40 hover:text-primary"
+          <div className="mt-8 overflow-x-auto pb-2 no-scrollbar">
+            <nav
+              aria-label="Paginacion de autores"
+              className="flex w-max min-w-full items-center justify-center gap-2"
             >
-              Anterior
-            </button>
-            {pageWindow.map((entry, index) =>
-              entry === "ellipsis" ? (
-                <span
-                  key={`ellipsis-${index}`}
-                  className="px-2 text-sm text-on-surface-variant"
-                >
-                  ...
-                </span>
-              ) : (
-                <button
-                  key={entry}
-                  type="button"
-                  onClick={() => updateView({ page: entry }, "push")}
-                  className={`min-w-10 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-                    entry === currentPage
-                      ? "bg-primary text-on-primary"
-                      : "bg-surface-container-high text-on-surface hover:text-primary"
-                  }`}
-                >
-                  {entry}
-                </button>
-              )
-            )}
-            <button
-              type="button"
-              onClick={() => updateView({ page: currentPage + 1 }, "push")}
-              disabled={currentPage === totalPages}
-              className="rounded-lg bg-surface-container-high px-3 py-2 text-sm text-on-surface transition-colors disabled:cursor-not-allowed disabled:opacity-40 hover:text-primary"
-            >
-              Siguiente
-            </button>
-          </nav>
+              <button
+                type="button"
+                onClick={() => goToPage(currentPage - 1)}
+                disabled={currentPage === 1}
+                className="rounded-lg bg-surface-container-high px-3 py-2 text-sm text-on-surface transition-colors disabled:cursor-not-allowed disabled:opacity-40 hover:text-primary"
+              >
+                Anterior
+              </button>
+              {pageWindow.map((entry, index) =>
+                entry === "ellipsis" ? (
+                  <span
+                    key={`ellipsis-${index}`}
+                    className="px-2 text-sm text-on-surface-variant"
+                  >
+                    ...
+                  </span>
+                ) : (
+                  <button
+                    key={entry}
+                    type="button"
+                    onClick={() => goToPage(entry)}
+                    className={`min-w-10 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                      entry === currentPage
+                        ? "bg-primary text-on-primary"
+                        : "bg-surface-container-high text-on-surface hover:text-primary"
+                    }`}
+                  >
+                    {entry}
+                  </button>
+                )
+              )}
+              <button
+                type="button"
+                onClick={() => goToPage(currentPage + 1)}
+                disabled={currentPage === totalPages}
+                className="rounded-lg bg-surface-container-high px-3 py-2 text-sm text-on-surface transition-colors disabled:cursor-not-allowed disabled:opacity-40 hover:text-primary"
+              >
+                Siguiente
+              </button>
+            </nav>
+          </div>
         )}
       </div>
     </section>

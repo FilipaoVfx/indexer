@@ -26,6 +26,18 @@ export default function Sidebar({ current = "all" }: Props) {
   const [count, setCount] = useState<string>("---");
   const [activeKey, setActiveKey] = useState<NavKey>(current);
 
+  function buildNavHref(href: string) {
+    if (typeof window === "undefined") return withBase(href);
+    const currentParams = new URLSearchParams(window.location.search);
+    const user = currentParams.get("user") || "";
+    if (!user) return withBase(href);
+
+    const [pathname, rawQuery = ""] = href.split("?");
+    const params = new URLSearchParams(rawQuery);
+    params.set("user", user);
+    return withBase(`${pathname}${params.toString() ? `?${params.toString()}` : ""}`);
+  }
+
   useEffect(() => {
     let mounted = true;
     async function refresh() {
@@ -97,7 +109,7 @@ export default function Sidebar({ current = "all" }: Props) {
           return (
             <a
               key={it.key}
-              href={withBase(it.href)}
+              href={buildNavHref(it.href)}
               className={
                 "flex items-center gap-3 px-4 py-3 rounded-lg transition-all " +
                 (active

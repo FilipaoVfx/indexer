@@ -67,6 +67,7 @@ function formatReason(reason: string): string {
 export default function ResultCard({ item }: Props) {
   const author = item.author_name || item.author_username || "anonimo";
   const handle = item.author_username ? `@${item.author_username}` : "";
+  const userId = item.user_id || "";
   const date = formatDate(item.created_at);
   const displayText = item.summary || item.text_content || "--- Sin contenido ---";
   const domain =
@@ -123,6 +124,11 @@ export default function ResultCard({ item }: Props) {
             <p className="text-on-surface-variant text-xs truncate">
               {handle} {handle ? "•" : ""} {date}
             </p>
+            {userId && (
+              <p className="text-[10px] uppercase tracking-widest text-on-surface-variant truncate">
+                usuario {userId}
+              </p>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-2">
