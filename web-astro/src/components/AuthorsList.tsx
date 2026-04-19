@@ -160,21 +160,6 @@ function buildSearchHref(values: Record<string, string>) {
   return withBase(`/${params.toString() ? `?${params.toString()}` : ""}`);
 }
 
-function buildAuthorsHref(state: ViewState) {
-  const next = normalizeState(state);
-  const params = new URLSearchParams();
-
-  if (next.user) params.set("user", next.user);
-  if (next.q) params.set("q", next.q);
-  if (next.sort !== "count") params.set("sort", next.sort);
-  if (next.page > 1) params.set("page", String(next.page));
-  if (next.pageSize !== DEFAULT_PAGE_SIZE) {
-    params.set("pageSize", String(next.pageSize));
-  }
-
-  return withBase(`/authors${params.toString() ? `?${params.toString()}` : ""}`);
-}
-
 export default function AuthorsList() {
   const [items, setItems] = useState<SearchItem[] | null>(null);
   const [total, setTotal] = useState(0);
@@ -263,6 +248,15 @@ export default function AuthorsList() {
   );
   const startItem = authors.length === 0 ? 0 : (currentPage - 1) * pageSize + 1;
   const endItem = Math.min(currentPage * pageSize, authors.length);
+
+  function goToPage(nextPage: number) {
+    const safePage = Math.max(1, Math.min(totalPages, nextPage));
+    if (safePage === currentPage) return;
+    updateView({ page: safePage }, "push");
+    window.requestAnimationFrame(() => {
+      topRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }
 
   useEffect(() => {
     if (page !== currentPage) {
@@ -442,13 +436,14 @@ export default function AuthorsList() {
               aria-label="Paginacion de autores"
               className="flex w-max min-w-full items-center justify-center gap-2"
             >
-              <a
-                href={buildAuthorsHref({ ...view, page: Math.max(1, currentPage - 1) })}
-                aria-disabled={currentPage === 1}
-                className="rounded-lg bg-surface-container-high px-3 py-2 text-sm text-on-surface transition-colors hover:text-primary aria-[disabled=true]:pointer-events-none aria-[disabled=true]:opacity-40"
+              <button
+                type="button"
+                onClick={() => goToPage(currentPage - 1)}
+                disabled={currentPage === 1}
+                className="rounded-lg bg-surface-container-high px-3 py-2 text-sm text-on-surface transition-colors disabled:cursor-not-allowed disabled:opacity-40 hover:text-primary"
               >
                 Anterior
-              </a>
+              </button>
               {pageWindow.map((entry, index) =>
                 entry === "ellipsis" ? (
                   <span
@@ -458,9 +453,10 @@ export default function AuthorsList() {
                     ...
                   </span>
                 ) : (
-                  <a
+                  <button
                     key={entry}
-                    href={buildAuthorsHref({ ...view, page: entry })}
+                    type="button"
+                    onClick={() => goToPage(entry)}
                     className={`min-w-10 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
                       entry === currentPage
                         ? "bg-primary text-on-primary"
@@ -468,16 +464,17 @@ export default function AuthorsList() {
                     }`}
                   >
                     {entry}
-                  </a>
+                  </button>
                 )
               )}
-              <a
-                href={buildAuthorsHref({ ...view, page: Math.min(totalPages, currentPage + 1) })}
-                aria-disabled={currentPage === totalPages}
-                className="rounded-lg bg-surface-container-high px-3 py-2 text-sm text-on-surface transition-colors hover:text-primary aria-[disabled=true]:pointer-events-none aria-[disabled=true]:opacity-40"
+              <button
+                type="button"
+                onClick={() => goToPage(currentPage + 1)}
+                disabled={currentPage === totalPages}
+                className="rounded-lg bg-surface-container-high px-3 py-2 text-sm text-on-surface transition-colors disabled:cursor-not-allowed disabled:opacity-40 hover:text-primary"
               >
                 Siguiente
-              </a>
+              </button>
             </nav>
           </div>
         )}
