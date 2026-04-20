@@ -1,9 +1,12 @@
+import { useState } from "react";
 import type { SearchItem } from "../lib/api";
 import { extractGithubRepos, formatDate, initials, safeDomain } from "../lib/api";
 
 interface Props {
   item: SearchItem;
 }
+
+const LONG_TEXT_CHARS = 320;
 
 function safeHighlight(raw: string): string {
   return String(raw || "")
@@ -65,25 +68,39 @@ function formatReason(reason: string): string {
 }
 
 export default function ResultCard({ item }: Props) {
+  const [expanded, setExpanded] = useState(false);
+  const [mediaOpen, setMediaOpen] = useState(false);
+  const [avatarFailed, setAvatarFailed] = useState(false);
   const author = item.author_name || item.author_username || "anonimo";
   const handle = item.author_username ? `@${item.author_username}` : "";
   const userId = item.user_id || "";
   const date = formatDate(item.created_at);
-  const displayText = item.summary || item.text_content || "--- Sin contenido ---";
+  const hasHighlight = Boolean(
+    item.highlight && String(item.highlight).includes("<mark>")
+  );
+  const bodyText = hasHighlight
+    ? String(item.highlight)
+    : item.text_content || item.summary || "--- Sin contenido ---";
+  const isLong = bodyText.length > LONG_TEXT_CHARS;
+  const showToggle = isLong;
   const domain =
     item.source_domain || (item.source_url ? safeDomain(item.source_url) : "");
+
+  const mediaAll = item.media || [];
+  const profileUrl = mediaAll.find((m) => /\/profile_images\//i.test(m)) || null;
+  const otherMedia = profileUrl ? mediaAll.filter((m) => m !== profileUrl) : mediaAll;
 
   const tags: string[] = [];
   if (item.asset_type) tags.push(formatAssetType(item.asset_type));
   if (item.difficulty) tags.push(formatDifficulty(item.difficulty));
   if (domain) tags.push(domain);
-  if ((item.media || []).length > 0) tags.push(`${item.media!.length} multimedia`);
+  if (otherMedia.length > 0) tags.push(`${otherMedia.length} multimedia`);
   if ((item.links || []).length > 0) tags.push(`${item.links!.length} enlaces`);
 
   const cardRepos = [...extractGithubRepos([item]).values()].slice(0, 4);
 
   const kind =
-    (item.media || []).length > 0
+    otherMedia.length > 0
       ? "Multimedia"
       : (item.links || []).length > 0
       ? "Referencia"
@@ -112,10 +129,20 @@ export default function ResultCard({ item }: Props) {
     <article className="group relative bg-surface-container-lowest p-6 rounded-xl hover:bg-surface-container-low transition-all duration-300 border-l-4 border-transparent hover:border-primary">
       <div className="flex justify-between items-start mb-4 gap-3 flex-wrap">
         <div className="flex items-center gap-3 min-w-0">
-          <div className="w-10 h-10 rounded-full bg-surface-container-highest flex items-center justify-center flex-shrink-0">
-            <span className="text-sm font-bold text-primary">
-              {initials(author)}
-            </span>
+          <div className="w-10 h-10 rounded-full bg-surface-container-highest flex items-center justify-center flex-shrink-0 overflow-hidden">
+            {profileUrl && !avatarFailed ? (
+              <img
+                src={profileUrl}
+                alt={author}
+                loading="lazy"
+                className="w-full h-full object-cover"
+                onError={() => setAvatarFailed(true)}
+              />
+            ) : (
+              <span className="text-sm font-bold text-primary">
+                {initials(author)}
+              </span>
+            )}
           </div>
           <div className="min-w-0">
             <p className="text-on-surface font-semibold text-sm truncate">
@@ -142,16 +169,37 @@ export default function ResultCard({ item }: Props) {
         </div>
       </div>
 
-      {item.highlight && String(item.highlight).includes("<mark>") ? (
-        <div
-          className="text-on-surface-variant text-sm leading-relaxed mb-4 line-clamp-3"
-          dangerouslySetInnerHTML={{ __html: safeHighlight(item.highlight) }}
-        />
-      ) : (
-        <p className="text-on-surface-variant text-sm leading-relaxed mb-4 line-clamp-3">
-          {displayText}
-        </p>
-      )}
+      <div className="mb-4">
+        {hasHighlight ? (
+          <div
+            className={`text-on-surface-variant text-sm leading-relaxed whitespace-pre-wrap break-words ${
+              showToggle && !expanded ? "line-clamp-6" : ""
+            }`}
+            dangerouslySetInnerHTML={{ __html: safeHighlight(bodyText) }}
+          />
+        ) : (
+          <p
+            className={`text-on-surface-variant text-sm leading-relaxed whitespace-pre-wrap break-words ${
+              showToggle && !expanded ? "line-clamp-6" : ""
+            }`}
+          >
+            {bodyText}
+          </p>
+        )}
+        {showToggle && (
+          <button
+            type="button"
+            onClick={() => setExpanded((prev) => !prev)}
+            className="mt-2 inline-flex items-center gap-1 text-primary text-xs font-semibold hover:underline"
+            aria-expanded={expanded}
+          >
+            {expanded ? "Mostrar menos" : "Mostrar mas"}
+            <span className="material-symbols-outlined text-sm">
+              {expanded ? "expand_less" : "expand_more"}
+            </span>
+          </button>
+        )}
+      </div>
 
       {item.why_this_result && item.why_this_result.length > 0 && (
         <div className="mb-4 flex flex-wrap gap-1.5">
@@ -166,21 +214,44 @@ export default function ResultCard({ item }: Props) {
         </div>
       )}
 
-      {item.media && item.media.length > 0 && (
-        <div className="grid grid-cols-3 gap-2 mb-4">
-          {item.media.slice(0, 3).map((m, i) => (
-            <div
-              key={i}
-              className="aspect-video rounded-lg overflow-hidden bg-surface-container-highest"
+      {otherMedia.length > 0 && (
+        <div className="mb-4">
+          <button
+            type="button"
+            onClick={() => setMediaOpen((prev) => !prev)}
+            aria-expanded={mediaOpen}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-surface-container-high px-3 py-1.5 text-xs font-semibold text-on-surface transition-colors hover:text-primary"
+          >
+            <span className="material-symbols-outlined text-sm">image</span>
+            {mediaOpen ? "Ocultar" : "Ver"} {otherMedia.length} multimedia
+            <span
+              className={`material-symbols-outlined text-sm transition-transform ${
+                mediaOpen ? "rotate-180" : ""
+              }`}
             >
-              <img
-                src={m}
-                alt=""
-                loading="lazy"
-                className="w-full h-full object-cover"
-              />
+              expand_more
+            </span>
+          </button>
+          {mediaOpen && (
+            <div className="mt-3 grid grid-cols-3 gap-2">
+              {otherMedia.map((m, i) => (
+                <a
+                  key={i}
+                  href={m}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="aspect-video rounded-lg overflow-hidden bg-surface-container-highest block"
+                >
+                  <img
+                    src={m}
+                    alt=""
+                    loading="lazy"
+                    className="w-full h-full object-cover"
+                  />
+                </a>
+              ))}
             </div>
-          ))}
+          )}
         </div>
       )}
 
