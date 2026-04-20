@@ -90,15 +90,118 @@ function extractAuthorName(userNameNode) {
   return "";
 }
 
+const SHORTENER_HOST_RE = /^(t\.co|bit\.ly|buff\.ly|ow\.ly|tinyurl\.com|goo\.gl|dlvr\.it|lnkd\.in|is\.gd|tr\.im)$/i;
+const TRAILING_ELLIPSIS_RE = /[\u2026]+$|\.{3,}$/;
+
+function stripTrailingEllipsis(value) {
+  return value.replace(TRAILING_ELLIPSIS_RE, "").trim();
+}
+
+function looksLikeUrlText(value) {
+  if (!value || value.length < 4) return false;
+  if (value.startsWith("@") || value.startsWith("#")) return false;
+  return /[a-z0-9-]+\.[a-z]{2,}(\/|$)/i.test(value);
+}
+
+function ensureScheme(value) {
+  return /^https?:\/\//i.test(value) ? value : `https://${value}`;
+}
+
+function parseUrlSafe(value) {
+  try {
+    return new URL(value);
+  } catch (_error) {
+    return null;
+  }
+}
+
+function pickLongerUrl(candidates) {
+  let best = null;
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const parsed = parseUrlSafe(candidate);
+    if (!parsed) continue;
+    if (!best || candidate.length > best.length) {
+      best = candidate;
+    }
+  }
+  return best;
+}
+
+function collectAnchorTextSources(anchor) {
+  // Concatenate raw descendant text nodes. Spans X marks visually hidden
+  // (font-size:0, visibility:hidden) remain in textContent so the full URL is
+  // recoverable even when the visible part is ellipsized.
+  const sources = [];
+
+  const direct = cleanText(anchor.textContent || "");
+  if (direct) sources.push(stripTrailingEllipsis(direct));
+
+  const ariaLabel = cleanText(anchor.getAttribute("aria-label") || "");
+  if (ariaLabel) {
+    const match = ariaLabel.match(/https?:\/\/\S+/);
+    if (match) sources.push(stripTrailingEllipsis(match[0]));
+  }
+
+  const title = cleanText(anchor.getAttribute("title") || "");
+  if (title) sources.push(stripTrailingEllipsis(title));
+
+  return sources;
+}
+
+function expandUrlFromAnchor(anchor) {
+  const rawHref = cleanText(anchor.getAttribute("href") || "");
+  if (!rawHref) return "";
+
+  const parsedHref = parseUrlSafe(rawHref);
+  const hrefIsShortener = Boolean(
+    parsedHref && SHORTENER_HOST_RE.test(parsedHref.hostname)
+  );
+
+  if (!hrefIsShortener) {
+    // Even for direct links, prefer a longer display form if available (in
+    // case X mounted the full URL in a span and the href itself got clipped).
+    const textSources = collectAnchorTextSources(anchor)
+      .filter(looksLikeUrlText)
+      .map(ensureScheme);
+    const best = pickLongerUrl([rawHref, ...textSources]);
+    return best || rawHref;
+  }
+
+  // Shortener href: try to recover the expanded URL from the anchor subtree.
+  const candidates = collectAnchorTextSources(anchor)
+    .filter(looksLikeUrlText)
+    .map(ensureScheme);
+  const expanded = pickLongerUrl(candidates);
+  return expanded || rawHref;
+}
+
+function extractCardLinks(tweetNode) {
+  const urls = [];
+  const cardWrapper = tweetNode.querySelector('[data-testid^="card.wrapper"], [data-testid="card.wrapper"]');
+  if (cardWrapper) {
+    const cardAnchor = cardWrapper.tagName === "A" ? cardWrapper : cardWrapper.querySelector("a[href]");
+    if (cardAnchor) {
+      const expanded = expandUrlFromAnchor(cardAnchor);
+      if (expanded) urls.push(expanded);
+    }
+  }
+  return urls;
+}
+
 function extractLinks(tweetNode) {
   const links = new Set();
   const anchorNodes = tweetNode.querySelectorAll('a[href^="http"]');
 
   for (const anchor of anchorNodes) {
-    const href = cleanText(anchor.getAttribute("href") || "");
-    if (href) {
-      links.add(href);
+    const url = expandUrlFromAnchor(anchor);
+    if (url) {
+      links.add(url);
     }
+  }
+
+  for (const url of extractCardLinks(tweetNode)) {
+    links.add(url);
   }
 
   return Array.from(links);
@@ -134,6 +237,49 @@ function extractMedia(tweetNode) {
   return Array.from(media);
 }
 
+function extractTweetTextWithExpandedUrls(textNode) {
+  if (!textNode) return "";
+
+  const pieces = [];
+
+  function walk(node) {
+    if (!node) return;
+    if (node.nodeType === Node.TEXT_NODE) {
+      pieces.push(node.nodeValue || "");
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+
+    const tag = node.tagName;
+    if (tag === "A") {
+      const expanded = expandUrlFromAnchor(node);
+      if (expanded) {
+        pieces.push(expanded);
+      } else {
+        pieces.push(node.textContent || "");
+      }
+      return;
+    }
+    if (tag === "IMG") {
+      // X renders emojis as <img alt="😀">.
+      const alt = node.getAttribute("alt");
+      if (alt) pieces.push(alt);
+      return;
+    }
+    if (tag === "BR") {
+      pieces.push("\n");
+      return;
+    }
+
+    for (const child of node.childNodes) {
+      walk(child);
+    }
+  }
+
+  walk(textNode);
+  return cleanText(pieces.join(""));
+}
+
 async function extractTweetFromNode(tweetNode) {
   const statusLink = tweetNode.querySelector('a[href*="/status/"]');
   if (!statusLink) {
@@ -166,7 +312,7 @@ async function extractTweetFromNode(tweetNode) {
 
   return {
     tweet_id: tweetId,
-    text: cleanText(textNode ? textNode.innerText || "" : ""),
+    text: extractTweetTextWithExpandedUrls(textNode),
     author_name: extractAuthorName(userNameNode),
     author_username: extractAuthorUsername(userNameNode),
     created_at: createdAt || null,
