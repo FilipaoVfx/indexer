@@ -10,7 +10,9 @@ import {
   extractGithubRepos,
   extractUsers,
   fetchUsers,
+  formatDate,
   getCorpus,
+  safeDomain,
   searchGoal,
   searchHybrid,
   type GoalSearchResponse,
@@ -64,6 +66,90 @@ function translateNextStep(step: string): string {
       "Modela relaciones explicitas desde el inicio para reutilizarlas en contenido relacionado y vistas por ruta.",
   };
   return known[step] || step;
+}
+
+function formatGoalAssetType(value?: string): string {
+  switch (value) {
+    case "tool":
+      return "Herramienta";
+    case "thread":
+      return "Hilo";
+    case "repo":
+      return "Repo";
+    case "tutorial":
+      return "Tutorial";
+    case "article":
+      return "Articulo";
+    default:
+      return value || "Recurso";
+  }
+}
+
+function formatGoalDifficulty(value?: string): string {
+  switch (value) {
+    case "beginner":
+      return "Basico";
+    case "intermediate":
+      return "Intermedio";
+    case "advanced":
+      return "Avanzado";
+    default:
+      return value || "";
+  }
+}
+
+function stripInlineMarkup(value?: string): string {
+  return String(value || "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function buildResultAnchorId(item: SearchItem): string | null {
+  const rawId = item.asset_id || item.id || item.tweet_id;
+  if (!rawId) return null;
+  const normalized = String(rawId).replace(/[^A-Za-z0-9_-]+/g, "-");
+  return normalized ? `goal-result-${normalized}` : null;
+}
+
+function getGoalCardTitle(item: SearchItem): string {
+  return (
+    stripInlineMarkup(item.title) ||
+    stripInlineMarkup(item.summary) ||
+    stripInlineMarkup(item.text_content) ||
+    "Resultado sin titulo"
+  );
+}
+
+function getGoalCardPreview(item: SearchItem): string {
+  return (
+    stripInlineMarkup(item.summary) ||
+    stripInlineMarkup(item.text_content) ||
+    stripInlineMarkup(item.highlight) ||
+    "Sin descripcion adicional."
+  );
+}
+
+function getGoalPrimaryUrl(item: SearchItem): string {
+  return item.source_url || item.links?.[0] || "";
+}
+
+function buildGoalSuggestion(sectionKey: string, item: SearchItem): string {
+  const components = (item.required_components || []).slice(0, 2).join(" y ");
+  const componentHint = components ? ` Pon atencion a ${components}.` : "";
+
+  switch (sectionKey) {
+    case "repos":
+      return `Empieza por este repo para validar estructura, dependencias y camino de implementacion.${componentHint}`;
+    case "tools":
+      return `Usa esta herramienta como apoyo directo para ejecutar una parte del objetivo.${componentHint}`;
+    case "tutorials":
+      return `Recorre esta guia para convertir el objetivo en pasos concretos y comparar enfoques.${componentHint}`;
+    case "examples":
+      return `Toma este ejemplo como referencia practica y adapta solo el patron util para tu flujo.${componentHint}`;
+    default:
+      return `Este recurso te ayuda a avanzar en el objetivo con un siguiente paso claro.${componentHint}`;
+  }
 }
 
 function getParsedQuery(response: SearchResponse | null): ParsedQuery | undefined {
@@ -800,6 +886,7 @@ function ResultsView({
               <ResultCard
                 key={item.asset_id || item.id || item.tweet_id || index}
                 item={item}
+                anchorId={buildResultAnchorId(item) || undefined}
               />
             ))}
           </div>
@@ -932,10 +1019,34 @@ function GoalGroups({
   groupedResults: GoalSearchResponse["grouped_results"];
 }) {
   const sections = [
-    { key: "repos", label: "Repos", items: groupedResults?.repos || [] },
-    { key: "tools", label: "Herramientas", items: groupedResults?.tools || [] },
-    { key: "tutorials", label: "Tutoriales", items: groupedResults?.tutorials || [] },
-    { key: "examples", label: "Ejemplos", items: groupedResults?.examples || [] },
+    {
+      key: "repos",
+      label: "Repos",
+      eyebrow: "Paso 1",
+      description: "Base tecnica para arrancar y validar el camino principal.",
+      items: groupedResults?.repos || [],
+    },
+    {
+      key: "tools",
+      label: "Herramientas",
+      eyebrow: "Paso 2",
+      description: "Piezas para ejecutar, acelerar o automatizar el objetivo.",
+      items: groupedResults?.tools || [],
+    },
+    {
+      key: "tutorials",
+      label: "Tutoriales",
+      eyebrow: "Paso 3",
+      description: "Guias para convertir la idea en una secuencia de trabajo.",
+      items: groupedResults?.tutorials || [],
+    },
+    {
+      key: "examples",
+      label: "Ejemplos",
+      eyebrow: "Paso 4",
+      description: "Referencias concretas para contrastar implementaciones.",
+      items: groupedResults?.examples || [],
+    },
   ].filter((section) => section.items.length > 0);
 
   if (sections.length === 0) return null;
@@ -948,30 +1059,237 @@ function GoalGroups({
           Desglose del objetivo
         </h3>
       </div>
+      <p className="mb-5 text-sm leading-relaxed text-on-surface-variant">
+        Esta secuencia resume por donde conviene empezar, que abrir despues y en que
+        resultado conviene profundizar.
+      </p>
       <div className="grid gap-4 md:grid-cols-2">
         {sections.map((section) => (
-          <div key={section.key} className="rounded-xl bg-surface-container-lowest p-4">
-            <h4 className="mb-2 text-sm font-bold uppercase tracking-wider text-on-surface">
-              {section.label}
-            </h4>
-            <div className="space-y-2">
-              {section.items.slice(0, 3).map((item) => (
-                <div key={item.asset_id || item.id || item.tweet_id} className="text-sm">
-                  <p className="font-medium text-on-surface line-clamp-2">
-                    {item.title || item.summary || item.text_content}
-                  </p>
-                  {typeof item.score === "number" && (
-                    <p className="text-xs text-on-surface-variant">
-                      puntaje {item.score.toFixed(3)}
-                    </p>
-                  )}
-                </div>
+          <div
+            key={section.key}
+            className="rounded-xl border border-outline-variant/15 bg-surface-container-lowest p-4"
+          >
+            <div className="mb-3">
+              <p className="text-[11px] font-bold uppercase tracking-[0.24em] text-primary">
+                {section.eyebrow}
+              </p>
+              <h4 className="mt-1 text-sm font-bold uppercase tracking-wider text-on-surface">
+                {section.label}
+              </h4>
+              <p className="mt-1 text-xs leading-relaxed text-on-surface-variant">
+                {section.description}
+              </p>
+            </div>
+            <div className="space-y-3">
+              {section.items.slice(0, 3).map((item, index) => (
+                <GoalSequenceCard
+                  key={`${section.key}-${item.asset_id || item.id || item.tweet_id || index}`}
+                  item={item}
+                  sectionKey={section.key}
+                  stepLabel={`${section.eyebrow}.${index + 1}`}
+                />
               ))}
             </div>
           </div>
         ))}
       </div>
     </section>
+  );
+}
+
+function GoalSequenceCard({
+  item,
+  sectionKey,
+  stepLabel,
+}: {
+  item: SearchItem;
+  sectionKey: string;
+  stepLabel: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const title = getGoalCardTitle(item);
+  const preview = getGoalCardPreview(item);
+  const primaryUrl = getGoalPrimaryUrl(item);
+  const detailAnchor = buildResultAnchorId(item);
+  const author = item.author_name || item.author_username || "Fuente sin autor";
+  const date = formatDate(item.created_at);
+  const domain = item.source_domain || safeDomain(primaryUrl);
+  const difficulty = formatGoalDifficulty(item.difficulty);
+  const assetType = formatGoalAssetType(item.asset_type);
+  const relatedLinks = (item.links || []).filter((link) => link && link !== primaryUrl).slice(0, 3);
+  const repos = [...extractGithubRepos([item]).values()].slice(0, 2);
+  const suggestion = buildGoalSuggestion(sectionKey, item);
+  const hasExpandableContent =
+    preview.length > 180 ||
+    relatedLinks.length > 0 ||
+    repos.length > 0 ||
+    (item.topics || []).length > 0 ||
+    (item.required_components || []).length > 0;
+
+  return (
+    <article className="rounded-xl border border-outline-variant/15 bg-surface-container-low p-4 transition-colors hover:border-primary/35">
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <span className="inline-flex rounded-full bg-primary/10 px-2 py-1 text-[10px] font-bold uppercase tracking-[0.2em] text-primary">
+            {stepLabel}
+          </span>
+          <h5 className="mt-2 text-sm font-semibold leading-snug text-on-surface">
+            {title}
+          </h5>
+        </div>
+        {typeof item.score === "number" && item.score > 0 && (
+          <span className="flex-shrink-0 rounded-full bg-primary/10 px-2 py-1 text-[11px] font-bold text-primary">
+            {item.score.toFixed(3)}
+          </span>
+        )}
+      </div>
+
+      <div className="mb-3 flex flex-wrap gap-2 text-[11px] text-on-surface-variant">
+        <span className="rounded-full bg-surface-container-high px-2.5 py-1">
+          {assetType}
+        </span>
+        {difficulty && (
+          <span className="rounded-full bg-surface-container-high px-2.5 py-1">
+            {difficulty}
+          </span>
+        )}
+        {domain && (
+          <span className="rounded-full bg-surface-container-high px-2.5 py-1">
+            {domain}
+          </span>
+        )}
+      </div>
+
+      <p
+        className={`text-sm leading-relaxed text-on-surface-variant ${
+          !expanded ? "line-clamp-4" : ""
+        }`}
+      >
+        {preview}
+      </p>
+
+      <p className="mt-3 rounded-xl border border-primary/15 bg-primary/5 px-3 py-2 text-xs leading-relaxed text-on-surface">
+        <span className="font-semibold text-primary">Sugerencia:</span> {suggestion}
+      </p>
+
+      <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-on-surface-variant">
+        <span>{author}</span>
+        <span aria-hidden="true">•</span>
+        <span>{date}</span>
+      </div>
+
+      {item.why_this_result && item.why_this_result.length > 0 && (
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {item.why_this_result.slice(0, expanded ? 4 : 2).map((reason) => (
+            <span
+              key={reason}
+              className="rounded-full border border-secondary/20 bg-secondary/8 px-2 py-0.5 text-[11px] text-secondary"
+            >
+              {reason.replace(/^asset_type:/, "tipo:")}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {expanded && (
+        <div className="mt-4 space-y-3">
+          {!!item.required_components?.length && (
+            <div className="flex flex-wrap gap-1.5">
+              {item.required_components.slice(0, 4).map((component) => (
+                <span
+                  key={component}
+                  className="rounded-full border border-primary/20 bg-primary/8 px-2 py-0.5 text-[11px] text-primary"
+                >
+                  {component}
+                </span>
+              ))}
+            </div>
+          )}
+
+          {!!item.topics?.length && (
+            <div className="flex flex-wrap gap-1.5">
+              {item.topics.slice(0, 4).map((topic) => (
+                <span
+                  key={topic}
+                  className="rounded-full bg-surface-container-high px-2 py-0.5 text-[11px] text-on-surface-variant"
+                >
+                  {topic}
+                </span>
+              ))}
+            </div>
+          )}
+
+          {repos.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {repos.map((repo) => (
+                <a
+                  key={`${repo.owner}/${repo.repo}`}
+                  href={`https://github.com/${repo.owner}/${repo.repo}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 rounded-full border border-primary/20 bg-primary/5 px-2.5 py-1 text-[11px] font-medium text-primary hover:bg-primary/10"
+                >
+                  <span className="material-symbols-outlined text-xs">code</span>
+                  {repo.owner}/{repo.repo}
+                </a>
+              ))}
+            </div>
+          )}
+
+          {relatedLinks.length > 0 && (
+            <div className="space-y-2">
+              {relatedLinks.map((link) => (
+                <a
+                  key={link}
+                  href={link}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="block truncate text-xs text-secondary hover:underline"
+                >
+                  {link}
+                </a>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="mt-4 flex flex-wrap gap-2">
+        {primaryUrl && (
+          <a
+            href={primaryUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary hover:brightness-110"
+          >
+            Abrir fuente
+            <span className="material-symbols-outlined text-sm">arrow_outward</span>
+          </a>
+        )}
+        {detailAnchor && (
+          <a
+            href={`#${detailAnchor}`}
+            className="inline-flex items-center gap-1 rounded-lg border border-outline-variant/25 bg-surface-container-high px-3 py-2 text-xs font-semibold text-on-surface hover:border-primary/35 hover:text-primary"
+          >
+            Ver detalle
+            <span className="material-symbols-outlined text-sm">south</span>
+          </a>
+        )}
+        {hasExpandableContent && (
+          <button
+            type="button"
+            onClick={() => setExpanded((current) => !current)}
+            aria-expanded={expanded}
+            className="inline-flex items-center gap-1 rounded-lg border border-outline-variant/20 px-3 py-2 text-xs font-semibold text-on-surface-variant hover:text-on-surface"
+          >
+            {expanded ? "Mostrar menos" : "Expandir card"}
+            <span className="material-symbols-outlined text-sm">
+              {expanded ? "expand_less" : "expand_more"}
+            </span>
+          </button>
+        )}
+      </div>
+    </article>
   );
 }
 

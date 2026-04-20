@@ -4,6 +4,7 @@ import { extractGithubRepos, formatDate, initials, safeDomain } from "../lib/api
 
 interface Props {
   item: SearchItem;
+  anchorId?: string;
 }
 
 const LONG_TEXT_CHARS = 320;
@@ -67,7 +68,7 @@ function formatReason(reason: string): string {
   }
 }
 
-export default function ResultCard({ item }: Props) {
+export default function ResultCard({ item, anchorId }: Props) {
   const [expanded, setExpanded] = useState(false);
   const [mediaOpen, setMediaOpen] = useState(false);
   const [avatarFailed, setAvatarFailed] = useState(false);
@@ -126,7 +127,10 @@ export default function ResultCard({ item }: Props) {
     ) : null;
 
   return (
-    <article className="group relative bg-surface-container-lowest p-6 rounded-xl hover:bg-surface-container-low transition-all duration-300 border-l-4 border-transparent hover:border-primary">
+    <article
+      id={anchorId || undefined}
+      className="group relative scroll-mt-24 bg-surface-container-lowest p-6 rounded-xl hover:bg-surface-container-low transition-all duration-300 border-l-4 border-transparent hover:border-primary"
+    >
       <div className="flex justify-between items-start mb-4 gap-3 flex-wrap">
         <div className="flex items-center gap-3 min-w-0">
           <div className="w-10 h-10 rounded-full bg-surface-container-highest flex items-center justify-center flex-shrink-0 overflow-hidden">
