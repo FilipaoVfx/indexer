@@ -1,6 +1,7 @@
 const saveButton = document.getElementById("saveButton");
 const flushButton = document.getElementById("flushButton");
 const syncButton = document.getElementById("syncButton");
+const bulkScrapeButton = document.getElementById("bulkScrapeButton");
 const clearActivityButton = document.getElementById("clearActivityButton");
 const apiBaseUrlInput = document.getElementById("apiBaseUrl");
 const userIdInput = document.getElementById("userId");
@@ -43,6 +44,11 @@ function renderActivity(activity, counters, pendingQueue) {
 function setBusy(isBusy) {
   syncButton.disabled = isBusy;
   syncButton.textContent = isBusy ? "Checking..." : "Check auto sync";
+}
+
+function setBulkBusy(isBusy) {
+  bulkScrapeButton.disabled = isBusy;
+  bulkScrapeButton.textContent = isBusy ? "Scraping..." : "Scrape all bookmarks";
 }
 
 function toErrorMessage(error) {
@@ -181,6 +187,52 @@ async function checkAutoSync() {
   }
 }
 
+async function startBulkScrape() {
+  setBulkBusy(true);
+  appendLog("Starting bulk bookmarks scrape...");
+
+  try {
+    const activeTab = await getActiveTab();
+    if (!activeTab || !activeTab.id) {
+      throw new Error("No active tab found.");
+    }
+
+    if (!/\/i\/bookmarks/i.test(activeTab.url || "")) {
+      appendLog("Open x.com/i/bookmarks first, then run scrape.");
+      return;
+    }
+
+    const response = await chrome.tabs.sendMessage(activeTab.id, {
+      type: "START_SYNC"
+    });
+
+    if (!response) {
+      throw new Error("no_response_from_content_script");
+    }
+
+    if (!response.ok) {
+      throw new Error(response.error || "bulk_scrape_failed");
+    }
+
+    appendLog(
+      `Scrape done. Extracted=${response.totalExtracted} Enqueued=${response.totalEnqueued} Rounds=${response.rounds}`
+    );
+
+    const flushResponse = await sendRuntimeMessage({ type: "INGEST_FLUSH" });
+    appendLog(`Flush triggered. Pending queue: ${flushResponse && flushResponse.pendingQueue}`);
+    await loadActivity(flushResponse && flushResponse.pendingQueue);
+  } catch (error) {
+    const message = toErrorMessage(error);
+    if (isMissingContentScriptError(message)) {
+      appendLog("Open x.com/i/bookmarks first. Scrape only runs on the bookmarks page.");
+    } else {
+      appendLog(`Scrape error: ${message}`);
+    }
+  } finally {
+    setBulkBusy(false);
+  }
+}
+
 chrome.runtime.onMessage.addListener((message) => {
   if (!message || typeof message.type !== "string") {
     return;
@@ -213,6 +265,10 @@ flushButton.addEventListener("click", () => {
 
 syncButton.addEventListener("click", () => {
   void checkAutoSync();
+});
+
+bulkScrapeButton.addEventListener("click", () => {
+  void startBulkScrape();
 });
 
 clearActivityButton.addEventListener("click", () => {

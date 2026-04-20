@@ -2118,8 +2118,176 @@ function getAutoStatus() {
   return {
     mode: "auto_listener",
     syncId: autoSyncId,
-    trackedTweets: recentCapturedAtByTweet.size
+    trackedTweets: recentCapturedAtByTweet.size,
+    bulkScrapeInProgress
   };
+}
+
+const BULK_SCRAPE_CONFIG = {
+  maxScrollRounds: 80,
+  scrollIdleRounds: 4,
+  scrollStepRatio: 0.85,
+  roundDelayMs: 900,
+  batchSize: 20
+};
+
+let bulkScrapeInProgress = false;
+
+async function flushBulkBatch(pendingBatch, context, reason) {
+  if (pendingBatch.length === 0) {
+    return;
+  }
+  const batch = pendingBatch.splice(0, pendingBatch.length);
+  autoBatchIndex += 1;
+  const response = await sendRuntimeMessage(
+    {
+      type: "INGEST_ENQUEUE",
+      payload: {
+        syncId: autoSyncId,
+        batchIndex: autoBatchIndex,
+        traceId: context.traceId,
+        source: "bulk_scrape",
+        pageUrl: window.location.href,
+        bookmarks: batch
+      }
+    },
+    { traceId: context.traceId, label: "INGEST_ENQUEUE_BULK" }
+  );
+
+  if (!response || !response.ok) {
+    throw new Error(
+      response && response.error ? response.error : "bulk_enqueue_failed"
+    );
+  }
+
+  context.totalEnqueued += batch.length;
+
+  safeEmit({
+    type: "SYNC_PROGRESS",
+    payload: {
+      stage: "bulk_scrape_batch_enqueued",
+      traceId: context.traceId,
+      syncId: autoSyncId,
+      batchIndex: autoBatchIndex,
+      batchSize: batch.length,
+      reason,
+      totalExtracted: context.totalExtracted,
+      totalEnqueued: context.totalEnqueued,
+      pendingQueue: response.pendingQueue ?? null
+    }
+  });
+}
+
+async function runBulkScrape() {
+  if (bulkScrapeInProgress) {
+    return { ok: false, error: "bulk_scrape_already_running" };
+  }
+  if (autoCaptureDisabledReason) {
+    return { ok: false, error: autoCaptureDisabledReason };
+  }
+
+  bulkScrapeInProgress = true;
+  const traceId = createTraceId("bulk");
+  const seen = new Set();
+  const pendingBatch = [];
+  const context = { traceId, totalExtracted: 0, totalEnqueued: 0 };
+  let round = 0;
+  let idleRounds = 0;
+
+  const emitStage = (stage, extra = {}) => {
+    safeEmit({
+      type: "SYNC_PROGRESS",
+      payload: {
+        stage,
+        traceId,
+        syncId: autoSyncId,
+        round,
+        totalExtracted: context.totalExtracted,
+        totalEnqueued: context.totalEnqueued,
+        pendingBatch: pendingBatch.length,
+        ...extra
+      }
+    });
+  };
+
+  try {
+    if (!/\/i\/bookmarks/i.test(window.location.pathname)) {
+      throw new Error("not_on_bookmarks_page");
+    }
+
+    logInfo("bulk_scrape_started", { traceId });
+    emitStage("bulk_scrape_started");
+
+    while (
+      round < BULK_SCRAPE_CONFIG.maxScrollRounds &&
+      idleRounds < BULK_SCRAPE_CONFIG.scrollIdleRounds
+    ) {
+      round += 1;
+      const before = seen.size;
+      const tweets = await extractVisibleTweets(seen);
+
+      for (const tweet of tweets) {
+        if (!tweet || !tweet.tweet_id || seen.has(tweet.tweet_id)) continue;
+        seen.add(tweet.tweet_id);
+        pendingBatch.push(tweet);
+        context.totalExtracted += 1;
+        if (pendingBatch.length >= BULK_SCRAPE_CONFIG.batchSize) {
+          await flushBulkBatch(pendingBatch, context, "batch_full");
+        }
+      }
+
+      const newThisRound = seen.size - before;
+      emitStage("bulk_scrape_round", { roundTweets: newThisRound });
+
+      if (newThisRound === 0) {
+        idleRounds += 1;
+      } else {
+        idleRounds = 0;
+      }
+
+      window.scrollBy({
+        top: Math.floor(window.innerHeight * BULK_SCRAPE_CONFIG.scrollStepRatio),
+        left: 0,
+        behavior: "auto"
+      });
+      await sleep(BULK_SCRAPE_CONFIG.roundDelayMs);
+    }
+
+    await flushBulkBatch(pendingBatch, context, "final");
+    emitStage("bulk_scrape_completed");
+    logInfo("bulk_scrape_completed", {
+      traceId,
+      totalExtracted: context.totalExtracted,
+      totalEnqueued: context.totalEnqueued,
+      rounds: round
+    });
+    return {
+      ok: true,
+      traceId,
+      totalExtracted: context.totalExtracted,
+      totalEnqueued: context.totalEnqueued,
+      rounds: round
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logWarn("bulk_scrape_error", { traceId, message });
+    try {
+      await flushBulkBatch(pendingBatch, context, "error_flush");
+    } catch (_flushError) {
+      // Ignore secondary flush failure.
+    }
+    emitStage("bulk_scrape_error", { error: message });
+    return {
+      ok: false,
+      error: message,
+      traceId,
+      totalExtracted: context.totalExtracted,
+      totalEnqueued: context.totalEnqueued,
+      rounds: round
+    };
+  } finally {
+    bulkScrapeInProgress = false;
+  }
 }
 
 function registerAutoCaptureListeners() {
@@ -2147,11 +2315,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === "START_SYNC") {
-    sendResponse({
-      ok: false,
-      error: "manual_sync_disabled_use_auto_capture"
-    });
-    return false;
+    void runBulkScrape()
+      .then((result) => sendResponse(result))
+      .catch((error) =>
+        sendResponse({
+          ok: false,
+          error: error instanceof Error ? error.message : String(error)
+        })
+      );
+    return true;
   }
 
   if (message.type === "GET_CAPTURE_STATUS") {
