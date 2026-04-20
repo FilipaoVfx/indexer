@@ -2,8 +2,19 @@ const AUTO_CAPTURE_CONFIG = {
   captureDelayMs: 700,
   retryDelayMs: 500,
   maxExtractRetries: 4,
-  dedupeWindowMs: 12_000
+  dedupeWindowMs: 12_000,
+  runtimeRetryDelayMs: 250,
+  runtimeMaxAttempts: 2
 };
+
+const LOG_PREFIX = "[x-indexer]";
+
+function logInfo(...args) {
+  try { console.info(LOG_PREFIX, ...args); } catch (_e) {}
+}
+function logWarn(...args) {
+  try { console.warn(LOG_PREFIX, ...args); } catch (_e) {}
+}
 
 const recentCapturedAtByTweet = new Map();
 let autoBatchIndex = 0;
@@ -14,6 +25,18 @@ function cleanText(value) {
     return "";
   }
   return value.replace(/\s+/g, " ").trim();
+}
+
+function cleanMultilineText(value) {
+  if (typeof value !== "string") {
+    return "";
+  }
+  return value
+    .replace(/\r/g, "")
+    .replace(/[ \t\f\v]+/g, " ")
+    .replace(/ *\n */g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function normalizeForMatch(value) {
@@ -37,20 +60,64 @@ function safeEmit(message) {
   }
 }
 
-function sendRuntimeMessage(message) {
-  return new Promise((resolve, reject) => {
+function isRetryableRuntimeErrorMessage(message) {
+  return /Receiving end does not exist|message port closed|The message port closed before a response was received/i.test(
+    String(message || "")
+  );
+}
+
+function formatRuntimeError(error) {
+  const message = error instanceof Error ? error.message : String(error || "");
+
+  if (/Extension context invalidated/i.test(message)) {
+    return (
+      `${message}. Esto suele pasar cuando recargas la extension pero no la ` +
+      `pestana de X. Recarga la pestana y vuelve a intentar.`
+    );
+  }
+
+  if (/Receiving end does not exist/i.test(message)) {
+    return (
+      `${message}. El background de la extension no esta respondiendo todavia. ` +
+      `Recarga la extension y luego la pestana de X.`
+    );
+  }
+
+  return message;
+}
+
+async function sendRuntimeMessage(message) {
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= AUTO_CAPTURE_CONFIG.runtimeMaxAttempts; attempt += 1) {
     try {
-      chrome.runtime.sendMessage(message, (response) => {
-        if (chrome.runtime.lastError) {
-          reject(new Error(chrome.runtime.lastError.message));
-          return;
-        }
-        resolve(response);
+      const response = await new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage(message, (nextResponse) => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+            return;
+          }
+          resolve(nextResponse);
+        });
       });
+
+      return response;
     } catch (error) {
-      reject(error);
+      lastError = error;
+      const messageText = error instanceof Error ? error.message : String(error || "");
+      const shouldRetry =
+        attempt < AUTO_CAPTURE_CONFIG.runtimeMaxAttempts &&
+        isRetryableRuntimeErrorMessage(messageText);
+
+      if (!shouldRetry) {
+        break;
+      }
+
+      await sleep(AUTO_CAPTURE_CONFIG.runtimeRetryDelayMs);
     }
-  });
+  }
+
+  throw new Error(formatRuntimeError(lastError));
 }
 
 function extractTweetIdFromHref(href) {
@@ -90,8 +157,10 @@ function extractAuthorName(userNameNode) {
   return "";
 }
 
-const SHORTENER_HOST_RE = /^(t\.co|bit\.ly|buff\.ly|ow\.ly|tinyurl\.com|goo\.gl|dlvr\.it|lnkd\.in|is\.gd|tr\.im)$/i;
+const SHORTENER_HOST_RE = /^(t\.co|bit\.ly|buff\.ly|ow\.ly|tinyurl\.com|goo\.gl|dlvr\.it|lnkd\.in|is\.gd|tr\.im|cutt\.ly|rebrand\.ly|shorturl\.at)$/i;
 const TRAILING_ELLIPSIS_RE = /[\u2026]+$|\.{3,}$/;
+const URL_TEXT_RE = /\b((?:https?:\/\/)?(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:\/[^\s<>"')\]]*)?)/gi;
+const INTERNAL_X_HOST_RE = /(^|\.)x\.com$|(^|\.)twitter\.com$/i;
 
 function stripTrailingEllipsis(value) {
   return value.replace(TRAILING_ELLIPSIS_RE, "").trim();
@@ -115,6 +184,19 @@ function parseUrlSafe(value) {
   }
 }
 
+function getAnchorHref(anchor) {
+  const rawHref = cleanText(anchor.getAttribute("href") || "");
+  if (/^https?:\/\//i.test(rawHref)) {
+    return rawHref;
+  }
+  return cleanText(anchor.href || rawHref);
+}
+
+function isInternalXUrl(value) {
+  const parsed = parseUrlSafe(value);
+  return Boolean(parsed && INTERNAL_X_HOST_RE.test(parsed.hostname));
+}
+
 function pickLongerUrl(candidates) {
   let best = null;
   for (const candidate of candidates) {
@@ -128,51 +210,76 @@ function pickLongerUrl(candidates) {
   return best;
 }
 
-function collectAnchorTextSources(anchor) {
-  // Concatenate raw descendant text nodes. Spans X marks visually hidden
-  // (font-size:0, visibility:hidden) remain in textContent so the full URL is
-  // recoverable even when the visible part is ellipsized.
-  const sources = [];
+function extractUrlCandidatesFromText(value) {
+  const text = cleanText(value);
+  if (!text) return [];
 
-  const direct = cleanText(anchor.textContent || "");
-  if (direct) sources.push(stripTrailingEllipsis(direct));
+  const results = [];
+  let match = null;
 
-  const ariaLabel = cleanText(anchor.getAttribute("aria-label") || "");
-  if (ariaLabel) {
-    const match = ariaLabel.match(/https?:\/\/\S+/);
-    if (match) sources.push(stripTrailingEllipsis(match[0]));
+  while ((match = URL_TEXT_RE.exec(text)) !== null) {
+    const candidate = stripTrailingEllipsis(match[1] || "").replace(/[),.;:!?]+$/g, "");
+    if (!candidate || !looksLikeUrlText(candidate)) {
+      continue;
+    }
+    results.push(ensureScheme(candidate));
   }
 
-  const title = cleanText(anchor.getAttribute("title") || "");
-  if (title) sources.push(stripTrailingEllipsis(title));
+  URL_TEXT_RE.lastIndex = 0;
+  return results;
+}
 
-  return sources;
+function collectAnchorUrlCandidates(anchor) {
+  // X often keeps the full URL in descendant spans even when the visible
+  // fragment is ellipsized, so we inspect textContent plus accessibility attrs.
+  const candidates = new Set();
+  const rawSources = [
+    anchor.textContent || "",
+    anchor.getAttribute("aria-label") || "",
+    anchor.getAttribute("title") || ""
+  ];
+
+  for (const source of rawSources) {
+    for (const candidate of extractUrlCandidatesFromText(source)) {
+      candidates.add(candidate);
+    }
+  }
+
+  return Array.from(candidates);
+}
+
+function shouldCaptureExpandedLink(anchor, expandedUrl) {
+  const parsed = parseUrlSafe(expandedUrl);
+  if (!parsed || !/^https?:$/i.test(parsed.protocol)) {
+    return false;
+  }
+
+  if (!isInternalXUrl(expandedUrl)) {
+    return true;
+  }
+
+  const textCandidates = collectAnchorUrlCandidates(anchor);
+  return textCandidates.some((candidate) => !isInternalXUrl(candidate));
 }
 
 function expandUrlFromAnchor(anchor) {
-  const rawHref = cleanText(anchor.getAttribute("href") || "");
+  const rawHref = getAnchorHref(anchor);
   if (!rawHref) return "";
 
   const parsedHref = parseUrlSafe(rawHref);
   const hrefIsShortener = Boolean(
     parsedHref && SHORTENER_HOST_RE.test(parsedHref.hostname)
   );
+  const textCandidates = collectAnchorUrlCandidates(anchor);
 
   if (!hrefIsShortener) {
-    // Even for direct links, prefer a longer display form if available (in
-    // case X mounted the full URL in a span and the href itself got clipped).
-    const textSources = collectAnchorTextSources(anchor)
-      .filter(looksLikeUrlText)
-      .map(ensureScheme);
-    const best = pickLongerUrl([rawHref, ...textSources]);
+    // Even for direct links, prefer a longer display form if available.
+    const best = pickLongerUrl([rawHref, ...textCandidates]);
     return best || rawHref;
   }
 
   // Shortener href: try to recover the expanded URL from the anchor subtree.
-  const candidates = collectAnchorTextSources(anchor)
-    .filter(looksLikeUrlText)
-    .map(ensureScheme);
-  const expanded = pickLongerUrl(candidates);
+  const expanded = pickLongerUrl(textCandidates);
   return expanded || rawHref;
 }
 
@@ -191,11 +298,11 @@ function extractCardLinks(tweetNode) {
 
 function extractLinks(tweetNode) {
   const links = new Set();
-  const anchorNodes = tweetNode.querySelectorAll('a[href^="http"]');
+  const anchorNodes = tweetNode.querySelectorAll("a[href]");
 
   for (const anchor of anchorNodes) {
     const url = expandUrlFromAnchor(anchor);
-    if (url) {
+    if (url && shouldCaptureExpandedLink(anchor, url)) {
       links.add(url);
     }
   }
@@ -277,7 +384,7 @@ function extractTweetTextWithExpandedUrls(textNode) {
   }
 
   walk(textNode);
-  return cleanText(pieces.join(""));
+  return cleanMultilineText(pieces.join(""));
 }
 
 async function extractTweetFromNode(tweetNode) {
@@ -317,6 +424,7 @@ async function extractTweetFromNode(tweetNode) {
     author_username: extractAuthorUsername(userNameNode),
     created_at: createdAt || null,
     links: extractLinks(tweetNode),
+    first_comment_links: [],
     media: extractMedia(tweetNode),
     source_url: sourceUrl
   };
@@ -387,6 +495,34 @@ function findActionElement(target) {
   return target.closest('[data-testid="bookmark"]');
 }
 
+function isOnTweetDetailFor(tweetId) {
+  const match = window.location.pathname.match(/\/status\/(\d+)/);
+  return Boolean(match && tweetId && match[1] === String(tweetId));
+}
+
+function findFirstReplyNode(mainTweetNode) {
+  const articles = Array.from(document.querySelectorAll('article[data-testid="tweet"]'));
+  const idx = articles.indexOf(mainTweetNode);
+  if (idx === -1) return null;
+  return articles[idx + 1] || null;
+}
+
+async function collectSelfReplyLinks(mainTweetNode, mainTweet) {
+  // Only merge self-reply links when we are on the main tweet's detail page;
+  // on the timeline the "next" article is unrelated.
+  if (!isOnTweetDetailFor(mainTweet.tweet_id)) {
+    return [];
+  }
+  const replyNode = findFirstReplyNode(mainTweetNode);
+  if (!replyNode) return [];
+  const reply = await extractTweetWithRetries(replyNode);
+  if (!reply) return [];
+  const mainUser = String(mainTweet.author_username || "").toLowerCase();
+  const replyUser = String(reply.author_username || "").toLowerCase();
+  if (!mainUser || mainUser !== replyUser) return [];
+  return Array.isArray(reply.links) ? reply.links : [];
+}
+
 function dedupeCapture(tweetId) {
   const now = Date.now();
   const last = recentCapturedAtByTweet.get(tweetId);
@@ -434,15 +570,18 @@ async function handleBookmarkSave(event, source) {
   if (!actionElement) {
     return;
   }
+  logInfo("bookmark click detected", { source });
 
   const tweetNode = actionElement.closest('article[data-testid="tweet"]');
   if (!tweetNode) {
+    logInfo("bookmark click but no article ancestor");
     return;
   }
 
   await sleep(AUTO_CAPTURE_CONFIG.captureDelayMs);
   const tweet = await extractTweetWithRetries(tweetNode);
   if (!tweet || !tweet.tweet_id) {
+    logWarn("extract failed", { source });
     safeEmit({
       type: "SYNC_ERROR",
       payload: {
@@ -452,21 +591,51 @@ async function handleBookmarkSave(event, source) {
     });
     return;
   }
+  logInfo("tweet extracted", {
+    tweetId: tweet.tweet_id,
+    author: tweet.author_username,
+    links: (tweet.links || []).length
+  });
 
   if (!dedupeCapture(tweet.tweet_id)) {
+    logInfo("deduped (captured recently)", { tweetId: tweet.tweet_id });
     return;
   }
 
   try {
+    const extraLinks = await collectSelfReplyLinks(tweetNode, tweet);
+    if (extraLinks.length > 0) {
+      const merged = new Set((tweet.links || []).map(String));
+      for (const link of extraLinks) {
+        merged.add(String(link));
+      }
+      tweet.links = Array.from(merged);
+      tweet.first_comment_links = extraLinks.slice();
+      safeEmit({
+        type: "SYNC_PROGRESS",
+        payload: {
+          stage: "auto_capture_self_reply_merged",
+          tweetId: tweet.tweet_id,
+          addedLinks: extraLinks.length
+        }
+      });
+    }
+  } catch (_error) {
+    // Non-fatal; proceed with original links.
+  }
+
+  try {
     await enqueueSingleBookmark(tweet, source);
+    logInfo("enqueued OK", { tweetId: tweet.tweet_id });
   } catch (error) {
+    logWarn("enqueue failed", formatRuntimeError(error));
     safeEmit({
       type: "SYNC_ERROR",
       payload: {
         stage: "auto_capture_enqueue_failed",
         source,
         tweetId: tweet.tweet_id,
-        error: error instanceof Error ? error.message : String(error)
+        error: formatRuntimeError(error)
       }
     });
   }
@@ -507,6 +676,7 @@ function registerAutoCaptureListeners() {
       ...getAutoStatus()
     }
   });
+  logInfo("auto-capture listener registered", getAutoStatus());
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {

@@ -6,10 +6,7 @@
   "version_name": "0.2.0-beta.1",
   "permissions": ["storage", "tabs", "activeTab"],
   "host_permissions": [
-    "https://x.com/*",
-    "http://localhost:8787/*",
-    "http://127.0.0.1:8787/*",
-    "https://indexer-hzto.onrender.com/*"
+    "*://*/*"
   ],
   "background": {
     "service_worker": "background.js"

@@ -11,7 +11,9 @@
       "Bash(python -c \"import reportlab; print\\(reportlab.Version\\)\")",
       "Bash(git pull *)",
       "Bash(npx tsc *)",
-      "Bash(node --check \"C:\\\\Users\\\\Filipo\\\\Documents\\\\code\\\\indexbook\\\\extension\\\\content.js\")"
+      "Bash(node --check \"C:\\\\Users\\\\Filipo\\\\Documents\\\\code\\\\indexbook\\\\extension\\\\content.js\")",
+      "Bash(node --check \"C:\\\\Users\\\\Filipo\\\\Documents\\\\code\\\\indexbook\\\\extension\\\\background.js\")",
+      "Bash(node --check \"C:\\\\Users\\\\Filipo\\\\Documents\\\\code\\\\indexbook\\\\extension\\\\popup.js\")"
     ]
   }
 }

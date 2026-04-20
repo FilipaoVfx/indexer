@@ -56,6 +56,40 @@ function groupGoalResults(items) {
   };
 }
 
+function normalizeContextLinkRows(bookmarks = [], receivedAt) {
+  const rows = [];
+
+  for (const bookmark of bookmarks) {
+    const bookmarkId = String(bookmark?.id || "").trim();
+    const userId = String(bookmark?.user_id || "").trim();
+    const links = Array.isArray(bookmark?.first_comment_links)
+      ? bookmark.first_comment_links
+      : [];
+
+    if (!bookmarkId || !userId || links.length === 0) {
+      continue;
+    }
+
+    links.forEach((url, index) => {
+      const normalizedUrl = String(url || "").trim();
+      if (!normalizedUrl) {
+        return;
+      }
+      rows.push({
+        bookmark_id: bookmarkId,
+        user_id: userId,
+        link_source: "first_comment",
+        position: index,
+        url: normalizedUrl,
+        created_at: receivedAt,
+        updated_at: receivedAt
+      });
+    });
+  }
+
+  return rows;
+}
+
 export class BookmarkStore {
   constructor(config) {
     if (!config.supabaseUrl || !config.supabaseKey) {
@@ -73,6 +107,51 @@ export class BookmarkStore {
     }
     // No explicit initialization needed for Supabase client
     this.isReady = true;
+  }
+
+  async syncBookmarkContextLinks({ bookmarks, receivedAt }) {
+    const bookmarkIds = [...new Set(
+      (Array.isArray(bookmarks) ? bookmarks : [])
+        .map((bookmark) => String(bookmark?.id || "").trim())
+        .filter(Boolean)
+    )];
+
+    if (bookmarkIds.length === 0) {
+      return;
+    }
+
+    const { error: deleteError } = await this.supabase
+      .from("bookmark_context_links")
+      .delete()
+      .eq("link_source", "first_comment")
+      .in("bookmark_id", bookmarkIds);
+
+    if (deleteError) {
+      throw new Error(
+        "Failed to clear bookmark context links. " +
+          "Apply backend/sql/005_bookmark_context_links.sql first. " +
+          `Details: ${deleteError.message}`
+      );
+    }
+
+    const contextRows = normalizeContextLinkRows(bookmarks, receivedAt);
+    if (contextRows.length === 0) {
+      return;
+    }
+
+    const { error: insertError } = await this.supabase
+      .from("bookmark_context_links")
+      .upsert(contextRows, {
+        onConflict: "bookmark_id,link_source,position"
+      });
+
+    if (insertError) {
+      throw new Error(
+        "Failed to store bookmark context links. " +
+          "Apply backend/sql/005_bookmark_context_links.sql first. " +
+          `Details: ${insertError.message}`
+      );
+    }
   }
 
   async upsertBatch({ userId, syncId, bookmarks, receivedAt }) {
@@ -118,6 +197,11 @@ export class BookmarkStore {
       // We can distinguish between inserted and updated if we query before, 
       // but for simplicity in a batch we'll count total successes.
       inserted = data.length;
+
+      await this.syncBookmarkContextLinks({
+        bookmarks: bookmarksToUpsert,
+        receivedAt
+      });
 
       const { error: refreshError } = await this.supabase.rpc(
         "refresh_goal_search_index",
@@ -204,7 +288,7 @@ export class BookmarkStore {
         total: Number(data?.[0]?.total_count || 0),
         items,
         parsed_query: parsedQuery,
-        strategy: "fts",
+        strategy: "fts_trgm_v2",
         latency_ms: Date.now() - startedAt,
         warning: null
       };
@@ -221,7 +305,7 @@ export class BookmarkStore {
         strategy: "ilike_fallback",
         latency_ms: Date.now() - startedAt,
         warning:
-          "FTS search function not available yet. Apply backend/sql/002_search_bookmarks.sql to enable ranked search."
+          "Ranked search function not available yet. Apply backend/sql/004_search_bookmarks_scalable.sql to enable the scalable hybrid search."
       };
     }
   }
@@ -293,6 +377,7 @@ export class BookmarkStore {
       author_name: row.author_name,
       created_at: row.created_at,
       links: row.links || [],
+      first_comment_links: row.first_comment_links || [],
       media: row.media || [],
       source_url: row.source_url,
       source_domain: row.source_domain || extractDomainFromUrl(row.source_url),
@@ -439,7 +524,7 @@ export class BookmarkStore {
       const safeValue = escapeForOrLike(parsedQuery.searchText);
       if (safeValue) {
         queryBuilder = queryBuilder.or(
-          `text_content.ilike.%${safeValue}%,author_username.ilike.%${safeValue}%,author_name.ilike.%${safeValue}%`
+          `text_content.ilike.%${safeValue}%,author_username.ilike.%${safeValue}%,author_name.ilike.%${safeValue}%,source_url.ilike.%${safeValue}%`
         );
       }
     }
@@ -476,6 +561,7 @@ export class BookmarkStore {
       author_name: row.author_name,
       created_at: row.created_at,
       links: row.links || [],
+      first_comment_links: row.first_comment_links || [],
       media: row.media || [],
       source_url: row.source_url,
       ingested_at: row.ingested_at,

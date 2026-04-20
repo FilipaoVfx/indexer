@@ -104,6 +104,11 @@ export function normalizeBookmark(rawBookmark, context) {
   const authorName = asString(rawBookmark.author_name, 300);
   const createdAt = normalizeTimestamp(rawBookmark.created_at);
   const links = uniqueStringArray(asArray(rawBookmark.links), 40, 1500);
+  const firstCommentLinks = uniqueStringArray(
+    asArray(rawBookmark.first_comment_links),
+    20,
+    1500
+  );
   const media = normalizeMediaArray(rawBookmark.media);
 
   return {
@@ -118,6 +123,7 @@ export function normalizeBookmark(rawBookmark, context) {
       author_name: authorName,
       created_at: createdAt,
       links,
+      first_comment_links: firstCommentLinks,
       media,
       source_url: sourceUrl || null,
       ingested_at: context.receivedAt,
