@@ -57,6 +57,7 @@ export interface SearchItem {
   created_at?: string;
   media?: string[];
   links?: string[];
+  first_comment_links?: string[];
   score?: number;
   asset_type?: string;
   title?: string;
@@ -66,6 +67,8 @@ export interface SearchItem {
   intent_tags?: string[];
   required_components?: string[];
   difficulty?: string;
+  canonical_url?: string;
+  repo_slugs?: string[];
   why_this_result?: string[];
   score_breakdown?: Record<string, number | null> | null;
 }
@@ -156,13 +159,45 @@ function sanitizeGithubRepoSegment(value: string): string {
     .replace(/[^A-Za-z0-9._-]+$/g, "");
 }
 
+function uniqueUrls(values: string[]): string[] {
+  const urls: string[] = [];
+  const seen = new Set<string>();
+
+  for (const value of values) {
+    const normalized = String(value || "").trim();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    urls.push(normalized);
+  }
+
+  return urls;
+}
+
+export function collectItemUrls(item: SearchItem): string[] {
+  return uniqueUrls([
+    item.canonical_url || "",
+    item.source_url || "",
+    ...(Array.isArray(item.first_comment_links) ? item.first_comment_links : []),
+    ...(Array.isArray(item.links) ? item.links : []),
+  ]);
+}
+
+export function isGithubRepoUrl(value?: string): boolean {
+  const raw = String(value || "").trim();
+  if (!raw) return false;
+  GH_REGEX.lastIndex = 0;
+  return GH_REGEX.test(raw);
+}
+
 export function extractGithubRepos(items: SearchItem[]): Map<string, RepoEntity> {
   const repos = new Map<string, RepoEntity>();
 
   for (const it of items) {
     const haystack: string[] = [];
-    if (it.source_url) haystack.push(it.source_url);
-    if (Array.isArray(it.links)) haystack.push(...it.links);
+    haystack.push(...collectItemUrls(it));
+    if (Array.isArray(it.repo_slugs)) {
+      haystack.push(...it.repo_slugs.map((slug) => `https://github.com/${slug}`));
+    }
     if (it.text_content) haystack.push(it.text_content);
     if (it.summary) haystack.push(it.summary);
     const joined = haystack.filter(Boolean).join(" \n ");
@@ -203,6 +238,51 @@ export function extractGithubRepos(items: SearchItem[]): Map<string, RepoEntity>
   }
 
   return repos;
+}
+
+export function getPrimaryResourceUrl(item: SearchItem): string {
+  const githubRepo = [...extractGithubRepos([item]).values()][0];
+  if (githubRepo) {
+    return `https://github.com/${githubRepo.owner}/${githubRepo.repo}`;
+  }
+
+  return (
+    item.canonical_url ||
+    item.source_url ||
+    collectItemUrls(item)[0] ||
+    ""
+  );
+}
+
+export function getDisplayAssetType(item: SearchItem): string {
+  if (item.asset_type === "repo") {
+    return "repo";
+  }
+
+  return extractGithubRepos([item]).size > 0 ? "repo" : item.asset_type || "";
+}
+
+export function extractContextLinks(
+  item: SearchItem,
+  primaryUrl = ""
+): string[] {
+  const githubUrls = new Set(
+    [...extractGithubRepos([item]).values()].flatMap((repo) =>
+      [...repo.urls]
+    )
+  );
+
+  return collectItemUrls(item).filter((url) => {
+    if (!url || url === primaryUrl) {
+      return false;
+    }
+
+    if (githubUrls.has(url) || isGithubRepoUrl(url)) {
+      return false;
+    }
+
+    return true;
+  });
 }
 
 export function extractAllAuthors(items: SearchItem[]): Map<string, AuthorEntity> {

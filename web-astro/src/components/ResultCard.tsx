@@ -1,6 +1,15 @@
 import { useState } from "react";
 import type { SearchItem } from "../lib/api";
-import { extractGithubRepos, formatDate, initials, safeDomain } from "../lib/api";
+import {
+  extractContextLinks,
+  extractGithubRepos,
+  formatDate,
+  getDisplayAssetType,
+  getPrimaryResourceUrl,
+  initials,
+  isGithubRepoUrl,
+  safeDomain,
+} from "../lib/api";
 
 interface Props {
   item: SearchItem;
@@ -84,21 +93,26 @@ export default function ResultCard({ item, anchorId }: Props) {
     : item.text_content || item.summary || "--- Sin contenido ---";
   const isLong = bodyText.length > LONG_TEXT_CHARS;
   const showToggle = isLong;
+  const primaryUrl = getPrimaryResourceUrl(item);
   const domain =
-    item.source_domain || (item.source_url ? safeDomain(item.source_url) : "");
+    item.source_domain || safeDomain(primaryUrl || item.source_url || "");
 
   const mediaAll = item.media || [];
   const profileUrl = mediaAll.find((m) => /\/profile_images\//i.test(m)) || null;
   const otherMedia = profileUrl ? mediaAll.filter((m) => m !== profileUrl) : mediaAll;
 
   const tags: string[] = [];
-  if (item.asset_type) tags.push(formatAssetType(item.asset_type));
+  const displayAssetType = getDisplayAssetType(item);
+  if (displayAssetType) tags.push(formatAssetType(displayAssetType));
   if (item.difficulty) tags.push(formatDifficulty(item.difficulty));
   if (domain) tags.push(domain);
   if (otherMedia.length > 0) tags.push(`${otherMedia.length} multimedia`);
   if ((item.links || []).length > 0) tags.push(`${item.links!.length} enlaces`);
 
   const cardRepos = [...extractGithubRepos([item]).values()].slice(0, 4);
+  const contextLinks = extractContextLinks(item, primaryUrl).slice(0, expanded ? 4 : 2);
+  const primaryCtaLabel =
+    primaryUrl && isGithubRepoUrl(primaryUrl) ? "Abrir repo" : "Abrir fuente";
 
   const kind =
     otherMedia.length > 0
@@ -276,6 +290,27 @@ export default function ResultCard({ item, anchorId }: Props) {
         </div>
       )}
 
+      {contextLinks.length > 0 && (
+        <div className="mb-4 space-y-2">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-on-surface-variant">
+            Detalles
+          </p>
+          <div className="space-y-1.5">
+            {contextLinks.map((link) => (
+              <a
+                key={link}
+                href={link}
+                target="_blank"
+                rel="noreferrer"
+                className="block truncate text-xs text-secondary hover:underline"
+              >
+                {link}
+              </a>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="flex flex-wrap gap-2 items-center justify-between">
         <div className="flex gap-2 flex-wrap">
           {tags.map((t) => (
@@ -287,14 +322,14 @@ export default function ResultCard({ item, anchorId }: Props) {
             </span>
           ))}
         </div>
-        {item.source_url ? (
+        {primaryUrl ? (
           <a
-            href={item.source_url}
+            href={primaryUrl}
             target="_blank"
             rel="noreferrer"
             className="text-primary text-sm font-medium flex items-center gap-1 hover:underline"
           >
-            Abrir fuente{" "}
+            {primaryCtaLabel}{" "}
             <span className="material-symbols-outlined text-sm">arrow_outward</span>
           </a>
         ) : (

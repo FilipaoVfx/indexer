@@ -6,12 +6,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { applyBookmarkView } from "../lib/bookmark-view";
 import {
   extractAllAuthors,
+  extractContextLinks,
   extractDomains,
   extractGithubRepos,
   extractUsers,
   fetchUsers,
   formatDate,
+  getDisplayAssetType,
+  getPrimaryResourceUrl,
   getCorpus,
+  isGithubRepoUrl,
   safeDomain,
   searchGoal,
   searchHybrid,
@@ -131,7 +135,7 @@ function getGoalCardPreview(item: SearchItem): string {
 }
 
 function getGoalPrimaryUrl(item: SearchItem): string {
-  return item.source_url || item.links?.[0] || "";
+  return getPrimaryResourceUrl(item);
 }
 
 function buildGoalSuggestion(sectionKey: string, item: SearchItem): string {
@@ -1115,10 +1119,12 @@ function GoalSequenceCard({
   const date = formatDate(item.created_at);
   const domain = item.source_domain || safeDomain(primaryUrl);
   const difficulty = formatGoalDifficulty(item.difficulty);
-  const assetType = formatGoalAssetType(item.asset_type);
-  const relatedLinks = (item.links || []).filter((link) => link && link !== primaryUrl).slice(0, 3);
+  const assetType = formatGoalAssetType(getDisplayAssetType(item));
+  const relatedLinks = extractContextLinks(item, primaryUrl).slice(0, 4);
   const repos = [...extractGithubRepos([item]).values()].slice(0, 2);
   const suggestion = buildGoalSuggestion(sectionKey, item);
+  const primaryCtaLabel =
+    primaryUrl && isGithubRepoUrl(primaryUrl) ? "Abrir repo" : "Abrir fuente";
   const hasExpandableContent =
     preview.length > 180 ||
     relatedLinks.length > 0 ||
@@ -1238,6 +1244,9 @@ function GoalSequenceCard({
 
           {relatedLinks.length > 0 && (
             <div className="space-y-2">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-on-surface-variant">
+                Detalles
+              </p>
               {relatedLinks.map((link) => (
                 <a
                   key={link}
@@ -1262,7 +1271,7 @@ function GoalSequenceCard({
             rel="noreferrer"
             className="inline-flex items-center gap-1 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary hover:brightness-110"
           >
-            Abrir fuente
+            {primaryCtaLabel}
             <span className="material-symbols-outlined text-sm">arrow_outward</span>
           </a>
         )}

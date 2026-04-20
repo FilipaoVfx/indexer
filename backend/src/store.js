@@ -30,6 +30,48 @@ function extractDomainFromUrl(value) {
   }
 }
 
+const GITHUB_RESERVED_SEGMENTS = new Set([
+  "orgs", "sponsors", "features", "settings", "notifications", "pulls",
+  "issues", "topics", "collections", "marketplace", "explore", "trending",
+  "login", "signup", "about", "search", "new", "pricing", "customer-stories",
+  "enterprise", "security", "site", "contact", "readme", "site-map",
+  "watching", "stars", "following", "followers",
+]);
+
+function sanitizeGithubRepoSegment(value) {
+  return String(value || "")
+    .replace(/\.git$/i, "")
+    .replace(/[^A-Za-z0-9._-]+$/g, "");
+}
+
+function extractGithubRepoSlugFromUrl(value) {
+  if (typeof value !== "string" || !value.trim()) {
+    return "";
+  }
+
+  try {
+    const url = new URL(value);
+    if (!/(^|\.)github\.com$/i.test(url.hostname)) {
+      return "";
+    }
+
+    const parts = url.pathname.split("/").filter(Boolean);
+    if (parts.length < 2) {
+      return "";
+    }
+
+    const owner = String(parts[0] || "").trim();
+    const repo = sanitizeGithubRepoSegment(parts[1] || "");
+    if (!owner || !repo || GITHUB_RESERVED_SEGMENTS.has(owner.toLowerCase())) {
+      return "";
+    }
+
+    return `${owner}/${repo}`;
+  } catch (_error) {
+    return "";
+  }
+}
+
 function countTerms(values = [], limit = 8) {
   const counts = new Map();
 
@@ -516,6 +558,29 @@ export class BookmarkStore {
   }
 
   mapGoalSearchRow(row) {
+    const firstCommentLinks = Array.isArray(row.first_comment_links)
+      ? row.first_comment_links
+      : [];
+    const repoSlugs = Array.isArray(row.repo_slugs) ? row.repo_slugs.filter(Boolean) : [];
+    const inferredRepoSlug =
+      repoSlugs[0] ||
+      [
+        row.canonical_url,
+        row.source_url,
+        ...(Array.isArray(row.links) ? row.links : []),
+        ...firstCommentLinks
+      ]
+        .map((value) => extractGithubRepoSlugFromUrl(value))
+        .find(Boolean) ||
+      "";
+    const effectiveRepoSlugs = inferredRepoSlug
+      ? [...new Set([inferredRepoSlug, ...repoSlugs])]
+      : repoSlugs;
+    const effectiveAssetType =
+      row.asset_type === "repo" || effectiveRepoSlugs.length > 0
+        ? "repo"
+        : row.asset_type;
+
     return {
       id: row.bookmark_id,
       asset_id: row.asset_id,
@@ -526,11 +591,13 @@ export class BookmarkStore {
       author_name: row.author_name,
       created_at: row.created_at,
       links: row.links || [],
-      first_comment_links: row.first_comment_links || [],
+      first_comment_links: firstCommentLinks,
       media: row.media || [],
       source_url: row.source_url,
       source_domain: row.source_domain || extractDomainFromUrl(row.source_url),
-      asset_type: row.asset_type,
+      canonical_url: row.canonical_url || null,
+      repo_slugs: effectiveRepoSlugs,
+      asset_type: effectiveAssetType,
       title: row.title,
       summary: row.summary,
       topics: row.topics || [],
