@@ -10,7 +10,14 @@ const ACTIVITY_LOG_MAX = 25;
 const LOG_PREFIX = "[x-indexer:bg]";
 const URL_RESOLVE_TIMEOUT_MS = 4500;
 const MAX_URLS_PER_BOOKMARK = 40;
+const DETAIL_LOOKUP_TIMEOUT_MS = 16_000;
+const DETAIL_LOOKUP_MESSAGE_DELAY_MS = 900;
+const DETAIL_LOOKUP_MESSAGE_MAX_ATTEMPTS = 6;
+const FIRST_COMMENT_LOOKUP_CACHE_MAX = 200;
 const SHORTENER_HOST_RE = /^(t\.co|bit\.ly|buff\.ly|ow\.ly|tinyurl\.com|goo\.gl|dlvr\.it|lnkd\.in|is\.gd|tr\.im|cutt\.ly|rebrand\.ly|shorturl\.at)$/i;
+const FIRST_COMMENT_CUE_RE = /\b((?:1st|first)\s+(?:comment|reply)|primer\s+comentario|primera\s+respuesta|en\s+comentarios|en\s+las?\s+respuestas|in\s+the\s+comments|in\s+replies|reply\s+below|comments?\s+below)\b/i;
+const RESOURCE_HINT_RE = /\b(repo+|repository|github|source|code|codigo|demo|link|links|enlace|enlaces|url|urls|gist|tutorial|readme|doc|docs|article|post|thread|prompt)\b/i;
+const DOWNWARD_CUE_RE = /(?:\u{1F447}|\u2B07|\u2193|\bbelow\b|\babajo\b|\baca abajo\b|\baqui abajo\b|\bdown\b)/iu;
 
 const state = {
   queue: [],
@@ -26,8 +33,192 @@ function logInfo(...args) {
 function logWarn(...args) {
   try { console.warn(LOG_PREFIX, ...args); } catch (_e) {}
 }
+function logError(...args) {
+  try { console.error(LOG_PREFIX, ...args); } catch (_e) {}
+}
 
 const resolvedUrlCache = new Map();
+const firstCommentLookupCache = new Map();
+
+function safeJsonStringify(value, maxLength = 1200) {
+  const seen = new WeakSet();
+
+  try {
+    const output = JSON.stringify(
+      value,
+      (key, nestedValue) => {
+        if (typeof nestedValue === "object" && nestedValue !== null) {
+          if (seen.has(nestedValue)) {
+            return "[Circular]";
+          }
+          seen.add(nestedValue);
+        }
+
+        if (typeof nestedValue === "function") {
+          return `[Function ${nestedValue.name || "anonymous"}]`;
+        }
+
+        if (nestedValue instanceof Error) {
+          return {
+            name: nestedValue.name,
+            message: nestedValue.message,
+            stack: nestedValue.stack || ""
+          };
+        }
+
+        return nestedValue;
+      }
+    );
+
+    return output && output.length > maxLength
+      ? `${output.slice(0, maxLength)}...`
+      : output || "";
+  } catch (_error) {
+    return "";
+  }
+}
+
+function extractErrorMessage(error, depth = 0) {
+  if (depth > 4 || error == null) {
+    return "";
+  }
+
+  if (typeof error === "string") {
+    return cleanText(error);
+  }
+
+  if (typeof error === "number" || typeof error === "boolean" || typeof error === "bigint") {
+    return String(error);
+  }
+
+  if (error instanceof Error) {
+    const directMessage = cleanText(error.message || "");
+    if (directMessage && directMessage !== "[object Object]") {
+      return directMessage;
+    }
+
+    const causeMessage = extractErrorMessage(error.cause, depth + 1);
+    if (causeMessage) {
+      return causeMessage;
+    }
+
+    const serializedError = safeJsonStringify({
+      name: error.name,
+      message: error.message,
+      stack: error.stack || ""
+    });
+    return serializedError || error.name || "unknown_error";
+  }
+
+  if (Array.isArray(error)) {
+    const parts = error
+      .map((item) => extractErrorMessage(item, depth + 1))
+      .filter(Boolean);
+    if (parts.length > 0) {
+      return parts.join(" | ");
+    }
+  }
+
+  if (typeof error === "object") {
+    const candidateKeys = [
+      "message",
+      "error",
+      "reason",
+      "details",
+      "detail",
+      "description",
+      "statusText",
+      "cause"
+    ];
+
+    for (const key of candidateKeys) {
+      const candidateMessage = extractErrorMessage(error[key], depth + 1);
+      if (candidateMessage && candidateMessage !== "[object Object]") {
+        return candidateMessage;
+      }
+    }
+
+    const serialized = safeJsonStringify(error);
+    if (serialized) {
+      return serialized;
+    }
+  }
+
+  return cleanText(String(error || ""));
+}
+
+function formatErrorDetails(error) {
+  return {
+    message: extractErrorMessage(error) || "unknown_error",
+    raw: safeJsonStringify(error)
+  };
+}
+
+function reportAsyncError(scope, error) {
+  logError(scope, formatErrorDetails(error));
+}
+
+function buildBookmarkDebugSnapshot(bookmark) {
+  if (!bookmark || typeof bookmark !== "object") {
+    return {};
+  }
+
+  return {
+    tweetId: cleanText(bookmark.tweet_id || ""),
+    author: cleanText(bookmark.author_username || ""),
+    sourceUrl: sanitizeAbsoluteUrl(bookmark.source_url || ""),
+    linkCount: Array.isArray(bookmark.links) ? bookmark.links.length : 0,
+    firstCommentLinkCount: Array.isArray(bookmark.first_comment_links)
+      ? bookmark.first_comment_links.length
+      : 0
+  };
+}
+
+function reportBackgroundStage(stage, details = {}, options = {}) {
+  const level = options.level || "info";
+  const shouldEmit = options.emit === true;
+  const entry = {
+    ts: new Date().toISOString(),
+    stage,
+    ...details
+  };
+
+  if (level === "error") {
+    logError(stage, entry);
+  } else if (level === "warn") {
+    logWarn(stage, entry);
+  } else {
+    logInfo(stage, entry);
+  }
+
+  if (shouldEmit) {
+    safeSendMessage({
+      type: level === "warn" || level === "error" ? "SYNC_ERROR" : "SYNC_PROGRESS",
+      payload: {
+        stage,
+        debug: true,
+        ...details
+      }
+    });
+  }
+
+  return entry;
+}
+
+if (typeof self !== "undefined" && typeof self.addEventListener === "function") {
+  self.addEventListener("error", (event) => {
+    reportAsyncError("service_worker_error", {
+      message: event?.message || "unknown_error",
+      filename: event?.filename || "",
+      lineno: typeof event?.lineno === "number" ? event.lineno : 0,
+      colno: typeof event?.colno === "number" ? event.colno : 0
+    });
+  });
+
+  self.addEventListener("unhandledrejection", (event) => {
+    reportAsyncError("service_worker_unhandled_rejection", event?.reason);
+  });
+}
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -184,6 +375,257 @@ function sanitizeAbsoluteUrl(value) {
   return parsed ? parsed.toString() : "";
 }
 
+function normalizeForLookup(value) {
+  return cleanText(value)
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function getBookmarkText(bookmark) {
+  if (!bookmark || typeof bookmark !== "object") {
+    return "";
+  }
+
+  if (typeof bookmark.text === "string") {
+    return bookmark.text;
+  }
+
+  if (typeof bookmark.text_content === "string") {
+    return bookmark.text_content;
+  }
+
+  return "";
+}
+
+function getTweetIdForBookmark(bookmark) {
+  const directTweetId = cleanText(bookmark && bookmark.tweet_id);
+  if (/^\d+$/.test(directTweetId)) {
+    return directTweetId;
+  }
+
+  const sourceUrl = sanitizeAbsoluteUrl(bookmark && bookmark.source_url);
+  const match = sourceUrl.match(/\/status\/(\d+)/);
+  return match ? match[1] : "";
+}
+
+function buildDetailLookupUrl(bookmark) {
+  const tweetId = getTweetIdForBookmark(bookmark);
+  if (!tweetId) {
+    return "";
+  }
+
+  const sourceUrl = sanitizeAbsoluteUrl(bookmark && bookmark.source_url);
+  const parsed = parseUrlSafe(sourceUrl);
+
+  if (parsed && /(^|\.)x\.com$|(^|\.)twitter\.com$/i.test(parsed.hostname)) {
+    parsed.protocol = "https:";
+    parsed.hostname = "x.com";
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString();
+  }
+
+  return `https://x.com/i/web/status/${tweetId}`;
+}
+
+function trimLookupCache(cache, maxSize) {
+  while (cache.size > maxSize) {
+    const oldestKey = cache.keys().next().value;
+    if (typeof oldestKey === "undefined") {
+      break;
+    }
+    cache.delete(oldestKey);
+  }
+}
+
+function cacheFirstCommentLinks(cacheKey, links) {
+  const normalizedLinks = uniqueUrls(links);
+  firstCommentLookupCache.set(cacheKey, normalizedLinks);
+  trimLookupCache(firstCommentLookupCache, FIRST_COMMENT_LOOKUP_CACHE_MAX);
+  return normalizedLinks.slice();
+}
+
+function shouldAttemptFirstCommentLookup(bookmark) {
+  if (!bookmark || typeof bookmark !== "object") {
+    return false;
+  }
+
+  if (uniqueUrls(bookmark.first_comment_links).length > 0) {
+    return false;
+  }
+
+  if (!getTweetIdForBookmark(bookmark)) {
+    return false;
+  }
+
+  const normalizedText = normalizeForLookup(getBookmarkText(bookmark));
+  if (!normalizedText) {
+    return false;
+  }
+
+  if (FIRST_COMMENT_CUE_RE.test(normalizedText)) {
+    return true;
+  }
+
+  return DOWNWARD_CUE_RE.test(normalizedText) && RESOURCE_HINT_RE.test(normalizedText);
+}
+
+async function waitForTabComplete(tabId, timeoutMs = DETAIL_LOOKUP_TIMEOUT_MS) {
+  const existingTab = await chrome.tabs.get(tabId);
+  if (existingTab && existingTab.status === "complete") {
+    return existingTab;
+  }
+
+  return new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(handleUpdated);
+      reject(new Error("detail_tab_timeout"));
+    }, timeoutMs);
+
+    function handleUpdated(updatedTabId, changeInfo, tab) {
+      if (updatedTabId !== tabId || changeInfo.status !== "complete") {
+        return;
+      }
+      clearTimeout(timeoutId);
+      chrome.tabs.onUpdated.removeListener(handleUpdated);
+      resolve(tab);
+    }
+
+    chrome.tabs.onUpdated.addListener(handleUpdated);
+  });
+}
+
+async function sendDetailLookupMessage(tabId, tweetId) {
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= DETAIL_LOOKUP_MESSAGE_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      const response = await chrome.tabs.sendMessage(tabId, {
+        type: "EXTRACT_FIRST_COMMENT_LINKS",
+        payload: { tweetId }
+      });
+
+      if (response && response.ok) {
+        return {
+          links: uniqueUrls(response.links),
+          meta: response.meta && typeof response.meta === "object"
+            ? response.meta
+            : null
+        };
+      }
+
+      const responseError = cleanText(response && response.error);
+      const shouldRetry =
+        attempt < DETAIL_LOOKUP_MESSAGE_MAX_ATTEMPTS &&
+        (!response ||
+          response.retryable === true ||
+          responseError === "detail_tweet_not_found" ||
+          responseError === "detail_first_comment_links_not_found");
+
+      if (!shouldRetry) {
+        return {
+          links: [],
+          meta: null
+        };
+      }
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error || "");
+      const shouldRetry =
+        attempt < DETAIL_LOOKUP_MESSAGE_MAX_ATTEMPTS &&
+        /Receiving end does not exist|Could not establish connection|message port closed/i.test(
+          message
+        );
+
+      if (!shouldRetry) {
+        throw error;
+      }
+    }
+
+    await sleep(DETAIL_LOOKUP_MESSAGE_DELAY_MS);
+  }
+
+  if (lastError) {
+    throw lastError;
+  }
+
+  return {
+    links: [],
+    meta: null
+  };
+}
+
+async function closeTabQuietly(tabId) {
+  if (typeof tabId !== "number") {
+    return;
+  }
+
+  try {
+    await chrome.tabs.remove(tabId);
+  } catch (_error) {
+    // The tab may already be closed.
+  }
+}
+
+async function extractFirstCommentLinksViaDetailTab(bookmark, context = {}) {
+  const tweetId = getTweetIdForBookmark(bookmark);
+  const detailUrl = buildDetailLookupUrl(bookmark);
+  const traceId = cleanText(context.traceId || "");
+
+  if (!tweetId || !detailUrl) {
+    return [];
+  }
+
+  const cacheKey = tweetId;
+  if (firstCommentLookupCache.has(cacheKey)) {
+    return firstCommentLookupCache.get(cacheKey).slice();
+  }
+
+  let lookupTabId = null;
+
+  try {
+    reportBackgroundStage("bg_first_comment_lookup_started", {
+      traceId,
+      tweetId,
+      detailUrl
+    });
+    const lookupTab = await chrome.tabs.create({
+      url: detailUrl,
+      active: false
+    });
+    lookupTabId = typeof lookupTab?.id === "number" ? lookupTab.id : null;
+
+    if (lookupTabId === null) {
+      throw new Error("detail_tab_create_failed");
+    }
+
+    await waitForTabComplete(lookupTabId, DETAIL_LOOKUP_TIMEOUT_MS);
+    const lookupResult = await sendDetailLookupMessage(lookupTabId, tweetId);
+    const links = Array.isArray(lookupResult?.links) ? lookupResult.links : [];
+    reportBackgroundStage("bg_first_comment_lookup_completed", {
+      traceId,
+      tweetId,
+      foundLinks: links.length,
+      detailMeta: lookupResult?.meta || null
+    });
+    return cacheFirstCommentLinks(cacheKey, links);
+  } catch (error) {
+    reportBackgroundStage("bg_first_comment_lookup_failed", {
+      traceId,
+      tweetId,
+      detailUrl,
+      error: extractErrorMessage(error) || "unknown_error",
+      raw: safeJsonStringify(error, 500)
+    }, {
+      level: "warn"
+    });
+    return [];
+  } finally {
+    await closeTabQuietly(lookupTabId);
+  }
+}
+
 function isShortenerUrl(value) {
   const parsed = parseUrlSafe(value);
   return Boolean(parsed && SHORTENER_HOST_RE.test(parsed.hostname));
@@ -298,9 +740,10 @@ function replaceResolvedUrlsInText(text, mappings) {
   return output;
 }
 
-async function prepareBookmarksForDelivery(bookmarks) {
+async function prepareBookmarksForDelivery(bookmarks, context = {}) {
   const items = Array.isArray(bookmarks) ? bookmarks : [];
   const prepared = [];
+  const traceId = cleanText(context.traceId || "");
 
   for (const bookmark of items) {
     if (!bookmark || typeof bookmark !== "object") {
@@ -308,19 +751,30 @@ async function prepareBookmarksForDelivery(bookmarks) {
       continue;
     }
 
+    let firstCommentLinksRaw = uniqueUrls(bookmark.first_comment_links);
+
+    if (firstCommentLinksRaw.length === 0 && shouldAttemptFirstCommentLookup(bookmark)) {
+      firstCommentLinksRaw = await extractFirstCommentLinksViaDetailTab(bookmark, {
+        traceId
+      });
+    }
+
     const rawLinks = uniqueUrls([
       ...(Array.isArray(bookmark.links) ? bookmark.links : []),
-      ...(Array.isArray(bookmark.first_comment_links) ? bookmark.first_comment_links : [])
+      ...firstCommentLinksRaw
     ]);
 
     if (rawLinks.length === 0) {
-      prepared.push(bookmark);
+      prepared.push({
+        ...bookmark,
+        first_comment_links: firstCommentLinksRaw
+      });
       continue;
     }
 
     const resolved = await resolveUrls(rawLinks);
     const firstCommentLinks = uniqueUrls(
-      (Array.isArray(bookmark.first_comment_links) ? bookmark.first_comment_links : []).map(
+      firstCommentLinksRaw.map(
         (url) =>
           resolved.mappings.find((entry) => entry.original === sanitizeAbsoluteUrl(url))?.resolved ||
           url
@@ -354,7 +808,26 @@ async function prepareBookmarksForDelivery(bookmarks) {
 async function postBatch(queueItem) {
   const settings = await getSettings();
   const endpoint = `${sanitizeBaseUrl(settings.apiBaseUrl)}/api/bookmarks/batch`;
-  const preparedBookmarks = await prepareBookmarksForDelivery(queueItem.bookmarks);
+  reportBackgroundStage("bg_post_batch_started", {
+    traceId: cleanText(queueItem.traceId || ""),
+    queueItemId: cleanText(queueItem.id || ""),
+    batchIndex: Number(queueItem.batchIndex) || 0,
+    bookmarkCount: Array.isArray(queueItem.bookmarks) ? queueItem.bookmarks.length : 0
+  }, {
+    emit: true
+  });
+
+  const preparedBookmarks = await prepareBookmarksForDelivery(queueItem.bookmarks, {
+    traceId: queueItem.traceId
+  });
+
+  reportBackgroundStage("bg_post_batch_prepared", {
+    traceId: cleanText(queueItem.traceId || ""),
+    queueItemId: cleanText(queueItem.id || ""),
+    bookmarkCount: preparedBookmarks.length,
+    firstBookmark: buildBookmarkDebugSnapshot(preparedBookmarks[0])
+  });
+
   const payload = {
     user_id: sanitizeUserId(queueItem.userId || settings.userId),
     sync_id: queueItem.syncId,
@@ -372,6 +845,15 @@ async function postBatch(queueItem) {
 
   if (!response.ok) {
     const errorText = await response.text();
+    reportBackgroundStage("bg_post_batch_http_error", {
+      traceId: cleanText(queueItem.traceId || ""),
+      queueItemId: cleanText(queueItem.id || ""),
+      status: response.status,
+      errorPreview: errorText.slice(0, 400)
+    }, {
+      level: "warn",
+      emit: true
+    });
     throw new Error(`HTTP ${response.status}: ${errorText.slice(0, 400)}`);
   }
 
@@ -393,6 +875,16 @@ async function flushQueue() {
       let delivered = false;
       let attemptsThisRun = 0;
 
+       reportBackgroundStage("bg_flush_batch_started", {
+        traceId: cleanText(current.traceId || ""),
+        queueItemId: cleanText(current.id || ""),
+        batchIndex: Number(current.batchIndex) || 0,
+        queuedBookmarks: Array.isArray(current.bookmarks) ? current.bookmarks.length : 0,
+        attemptsSoFar: current.attempts
+      }, {
+        emit: true
+      });
+
       while (!delivered && attemptsThisRun < MAX_RETRIES) {
         try {
           const backendResult = await postBatch(current);
@@ -403,6 +895,7 @@ async function flushQueue() {
           state.counters.delivered += (current.bookmarks || []).length;
           await recordActivity({
             stage: "ingesta_confirmada",
+            traceId: current.traceId || null,
             syncId: current.syncId,
             batchIndex: current.batchIndex,
             pendingQueue: state.queue.length,
@@ -418,22 +911,36 @@ async function flushQueue() {
             type: "SYNC_PROGRESS",
             payload: {
               stage: "ingesta_confirmada",
+              traceId: current.traceId || null,
               syncId: current.syncId,
               batchIndex: current.batchIndex,
               pendingQueue: state.queue.length,
-              backendResult
+              backendResult,
+              queueItemId: current.id || null
             }
           });
         } catch (error) {
           attemptsThisRun += 1;
           current.attempts += 1;
-          current.lastError = error instanceof Error ? error.message : String(error);
+          current.lastError = extractErrorMessage(error) || safeJsonStringify(error, 500);
           await persistQueue();
+
+          reportBackgroundStage("bg_flush_attempt_failed", {
+            traceId: current.traceId || null,
+            queueItemId: current.id || null,
+            batchIndex: current.batchIndex,
+            attempt: current.attempts,
+            error: current.lastError
+          }, {
+            level: "warn",
+            emit: true
+          });
 
           if (attemptsThisRun >= MAX_RETRIES) {
             state.counters.failed += 1;
             await recordActivity({
               stage: "ingesta_fallida",
+              traceId: current.traceId || null,
               syncId: current.syncId,
               batchIndex: current.batchIndex,
               pendingQueue: state.queue.length,
@@ -448,11 +955,13 @@ async function flushQueue() {
               type: "SYNC_ERROR",
               payload: {
                 stage: "ingesta_fallida",
+                traceId: current.traceId || null,
                 syncId: current.syncId,
                 batchIndex: current.batchIndex,
                 pendingQueue: state.queue.length,
                 attempts: current.attempts,
-                error: current.lastError
+                error: current.lastError,
+                queueItemId: current.id || null
               }
             });
             break;
@@ -464,10 +973,12 @@ async function flushQueue() {
             type: "SYNC_PROGRESS",
             payload: {
               stage: "reintento_programado",
+              traceId: current.traceId || null,
               syncId: current.syncId,
               batchIndex: current.batchIndex,
               attempt: current.attempts,
-              retryInMs: waitMs
+              retryInMs: waitMs,
+              queueItemId: current.id || null
             }
           });
           await sleep(waitMs);
@@ -483,18 +994,38 @@ async function flushQueue() {
   }
 }
 
+function scheduleFlushQueue(reason) {
+  void flushQueue().catch((error) => {
+    reportAsyncError(`flush_queue_failed:${reason}`, error);
+  });
+}
+
+function bootstrapQueue(reason) {
+  void (async () => {
+    await loadQueueState();
+    await flushQueue();
+  })().catch((error) => {
+    reportAsyncError(`bootstrap_failed:${reason}`, error);
+  });
+}
+
 async function enqueueBatch(payload) {
   if (!payload || !Array.isArray(payload.bookmarks) || payload.bookmarks.length === 0) {
     throw new Error("payload.bookmarks must be a non-empty array");
   }
 
   await loadQueueState();
+  const traceId = cleanText(payload.traceId || "") || `bg-${Date.now().toString(36)}`;
+  const queueItemId = `${payload.syncId || "sync"}-${payload.batchIndex || 0}-${Date.now()}`;
 
   state.queue.push({
-    id: `${payload.syncId || "sync"}-${payload.batchIndex || 0}-${Date.now()}`,
+    id: queueItemId,
     syncId: payload.syncId || null,
+    traceId,
     batchIndex: Number(payload.batchIndex) || 0,
     userId: payload.userId || null,
+    source: cleanText(payload.source || ""),
+    pageUrl: cleanText(payload.pageUrl || ""),
     bookmarks: payload.bookmarks,
     attempts: 0,
     queuedAt: new Date().toISOString()
@@ -506,34 +1037,45 @@ async function enqueueBatch(payload) {
   const firstTweetId = (payload.bookmarks[0] && payload.bookmarks[0].tweet_id) || null;
   await recordActivity({
     stage: "lote_encolado",
+    traceId,
     syncId: payload.syncId || null,
     batchIndex: Number(payload.batchIndex) || 0,
     pendingQueue: state.queue.length,
     count: payload.bookmarks.length,
     tweetId: firstTweetId
   });
-  logInfo("batch queued", {
-    syncId: payload.syncId,
-    batchIndex: payload.batchIndex,
-    count: payload.bookmarks.length,
-    pendingQueue: state.queue.length
+  reportBackgroundStage("bg_enqueue_received", {
+    traceId,
+    queueItemId,
+    syncId: payload.syncId || null,
+    batchIndex: Number(payload.batchIndex) || 0,
+    source: cleanText(payload.source || ""),
+    pageUrl: cleanText(payload.pageUrl || ""),
+    pendingQueue: state.queue.length,
+    firstBookmark: buildBookmarkDebugSnapshot(payload.bookmarks[0])
+  }, {
+    emit: true
   });
 
   safeSendMessage({
     type: "SYNC_PROGRESS",
     payload: {
       stage: "lote_encolado",
+      traceId,
       syncId: payload.syncId || null,
       batchIndex: Number(payload.batchIndex) || 0,
-      pendingQueue: state.queue.length
+      pendingQueue: state.queue.length,
+      queueItemId
     }
   });
 
-  void flushQueue();
+  scheduleFlushQueue("enqueue_batch");
 
   return {
     ok: true,
-    pendingQueue: state.queue.length
+    pendingQueue: state.queue.length,
+    traceId,
+    queueItemId
   };
 }
 
@@ -556,12 +1098,14 @@ async function updateSettings(payload) {
 }
 
 chrome.runtime.onInstalled.addListener(() => {
-  void ensureDefaults();
-  void loadQueueState().then(() => flushQueue());
+  void ensureDefaults().catch((error) => {
+    reportAsyncError("ensure_defaults_failed:onInstalled", error);
+  });
+  bootstrapQueue("onInstalled");
 });
 
 chrome.runtime.onStartup.addListener(() => {
-  void loadQueueState().then(() => flushQueue());
+  bootstrapQueue("onStartup");
 });
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -577,6 +1121,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     }
 
     if (message.type === "INGEST_ENQUEUE") {
+      reportBackgroundStage("bg_message_received", {
+        traceId: cleanText(message?.payload?.traceId || ""),
+        type: message.type,
+        batchIndex: Number(message?.payload?.batchIndex) || 0,
+        bookmarkCount: Array.isArray(message?.payload?.bookmarks)
+          ? message.payload.bookmarks.length
+          : 0
+      });
       const result = await enqueueBatch(message.payload || {});
       sendResponse(result);
       return;
@@ -639,11 +1191,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   })().catch((error) => {
     sendResponse({
       ok: false,
-      error: error instanceof Error ? error.message : String(error)
+      error: extractErrorMessage(error) || "unknown_error",
+      traceId: cleanText(message?.payload?.traceId || "")
     });
   });
 
   return true;
 });
 
-void loadQueueState().then(() => flushQueue());
+bootstrapQueue("top_level");

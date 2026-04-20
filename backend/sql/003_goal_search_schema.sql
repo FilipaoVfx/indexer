@@ -103,6 +103,62 @@ AS $$
   );
 $$;
 
+CREATE OR REPLACE FUNCTION public.is_internal_x_domain(p_url text)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+SET search_path = pg_catalog, public
+AS $$
+  SELECT coalesce(public.extract_domain(p_url), '') = ANY (
+    ARRAY['x.com', 'twitter.com']::text[]
+  );
+$$;
+
+CREATE OR REPLACE FUNCTION public.pick_bookmark_canonical_url(
+  p_source_url text,
+  p_links text[],
+  p_first_comment_links text[] DEFAULT '{}'::text[]
+)
+RETURNS text
+LANGUAGE sql
+IMMUTABLE
+SET search_path = pg_catalog, public
+AS $$
+  WITH candidates AS (
+    SELECT 1 AS priority, ord::integer AS ord, nullif(trim(url), '') AS url
+    FROM unnest(coalesce(p_first_comment_links, '{}'::text[])) WITH ORDINALITY AS t(url, ord)
+
+    UNION ALL
+
+    SELECT 2 AS priority, ord::integer AS ord, nullif(trim(url), '') AS url
+    FROM unnest(coalesce(p_links, '{}'::text[])) WITH ORDINALITY AS t(url, ord)
+
+    UNION ALL
+
+    SELECT 3 AS priority, 1 AS ord, nullif(trim(coalesce(p_source_url, '')), '') AS url
+  )
+  SELECT coalesce(
+    (
+      SELECT c.url
+      FROM candidates c
+      WHERE c.url IS NOT NULL
+        AND public.extract_domain(c.url) IS NOT NULL
+        AND NOT public.is_internal_x_domain(c.url)
+      ORDER BY c.priority, c.ord
+      LIMIT 1
+    ),
+    (
+      SELECT c.url
+      FROM candidates c
+      WHERE c.url IS NOT NULL
+        AND public.extract_domain(c.url) IS NOT NULL
+      ORDER BY c.priority, c.ord
+      LIMIT 1
+    ),
+    nullif(trim(coalesce(p_source_url, '')), '')
+  );
+$$;
+
 CREATE OR REPLACE FUNCTION public.extract_repo_slugs(
   p_text text,
   p_source_url text,
@@ -471,23 +527,38 @@ BEGIN
       b.author_name,
       b.source_url,
       b.links,
+      b.first_comment_links,
       b.media,
       b.created_at,
       b.text_content,
-      coalesce(
-        nullif(b.source_url, ''),
-        CASE
-          WHEN cardinality(coalesce(b.links, '{}'::text[])) > 0 THEN b.links[1]
-          ELSE NULL
-        END
+      public.pick_bookmark_canonical_url(
+        b.source_url,
+        b.links,
+        b.first_comment_links
       ) AS canonical_url,
-      public.extract_repo_slugs(b.text_content, b.source_url, b.links) AS repo_slugs,
+      public.extract_repo_slugs(
+        b.text_content,
+        public.pick_bookmark_canonical_url(
+          b.source_url,
+          b.links,
+          b.first_comment_links
+        ),
+        coalesce(b.links, '{}'::text[]) || coalesce(b.first_comment_links, '{}'::text[])
+      ) AS repo_slugs,
       public.extract_search_terms(
         concat_ws(
           ' ',
           coalesce(b.text_content, ''),
           coalesce(array_to_string(b.links, ' '), ''),
-          coalesce(b.source_url, ''),
+          coalesce(array_to_string(b.first_comment_links, ' '), ''),
+          coalesce(
+            public.pick_bookmark_canonical_url(
+              b.source_url,
+              b.links,
+              b.first_comment_links
+            ),
+            ''
+          ),
           coalesce(b.author_username, ''),
           coalesce(b.author_name, '')
         ),
@@ -666,14 +737,27 @@ BEGIN
       entity_type
     FROM raw_candidates
     WHERE nullif(trim(entity_name), '') IS NOT NULL
+  ),
+  deduped_candidates AS (
+    SELECT
+      cc.user_id,
+      cc.normalized_name,
+      cc.entity_type,
+      (array_agg(cc.entity_name ORDER BY char_length(cc.entity_name) DESC, cc.entity_name))[1] AS entity_name
+    FROM cleaned_candidates cc
+    WHERE nullif(cc.normalized_name, '') IS NOT NULL
+    GROUP BY
+      cc.user_id,
+      cc.normalized_name,
+      cc.entity_type
   )
   INSERT INTO public.entities (user_id, name, normalized_name, entity_type)
-  SELECT DISTINCT
-    cc.user_id,
-    cc.entity_name,
-    cc.normalized_name,
-    cc.entity_type
-  FROM cleaned_candidates cc
+  SELECT
+    dc.user_id,
+    dc.entity_name,
+    dc.normalized_name,
+    dc.entity_type
+  FROM deduped_candidates dc
   ON CONFLICT (user_id, normalized_name, entity_type) DO UPDATE
   SET name = EXCLUDED.name;
 
