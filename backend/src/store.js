@@ -56,6 +56,59 @@ function groupGoalResults(items) {
   };
 }
 
+function extractDbErrorMessage(error) {
+  if (!error) return "";
+  if (typeof error === "string") return error.trim();
+  if (typeof error.message === "string" && error.message.trim()) {
+    return error.message.trim();
+  }
+  return String(error || "").trim();
+}
+
+function isMissingFirstCommentLinksColumnError(error) {
+  const message = extractDbErrorMessage(error).toLowerCase();
+  return (
+    message.includes("first_comment_links") &&
+    (
+      message.includes("schema cache") ||
+      message.includes("column") ||
+      message.includes("could not find") ||
+      message.includes("does not exist")
+    )
+  );
+}
+
+function isMissingBookmarkContextLinksFeatureError(error) {
+  const message = extractDbErrorMessage(error).toLowerCase();
+  return (
+    message.includes("bookmark_context_links") &&
+    (
+      message.includes("schema cache") ||
+      message.includes("relation") ||
+      message.includes("table") ||
+      message.includes("does not exist") ||
+      message.includes("could not find")
+    )
+  );
+}
+
+function isMissingGoalRefreshFunctionError(error) {
+  const message = extractDbErrorMessage(error).toLowerCase();
+  return (
+    message.includes("refresh_goal_search_index") &&
+    (
+      message.includes("does not exist") ||
+      message.includes("schema cache") ||
+      message.includes("function") ||
+      message.includes("could not find")
+    )
+  );
+}
+
+function stripFirstCommentLinks(bookmarks = []) {
+  return bookmarks.map(({ first_comment_links: _ignored, ...bookmark }) => bookmark);
+}
+
 function normalizeContextLinkRows(bookmarks = [], receivedAt) {
   const rows = [];
 
@@ -99,6 +152,11 @@ export class BookmarkStore {
     }
     this.supabase = createClient(config.supabaseUrl, config.supabaseKey);
     this.isReady = false;
+    this.capabilities = {
+      bookmarksFirstCommentLinks: true,
+      bookmarkContextLinks: true,
+      goalRefreshRpc: true
+    };
   }
 
   async init() {
@@ -110,6 +168,10 @@ export class BookmarkStore {
   }
 
   async syncBookmarkContextLinks({ bookmarks, receivedAt }) {
+    if (!this.capabilities.bookmarkContextLinks) {
+      return null;
+    }
+
     const bookmarkIds = [...new Set(
       (Array.isArray(bookmarks) ? bookmarks : [])
         .map((bookmark) => String(bookmark?.id || "").trim())
@@ -127,6 +189,17 @@ export class BookmarkStore {
       .in("bookmark_id", bookmarkIds);
 
     if (deleteError) {
+      if (isMissingBookmarkContextLinksFeatureError(deleteError)) {
+        this.capabilities.bookmarkContextLinks = false;
+        const warning =
+          "Skipping bookmark_context_links sync because the table is not available. " +
+          "Apply backend/sql/005_bookmark_context_links.sql in Supabase to enable first-comment context storage.";
+        console.warn("[store]", warning, {
+          details: extractDbErrorMessage(deleteError)
+        });
+        return warning;
+      }
+
       throw new Error(
         "Failed to clear bookmark context links. " +
           "Apply backend/sql/005_bookmark_context_links.sql first. " +
@@ -146,6 +219,17 @@ export class BookmarkStore {
       });
 
     if (insertError) {
+      if (isMissingBookmarkContextLinksFeatureError(insertError)) {
+        this.capabilities.bookmarkContextLinks = false;
+        const warning =
+          "Skipping bookmark_context_links insert because the table is not available. " +
+          "Apply backend/sql/005_bookmark_context_links.sql in Supabase to enable first-comment context storage.";
+        console.warn("[store]", warning, {
+          details: extractDbErrorMessage(insertError)
+        });
+        return warning;
+      }
+
       throw new Error(
         "Failed to store bookmark context links. " +
           "Apply backend/sql/005_bookmark_context_links.sql first. " +
@@ -154,12 +238,86 @@ export class BookmarkStore {
     }
   }
 
+  async upsertBookmarksWithFallback(bookmarksToUpsert) {
+    let effectiveBookmarks = this.capabilities.bookmarksFirstCommentLinks
+      ? bookmarksToUpsert
+      : stripFirstCommentLinks(bookmarksToUpsert);
+    const warnings = [];
+
+    let { data, error } = await this.supabase
+      .from("bookmarks")
+      .upsert(effectiveBookmarks, { onConflict: "id" })
+      .select("id");
+
+    if (error && this.capabilities.bookmarksFirstCommentLinks && isMissingFirstCommentLinksColumnError(error)) {
+      this.capabilities.bookmarksFirstCommentLinks = false;
+      const warning =
+        "Stored bookmarks without the first_comment_links column because Supabase schema is outdated. " +
+        "Apply backend/sql/004_search_bookmarks_scalable.sql or backend/sql/005_bookmark_context_links.sql.";
+      warnings.push(warning);
+      console.warn("[store]", warning, {
+        details: extractDbErrorMessage(error)
+      });
+
+      effectiveBookmarks = stripFirstCommentLinks(bookmarksToUpsert);
+      ({ data, error } = await this.supabase
+        .from("bookmarks")
+        .upsert(effectiveBookmarks, { onConflict: "id" })
+        .select("id"));
+    }
+
+    if (error) {
+      throw new Error(`Failed to upsert bookmarks: ${extractDbErrorMessage(error)}`);
+    }
+
+    return {
+      data: Array.isArray(data) ? data : [],
+      effectiveBookmarks,
+      warnings
+    };
+  }
+
+  async refreshGoalSearchIndex(userId) {
+    if (!this.capabilities.goalRefreshRpc) {
+      return null;
+    }
+
+    const { error: refreshError } = await this.supabase.rpc(
+      "refresh_goal_search_index",
+      {
+        target_user_id: userId
+      }
+    );
+
+    if (refreshError) {
+      if (isMissingGoalRefreshFunctionError(refreshError)) {
+        this.capabilities.goalRefreshRpc = false;
+        const warning =
+          "Skipping refresh_goal_search_index because the RPC is not available. " +
+          "Apply backend/sql/003_goal_search_schema.sql in Supabase to enable goal search refresh.";
+        console.warn("[store]", warning, {
+          details: extractDbErrorMessage(refreshError)
+        });
+        return warning;
+      }
+
+      throw new Error(
+        "Bookmarks were stored but the goal-search index refresh failed. " +
+          "Apply backend/sql/003_goal_search_schema.sql in Supabase first. " +
+          `Details: ${extractDbErrorMessage(refreshError)}`
+      );
+    }
+
+    return null;
+  }
+
   async upsertBatch({ userId, syncId, bookmarks, receivedAt }) {
     await this.init();
 
     let inserted = 0;
     let updated = 0;
     let ignoredInvalid = 0;
+    const warnings = [];
 
     const bookmarksToUpsert = [];
 
@@ -184,38 +342,28 @@ export class BookmarkStore {
     }
 
     if (bookmarksToUpsert.length > 0) {
-      const { data, error } = await this.supabase
-        .from("bookmarks")
-        .upsert(bookmarksToUpsert, { onConflict: "id" })
-        .select("id");
-
-      if (error) {
-        throw new Error(`Failed to upsert bookmarks: ${error.message}`);
-      }
+      const {
+        data,
+        warnings: upsertWarnings
+      } = await this.upsertBookmarksWithFallback(bookmarksToUpsert);
+      warnings.push(...upsertWarnings);
 
       // Supabase returns the upserted records. 
       // We can distinguish between inserted and updated if we query before, 
       // but for simplicity in a batch we'll count total successes.
       inserted = data.length;
 
-      await this.syncBookmarkContextLinks({
+      const contextWarning = await this.syncBookmarkContextLinks({
         bookmarks: bookmarksToUpsert,
         receivedAt
       });
+      if (contextWarning) {
+        warnings.push(contextWarning);
+      }
 
-      const { error: refreshError } = await this.supabase.rpc(
-        "refresh_goal_search_index",
-        {
-          target_user_id: userId
-        }
-      );
-
-      if (refreshError) {
-        throw new Error(
-          "Bookmarks were stored but the goal-search index refresh failed. " +
-            "Apply backend/sql/003_goal_search_schema.sql in Supabase first. " +
-            `Details: ${refreshError.message}`
-        );
+      const refreshWarning = await this.refreshGoalSearchIndex(userId);
+      if (refreshWarning) {
+        warnings.push(refreshWarning);
       }
     }
 
@@ -229,7 +377,8 @@ export class BookmarkStore {
       inserted,
       updated, // In Supabase upsert, we don't easily distinguish without extra checks
       ignored_invalid: ignoredInvalid,
-      total_stored: totalStored
+      total_stored: totalStored,
+      warnings
     };
   }
 

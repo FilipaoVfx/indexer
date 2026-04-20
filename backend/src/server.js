@@ -29,6 +29,26 @@ function sanitizeUserId(value) {
   return value.trim().slice(0, 120);
 }
 
+function sanitizeTraceId(value) {
+  if (typeof value !== "string") {
+    return "";
+  }
+  return value.trim().slice(0, 160);
+}
+
+function createServerTraceId(prefix = "req") {
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(16).slice(2, 8)}`;
+}
+
+function describeError(error) {
+  return {
+    code: error?.code || "internal_error",
+    message: error?.message || "Unknown error",
+    statusCode: typeof error?.statusCode === "number" ? error.statusCode : 500,
+    stack: typeof error?.stack === "string" ? error.stack : ""
+  };
+}
+
 function clampNumber(value, fallback, minimum, maximum) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) {
@@ -100,6 +120,8 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "POST" && routePath === "/api/bookmarks/batch") {
       const body = await parseJsonBody(req);
+      const traceId = sanitizeTraceId(body.traceId) || createServerTraceId("batch");
+      req.traceId = traceId;
 
       if (!Array.isArray(body.bookmarks)) {
         throw createHttpError(
@@ -131,6 +153,7 @@ const server = http.createServer(async (req, res) => {
 
       sendJson(res, 200, {
         ok: true,
+        trace_id: traceId,
         user_id: userId,
         sync_id: syncId,
         ...summary
@@ -374,17 +397,31 @@ const server = http.createServer(async (req, res) => {
       }
     });
   } catch (error) {
+    const traceId = req.traceId || createServerTraceId("req");
     const statusCode =
       typeof error.statusCode === "number" ? error.statusCode : 500;
     const code = error.code || "internal_error";
     const message =
       statusCode >= 500 ? "Internal server error" : error.message || "Request failed";
+    const detail =
+      statusCode >= 500 && error?.message && error.message !== message
+        ? error.message
+        : null;
+
+    console.error("[backend] request_failed", {
+      trace_id: traceId,
+      method: req.method,
+      route: req.url,
+      error: describeError(error)
+    });
 
     sendJson(res, statusCode, {
       ok: false,
+      trace_id: traceId,
       error: {
         code,
-        message
+        message,
+        ...(detail ? { detail } : {})
       }
     });
   }
