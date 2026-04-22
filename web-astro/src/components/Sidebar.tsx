@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import { fetchHealth } from "../lib/api";
 import { withBase } from "../lib/url-state";
 
-type NavKey = "all" | "recent" | "media" | "links" | "authors" | "repos";
+type NavKey = "all" | "recent" | "media" | "links" | "authors" | "repos" | "readmes";
 
 interface Props {
   current?: NavKey;
@@ -19,6 +19,7 @@ const ITEMS: { key: NavKey; label: string; icon: string; href: string }[] = [
   { key: "links", label: "Con enlaces", icon: "link", href: "/?kind=links" },
   { key: "authors", label: "Autores", icon: "group", href: "/authors" },
   { key: "repos", label: "Repos de GitHub", icon: "hub", href: "/repos" },
+  { key: "readmes", label: "README repos", icon: "description", href: "/readmes" },
 ];
 
 export default function Sidebar({ current = "all" }: Props) {

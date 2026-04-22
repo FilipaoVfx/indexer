@@ -1,6 +1,6 @@
 ---
 interface Props {
-  current?: "all" | "recent" | "media" | "links" | "authors" | "repos";
+  current?: "all" | "recent" | "media" | "links" | "authors" | "repos" | "readmes";
 }
 
 const { current = "all" } = Astro.props;
@@ -10,6 +10,7 @@ const items = [
   { key: "all", label: "Buscar", icon: "search", href: `${base || ""}/` },
   { key: "authors", label: "Autores", icon: "group", href: `${base || ""}/authors` },
   { key: "repos", label: "Repos", icon: "hub", href: `${base || ""}/repos` },
+  { key: "readmes", label: "README", icon: "description", href: `${base || ""}/readmes` },
 ];
 ---
 

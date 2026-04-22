@@ -33,6 +33,31 @@ export interface ParsedQuery {
   };
 }
 
+export interface GithubReadme {
+  repo_slug: string;
+  owner: string;
+  repo: string;
+  repo_url: string;
+  status: "pending" | "ok" | "not_found" | "error";
+  readme_name?: string | null;
+  readme_path?: string | null;
+  readme_html_url?: string | null;
+  readme_download_url?: string | null;
+  content?: string;
+  content_preview?: string;
+  content_chars?: number;
+  content_truncated?: boolean;
+  size_bytes?: number | null;
+  fetched_at?: string | null;
+  last_requested_at?: string | null;
+  error_message?: string | null;
+  error_status?: number | null;
+  updated_at?: string | null;
+  bookmark_count?: number;
+  bookmark_ids?: string[];
+  user_ids?: string[];
+}
+
 export interface SearchItem {
   id?: string | number;
   user_id?: string;
@@ -59,6 +84,7 @@ export interface SearchItem {
   difficulty?: string;
   canonical_url?: string;
   repo_slugs?: string[];
+  github_readmes?: GithubReadme[];
   why_this_result?: string[];
   score_breakdown?: Record<string, number | null> | null;
 }
@@ -500,4 +526,40 @@ export async function fetchUsers(limit = 100): Promise<UserSummary[]> {
   });
   const data = await parseJsonOrThrow(res);
   return Array.isArray(data?.items) ? data.items : [];
+}
+
+export interface GithubReadmesResponse {
+  ok?: boolean;
+  items: GithubReadme[];
+  total: number;
+  warning?: string | null;
+}
+
+export async function fetchGithubReadmes(params: {
+  user_id?: string;
+  q?: string;
+  repo?: string;
+  limit?: number;
+  offset?: number;
+  include_content?: boolean;
+} = {}): Promise<GithubReadmesResponse> {
+  const query = new URLSearchParams();
+  query.set("limit", String(params.limit ?? 50));
+  query.set("offset", String(params.offset ?? 0));
+  query.set("include_content", params.include_content === false ? "false" : "true");
+  if (params.user_id) query.set("user_id", params.user_id);
+  if (params.q) query.set("q", params.q);
+  if (params.repo) query.set("repo", params.repo);
+
+  const res = await fetch(`${API_BASE}/api/github-readmes?${query.toString()}`, {
+    headers: { Accept: "application/json" },
+  });
+  const data = await parseJsonOrThrow(res);
+
+  return {
+    ok: data.ok,
+    items: Array.isArray(data.items) ? data.items : [],
+    total: Number(data.total || 0),
+    warning: data.warning || null,
+  };
 }

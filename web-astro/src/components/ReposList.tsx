@@ -140,7 +140,7 @@ function getPageWindow(currentPage: number, totalPages: number): Array<number | 
 }
 
 function buildCollectionHref(
-  path: "/authors" | "/repos",
+  path: "/authors" | "/repos" | "/readmes",
   user: string,
   q: string,
   pageSize: number
@@ -288,6 +288,12 @@ export default function ReposList() {
             className="rounded-full bg-primary px-3 py-1.5 text-on-primary"
           >
             Repos
+          </a>
+          <a
+            href={buildCollectionHref("/readmes", user, q, pageSize)}
+            className="rounded-full bg-surface-container-high px-3 py-1.5 text-on-surface-variant transition-colors hover:text-primary"
+          >
+            README
           </a>
         </nav>
 

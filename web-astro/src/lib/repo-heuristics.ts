@@ -16,6 +16,100 @@
  */
 import { collectItemUrls, extractGithubRepos, type SearchItem } from "./api";
 
+/* ------------------------------------------------------------------ */
+/* Author ↔ repo index                                                  */
+/* ------------------------------------------------------------------ */
+
+export interface AuthorRepoRef {
+  slug: string;
+  count: number;
+  latest_date: string | null;
+}
+
+export interface AuthorRepoEntry {
+  /** Stable lookup key (handle when present, otherwise display name). */
+  key: string;
+  name: string;
+  handle: string | null;
+  /** slug → { slug, count, latest_date } */
+  repos: Map<string, AuthorRepoRef>;
+  /** Sum of per-repo counts (total mentions, >= repos.size). */
+  totalMentions: number;
+}
+
+/**
+ * Build a Map<authorKey, AuthorRepoEntry> scanning each item's GitHub repo
+ * references. One item can contribute multiple repos. Authors that never
+ * mentioned a GitHub repo are excluded so the leaderboard is concise.
+ */
+export function indexAuthorRepos(items: SearchItem[]): Map<string, AuthorRepoEntry> {
+  const out = new Map<string, AuthorRepoEntry>();
+
+  for (const item of items) {
+    const handle = item.author_username || null;
+    const name = item.author_name || handle || "anonymous";
+    const key = handle || name;
+
+    const repos = extractGithubRepos([item]);
+    if (repos.size === 0) continue;
+
+    let entry = out.get(key);
+    if (!entry) {
+      entry = {
+        key,
+        name,
+        handle,
+        repos: new Map<string, AuthorRepoRef>(),
+        totalMentions: 0,
+      };
+      out.set(key, entry);
+    }
+
+    for (const r of repos.values()) {
+      const slug = `${r.owner}/${r.repo}`;
+      const prev = entry.repos.get(slug);
+      if (prev) {
+        prev.count += 1;
+        if (
+          item.created_at &&
+          (!prev.latest_date ||
+            new Date(item.created_at) > new Date(prev.latest_date))
+        ) {
+          prev.latest_date = item.created_at;
+        }
+      } else {
+        entry.repos.set(slug, {
+          slug,
+          count: 1,
+          latest_date: item.created_at || null,
+        });
+      }
+      entry.totalMentions += 1;
+    }
+  }
+
+  return out;
+}
+
+/**
+ * Top-N authors by unique repos contributed (desc), tie-breaker = total
+ * mentions desc, then name asc.
+ */
+export function topAuthorsByRepos(
+  index: Map<string, AuthorRepoEntry>,
+  limit = 10
+): AuthorRepoEntry[] {
+  return [...index.values()]
+    .sort((a, b) => {
+      const bySize = b.repos.size - a.repos.size;
+      if (bySize !== 0) return bySize;
+      const byMentions = b.totalMentions - a.totalMentions;
+      if (byMentions !== 0) return byMentions;
+      return a.name.localeCompare(b.name);
+    })
+    .slice(0, limit);
+}
+
 export type MentionIntent =
   | "build"
   | "learn"

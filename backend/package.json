@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
-    "migrate:data": "node src/migrate.js"
+    "migrate:data": "node src/migrate.js",
+    "readmes:github": "node src/fetch-github-readmes.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.103.0",

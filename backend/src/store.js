@@ -6,6 +6,12 @@ import {
   resolveShortenerUrls,
   rewriteLinksWithResolved
 } from "./url-resolver.js";
+import {
+  extractGithubRepoSlugsFromBookmarkLike,
+  fetchGithubReadmeRow,
+  mapGithubReadmeRow,
+  splitGithubRepoSlug
+} from "./github-readmes.js";
 
 function clampNumber(value, fallback, minimum, maximum) {
   const parsed = Number(value);
@@ -152,6 +158,23 @@ function isMissingGoalRefreshFunctionError(error) {
   );
 }
 
+function isMissingGithubReadmesFeatureError(error) {
+  const message = extractDbErrorMessage(error).toLowerCase();
+  return (
+    (
+      message.includes("github_repo_readmes") ||
+      message.includes("bookmark_github_repos")
+    ) &&
+    (
+      message.includes("schema cache") ||
+      message.includes("relation") ||
+      message.includes("table") ||
+      message.includes("does not exist") ||
+      message.includes("could not find")
+    )
+  );
+}
+
 function stripFirstCommentLinks(bookmarks = []) {
   return bookmarks.map(({ first_comment_links: _ignored, ...bookmark }) => bookmark);
 }
@@ -198,11 +221,13 @@ export class BookmarkStore {
       );
     }
     this.supabase = createClient(config.supabaseUrl, config.supabaseKey);
+    this.config = config;
     this.isReady = false;
     this.capabilities = {
       bookmarksFirstCommentLinks: true,
       bookmarkContextLinks: true,
-      goalRefreshRpc: true
+      goalRefreshRpc: true,
+      githubReadmes: true
     };
   }
 
@@ -416,12 +441,218 @@ export class BookmarkStore {
     return null;
   }
 
+  missingGithubReadmesWarning(error) {
+    this.capabilities.githubReadmes = false;
+    const warning =
+      "Skipping GitHub README extraction because the Supabase schema is not available. " +
+      "Apply backend/sql/007_github_repo_readmes.sql to enable production README caching.";
+    console.warn("[store]", warning, {
+      details: extractDbErrorMessage(error)
+    });
+    return warning;
+  }
+
+  async ensureGithubReadmeRows(repoSlugs, receivedAt) {
+    const rows = [...new Set(repoSlugs)]
+      .map((repoSlug) => splitGithubRepoSlug(repoSlug))
+      .filter(Boolean)
+      .map((repo) => ({
+        ...repo,
+        last_requested_at: receivedAt,
+        updated_at: receivedAt
+      }));
+
+    if (rows.length === 0) {
+      return null;
+    }
+
+    const { error } = await this.supabase
+      .from("github_repo_readmes")
+      .upsert(rows, { onConflict: "repo_slug" });
+
+    if (error) {
+      if (isMissingGithubReadmesFeatureError(error)) {
+        return this.missingGithubReadmesWarning(error);
+      }
+      throw new Error(`Failed to prepare GitHub README rows: ${extractDbErrorMessage(error)}`);
+    }
+
+    return null;
+  }
+
+  async syncBookmarkGithubRepos({ bookmarks, receivedAt }) {
+    if (!this.capabilities.githubReadmes) {
+      return { repoSlugs: [], warning: null };
+    }
+
+    const bookmarkIds = [...new Set(
+      (Array.isArray(bookmarks) ? bookmarks : [])
+        .map((bookmark) => String(bookmark?.id || "").trim())
+        .filter(Boolean)
+    )];
+
+    if (bookmarkIds.length === 0) {
+      return { repoSlugs: [], warning: null };
+    }
+
+    const rows = [];
+    const repoSlugs = new Set();
+
+    for (const bookmark of bookmarks) {
+      const bookmarkId = String(bookmark?.id || "").trim();
+      const userId = String(bookmark?.user_id || "").trim();
+      if (!bookmarkId || !userId) continue;
+
+      const bookmarkRepoSlugs = extractGithubRepoSlugsFromBookmarkLike(bookmark);
+      for (const repoSlug of bookmarkRepoSlugs) {
+        repoSlugs.add(repoSlug);
+        rows.push({
+          bookmark_id: bookmarkId,
+          user_id: userId,
+          repo_slug: repoSlug,
+          created_at: receivedAt
+        });
+      }
+    }
+
+    const ensureWarning = await this.ensureGithubReadmeRows([...repoSlugs], receivedAt);
+    if (ensureWarning) {
+      return { repoSlugs: [], warning: ensureWarning };
+    }
+
+    const { error: deleteError } = await this.supabase
+      .from("bookmark_github_repos")
+      .delete()
+      .in("bookmark_id", bookmarkIds);
+
+    if (deleteError) {
+      if (isMissingGithubReadmesFeatureError(deleteError)) {
+        return {
+          repoSlugs: [],
+          warning: this.missingGithubReadmesWarning(deleteError)
+        };
+      }
+      throw new Error(`Failed to clear bookmark GitHub repo links: ${extractDbErrorMessage(deleteError)}`);
+    }
+
+    if (rows.length > 0) {
+      const { error: insertError } = await this.supabase
+        .from("bookmark_github_repos")
+        .upsert(rows, { onConflict: "bookmark_id,repo_slug" });
+
+      if (insertError) {
+        if (isMissingGithubReadmesFeatureError(insertError)) {
+          return {
+            repoSlugs: [],
+            warning: this.missingGithubReadmesWarning(insertError)
+          };
+        }
+        throw new Error(`Failed to store bookmark GitHub repo links: ${extractDbErrorMessage(insertError)}`);
+      }
+    }
+
+    return { repoSlugs: [...repoSlugs], warning: null };
+  }
+
+  shouldFetchGithubReadme(row) {
+    if (!row || row.status !== "ok" || !row.fetched_at) {
+      return true;
+    }
+
+    const ttlMs = (Number(this.config.githubReadmeTtlHours) || 168) * 60 * 60 * 1000;
+    return Date.now() - new Date(row.fetched_at).getTime() > ttlMs;
+  }
+
+  async fetchGithubReadmesForSlugs(repoSlugs) {
+    if (!this.capabilities.githubReadmes || repoSlugs.length === 0) {
+      return { fetched: 0, skipped: 0, warning: null };
+    }
+
+    const uniqueSlugs = [...new Set(repoSlugs)].filter(Boolean);
+    const { data, error } = await this.supabase
+      .from("github_repo_readmes")
+      .select("repo_slug,status,fetched_at")
+      .in("repo_slug", uniqueSlugs);
+
+    if (error) {
+      if (isMissingGithubReadmesFeatureError(error)) {
+        return {
+          fetched: 0,
+          skipped: 0,
+          warning: this.missingGithubReadmesWarning(error)
+        };
+      }
+      throw new Error(`Failed to inspect GitHub README cache: ${extractDbErrorMessage(error)}`);
+    }
+
+    const existing = new Map((data || []).map((row) => [row.repo_slug, row]));
+    const candidates = uniqueSlugs
+      .filter((repoSlug) => this.shouldFetchGithubReadme(existing.get(repoSlug)))
+      .slice(0, Number(this.config.githubReadmeMaxPerBatch) || 8);
+
+    let fetched = 0;
+    for (const repoSlug of candidates) {
+      const row = await fetchGithubReadmeRow(repoSlug, {
+        githubToken: this.config.githubToken,
+        maxChars: this.config.githubReadmeMaxChars
+      });
+      const { error: upsertError } = await this.supabase
+        .from("github_repo_readmes")
+        .upsert(row, { onConflict: "repo_slug" });
+
+      if (upsertError) {
+        if (isMissingGithubReadmesFeatureError(upsertError)) {
+          return {
+            fetched,
+            skipped: uniqueSlugs.length - fetched,
+            warning: this.missingGithubReadmesWarning(upsertError)
+          };
+        }
+        throw new Error(`Failed to cache GitHub README: ${extractDbErrorMessage(upsertError)}`);
+      }
+      fetched += 1;
+    }
+
+    return {
+      fetched,
+      skipped: uniqueSlugs.length - candidates.length,
+      warning: null
+    };
+  }
+
+  async processGithubReadmesForBookmarks({ bookmarks, receivedAt }) {
+    try {
+      const syncResult = await this.syncBookmarkGithubRepos({ bookmarks, receivedAt });
+      const warnings = syncResult.warning ? [syncResult.warning] : [];
+      if (syncResult.repoSlugs.length === 0) {
+        return { fetched: 0, skipped: 0, warnings };
+      }
+
+      const fetchResult = await this.fetchGithubReadmesForSlugs(syncResult.repoSlugs);
+      if (fetchResult.warning) warnings.push(fetchResult.warning);
+
+      return {
+        fetched: fetchResult.fetched,
+        skipped: fetchResult.skipped,
+        warnings
+      };
+    } catch (error) {
+      const warning =
+        "Bookmarks were stored, but GitHub README extraction failed: " +
+        extractDbErrorMessage(error);
+      console.warn("[store]", warning);
+      return { fetched: 0, skipped: 0, warnings: [warning] };
+    }
+  }
+
   async upsertBatch({ userId, syncId, bookmarks, receivedAt }) {
     await this.init();
 
     let inserted = 0;
     let updated = 0;
     let ignoredInvalid = 0;
+    let githubReadmesFetched = 0;
+    let githubReadmesSkipped = 0;
     const warnings = [];
 
     const bookmarksToUpsert = [];
@@ -468,6 +699,14 @@ export class BookmarkStore {
         warnings.push(contextWarning);
       }
 
+      const githubReadmeResult = await this.processGithubReadmesForBookmarks({
+        bookmarks: bookmarksToUpsert,
+        receivedAt
+      });
+      githubReadmesFetched = githubReadmeResult.fetched;
+      githubReadmesSkipped = githubReadmeResult.skipped;
+      warnings.push(...githubReadmeResult.warnings);
+
       const refreshWarning = await this.refreshGoalSearchIndex(userId);
       if (refreshWarning) {
         warnings.push(refreshWarning);
@@ -484,6 +723,8 @@ export class BookmarkStore {
       inserted,
       updated, // In Supabase upsert, we don't easily distinguish without extra checks
       ignored_invalid: ignoredInvalid,
+      github_readmes_fetched: githubReadmesFetched,
+      github_readmes_skipped: githubReadmesSkipped,
       total_stored: totalStored,
       warnings
     };
@@ -528,7 +769,7 @@ export class BookmarkStore {
         throw error;
       }
 
-      const items = (data || []).map((row) =>
+      const items = await this.attachGithubReadmes((data || []).map((row) =>
         this.mapBookmarkRow(row, {
           highlight: row.highlight || null,
           score: Number(row.score || 0),
@@ -538,7 +779,7 @@ export class BookmarkStore {
             freshness: Number(row.freshness_boost || 0)
           }
         })
-      );
+      ));
 
       return {
         total: Number(data?.[0]?.total_count || 0),
@@ -741,7 +982,9 @@ export class BookmarkStore {
     }
 
     const plan = Array.isArray(goalPlan) ? goalPlan[0] || null : null;
-    const items = (data || []).map((row) => this.mapGoalSearchRow(row));
+    const items = await this.attachGithubReadmes(
+      (data || []).map((row) => this.mapGoalSearchRow(row))
+    );
 
     return {
       total: Number(data?.[0]?.total_count || 0),
@@ -818,15 +1061,17 @@ export class BookmarkStore {
       throw new Error(`Failed to search bookmarks: ${error.message}`);
     }
 
+    const items = await this.attachGithubReadmes((data || []).map((row) =>
+      this.mapBookmarkRow(row, {
+        highlight: row.text_content || null,
+        score: null,
+        score_breakdown: null
+      })
+    ));
+
     return {
       total: count || 0,
-      items: (data || []).map((row) =>
-        this.mapBookmarkRow(row, {
-          highlight: row.text_content || null,
-          score: null,
-          score_breakdown: null
-        })
-      ),
+      items,
       parsed_query: parsedQuery
     };
   }
@@ -853,6 +1098,241 @@ export class BookmarkStore {
       score: null,
       score_breakdown: null,
       ...overrides
+    };
+  }
+
+  async getGithubReadmesForSlugs(repoSlugs, { includeContent = false } = {}) {
+    if (!this.capabilities.githubReadmes) {
+      return new Map();
+    }
+
+    const uniqueSlugs = [...new Set(repoSlugs)].filter(Boolean);
+    if (uniqueSlugs.length === 0) {
+      return new Map();
+    }
+
+    const columns = [
+      "repo_slug",
+      "owner",
+      "repo",
+      "repo_url",
+      "status",
+      "readme_name",
+      "readme_path",
+      "readme_html_url",
+      "readme_download_url",
+      "content_chars",
+      "content_truncated",
+      "size_bytes",
+      "fetched_at",
+      "last_requested_at",
+      "error_message",
+      "error_status",
+      "updated_at",
+      includeContent ? "content" : null
+    ].filter(Boolean).join(",");
+
+    const { data, error } = await this.supabase
+      .from("github_repo_readmes")
+      .select(columns)
+      .in("repo_slug", uniqueSlugs);
+
+    if (error) {
+      if (isMissingGithubReadmesFeatureError(error)) {
+        this.missingGithubReadmesWarning(error);
+        return new Map();
+      }
+      throw new Error(`Failed to fetch GitHub README cache: ${extractDbErrorMessage(error)}`);
+    }
+
+    return new Map(
+      (data || [])
+        .map((row) => mapGithubReadmeRow(row, { includeContent }))
+        .filter(Boolean)
+        .map((readme) => [readme.repo_slug, readme])
+    );
+  }
+
+  async attachGithubReadmes(items, { includeContent = false } = {}) {
+    if (!Array.isArray(items) || items.length === 0) {
+      return items || [];
+    }
+
+    const slugsById = new Map();
+    const allSlugs = new Set();
+
+    for (const item of items) {
+      const repoSlugs = [
+        ...new Set([
+          ...(Array.isArray(item.repo_slugs) ? item.repo_slugs : []),
+          ...extractGithubRepoSlugsFromBookmarkLike(item)
+        ])
+      ].sort();
+
+      slugsById.set(item.id || item.asset_id || item.tweet_id, repoSlugs);
+      repoSlugs.forEach((repoSlug) => allSlugs.add(repoSlug));
+    }
+
+    if (allSlugs.size === 0) {
+      return items;
+    }
+
+    const readmes = await this.getGithubReadmesForSlugs([...allSlugs], {
+      includeContent
+    });
+
+    return items.map((item) => {
+      const key = item.id || item.asset_id || item.tweet_id;
+      const repoSlugs = slugsById.get(key) || [];
+      const githubReadmes = repoSlugs
+        .map((repoSlug) => readmes.get(repoSlug))
+        .filter(Boolean);
+
+      return {
+        ...item,
+        repo_slugs: repoSlugs,
+        github_readmes: githubReadmes
+      };
+    });
+  }
+
+  async listGithubReadmes({
+    userId,
+    q = "",
+    repoSlug = "",
+    limit = 50,
+    offset = 0,
+    includeContent = true
+  } = {}) {
+    await this.init();
+
+    const normalizedLimit = clampNumber(limit, 50, 1, 100);
+    const normalizedOffset = clampNumber(offset, 0, 0, 10_000);
+    const normalizedQuery = String(q || "").trim().toLowerCase();
+    const normalizedRepoSlug = repoSlug ? splitGithubRepoSlug(repoSlug)?.repo_slug || "" : "";
+
+    let mentionRows = [];
+    let scopedRepoSlugs = null;
+
+    if (userId) {
+      let mentionQuery = this.supabase
+        .from("bookmark_github_repos")
+        .select("repo_slug,bookmark_id,user_id")
+        .eq("user_id", userId);
+
+      if (normalizedRepoSlug) {
+        mentionQuery = mentionQuery.eq("repo_slug", normalizedRepoSlug);
+      }
+
+      const { data, error } = await mentionQuery;
+      if (error) {
+        if (isMissingGithubReadmesFeatureError(error)) {
+          return {
+            total: 0,
+            items: [],
+            warning: this.missingGithubReadmesWarning(error)
+          };
+        }
+        throw new Error(`Failed to list README mentions: ${extractDbErrorMessage(error)}`);
+      }
+
+      mentionRows = data || [];
+      scopedRepoSlugs = [...new Set(mentionRows.map((row) => row.repo_slug))];
+      if (scopedRepoSlugs.length === 0) {
+        return { total: 0, items: [], warning: null };
+      }
+    }
+
+    const columns = [
+      "repo_slug",
+      "owner",
+      "repo",
+      "repo_url",
+      "status",
+      "readme_name",
+      "readme_path",
+      "readme_html_url",
+      "readme_download_url",
+      "content_chars",
+      "content_truncated",
+      "size_bytes",
+      "fetched_at",
+      "last_requested_at",
+      "error_message",
+      "error_status",
+      "updated_at",
+      includeContent ? "content" : null
+    ].filter(Boolean).join(",");
+
+    let queryBuilder = this.supabase.from("github_repo_readmes").select(columns);
+
+    if (scopedRepoSlugs) {
+      queryBuilder = queryBuilder.in("repo_slug", scopedRepoSlugs);
+    }
+
+    if (normalizedRepoSlug) {
+      queryBuilder = queryBuilder.eq("repo_slug", normalizedRepoSlug);
+    }
+
+    const { data, error } = await queryBuilder.order("updated_at", { ascending: false });
+    if (error) {
+      if (isMissingGithubReadmesFeatureError(error)) {
+        return {
+          total: 0,
+          items: [],
+          warning: this.missingGithubReadmesWarning(error)
+        };
+      }
+      throw new Error(`Failed to list GitHub READMEs: ${extractDbErrorMessage(error)}`);
+    }
+
+    const repoSlugs = (data || []).map((row) => row.repo_slug);
+    if (!userId && repoSlugs.length > 0) {
+      const { data: allMentions, error: mentionsError } = await this.supabase
+        .from("bookmark_github_repos")
+        .select("repo_slug,bookmark_id,user_id")
+        .in("repo_slug", repoSlugs);
+
+      if (!mentionsError) {
+        mentionRows = allMentions || [];
+      }
+    }
+
+    const mentionsByRepo = new Map();
+    for (const row of mentionRows) {
+      const entry = mentionsByRepo.get(row.repo_slug) || {
+        bookmark_ids: new Set(),
+        user_ids: new Set()
+      };
+      entry.bookmark_ids.add(row.bookmark_id);
+      entry.user_ids.add(row.user_id);
+      mentionsByRepo.set(row.repo_slug, entry);
+    }
+
+    const mapped = (data || [])
+      .map((row) => {
+        const readme = mapGithubReadmeRow(row, { includeContent });
+        const mentions = mentionsByRepo.get(row.repo_slug);
+        return {
+          ...readme,
+          bookmark_count: mentions ? mentions.bookmark_ids.size : 0,
+          bookmark_ids: mentions ? [...mentions.bookmark_ids].sort() : [],
+          user_ids: mentions ? [...mentions.user_ids].sort() : []
+        };
+      })
+      .filter((item) => {
+        if (!normalizedQuery) return true;
+        return (
+          item.repo_slug?.toLowerCase().includes(normalizedQuery) ||
+          item.repo_url?.toLowerCase().includes(normalizedQuery) ||
+          item.content?.toLowerCase().includes(normalizedQuery)
+        );
+      });
+
+    return {
+      total: mapped.length,
+      items: mapped.slice(normalizedOffset, normalizedOffset + normalizedLimit),
+      warning: null
     };
   }
 

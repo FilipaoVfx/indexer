@@ -10,6 +10,7 @@ import {
   isGithubRepoUrl,
   safeDomain,
 } from "../lib/api";
+import { withBase } from "../lib/url-state";
 
 interface Props {
   item: SearchItem;
@@ -110,6 +111,7 @@ export default function ResultCard({ item, anchorId }: Props) {
   if ((item.links || []).length > 0) tags.push(`${item.links!.length} enlaces`);
 
   const cardRepos = [...extractGithubRepos([item]).values()].slice(0, 4);
+  const readmeSlugs = new Set((item.github_readmes || []).map((readme) => readme.repo_slug));
   const contextLinks = extractContextLinks(item, primaryUrl).slice(0, expanded ? 4 : 2);
   const primaryCtaLabel =
     primaryUrl && isGithubRepoUrl(primaryUrl) ? "Abrir repo" : "Abrir fuente";
@@ -276,16 +278,25 @@ export default function ResultCard({ item, anchorId }: Props) {
       {cardRepos.length > 0 && (
         <div className="flex flex-wrap gap-1.5 mb-3">
           {cardRepos.map((r) => (
-            <a
-              key={`${r.owner}/${r.repo}`}
-              href={`https://github.com/${r.owner}/${r.repo}`}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1 border-2 border-primary bg-surface-container-low text-primary text-[11px] font-bold px-2 py-0.5 hover:bg-primary hover:text-on-primary transition-colors"
-            >
-              <span className="material-symbols-outlined text-xs">code</span>
-              {r.owner}/{r.repo}
-            </a>
+            <span key={`${r.owner}/${r.repo}`} className="inline-flex flex-wrap gap-1">
+              <a
+                href={`https://github.com/${r.owner}/${r.repo}`}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 border-2 border-primary bg-surface-container-low text-primary text-[11px] font-bold px-2 py-0.5 hover:bg-primary hover:text-on-primary transition-colors"
+              >
+                <span className="material-symbols-outlined text-xs">code</span>
+                {r.owner}/{r.repo}
+              </a>
+              {readmeSlugs.has(`${r.owner}/${r.repo}`.toLowerCase()) && (
+                <a
+                  href={withBase(`/readmes?repo=${encodeURIComponent(`${r.owner}/${r.repo}`)}`)}
+                  className="inline-flex items-center gap-1 border-2 border-secondary bg-surface-container-low text-secondary text-[11px] font-bold px-2 py-0.5 hover:bg-secondary hover:text-on-primary transition-colors"
+                >
+                  README
+                </a>
+              )}
+            </span>
           ))}
         </div>
       )}

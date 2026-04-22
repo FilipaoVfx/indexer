@@ -118,6 +118,54 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "GET" && routePath === "/api/github-readmes") {
+      const userId = sanitizeUserId(requestUrl.searchParams.get("user_id") || "");
+      const query = requestUrl.searchParams.get("q") || "";
+      const repo = requestUrl.searchParams.get("repo") || "";
+      const limit = clampNumber(requestUrl.searchParams.get("limit"), 50, 1, 100);
+      const offset = clampNumber(requestUrl.searchParams.get("offset"), 0, 0, 10_000);
+      const includeContent =
+        requestUrl.searchParams.get("include_content") !== "false";
+
+      const result = await store.listGithubReadmes({
+        userId: userId || null,
+        q: query,
+        repoSlug: repo,
+        limit,
+        offset,
+        includeContent
+      });
+
+      sendJson(res, 200, {
+        ok: true,
+        ...result
+      });
+      return;
+    }
+
+    if (req.method === "GET" && /^\/api\/github-readmes\/[^/]+\/[^/]+$/.test(routePath)) {
+      const [, , , owner, repo] = routePath.split("/");
+      const userId = sanitizeUserId(requestUrl.searchParams.get("user_id") || "");
+      const result = await store.listGithubReadmes({
+        userId: userId || null,
+        repoSlug: `${decodePathParam(owner)}/${decodePathParam(repo)}`,
+        limit: 1,
+        offset: 0,
+        includeContent: true
+      });
+
+      if (!result.items.length) {
+        throw createHttpError(404, "readme_not_found", "GitHub README not found");
+      }
+
+      sendJson(res, 200, {
+        ok: true,
+        item: result.items[0],
+        warning: result.warning
+      });
+      return;
+    }
+
     if (req.method === "POST" && routePath === "/api/bookmarks/batch") {
       const body = await parseJsonBody(req);
       const traceId = sanitizeTraceId(body.traceId) || createServerTraceId("batch");
