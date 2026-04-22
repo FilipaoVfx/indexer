@@ -15,6 +15,12 @@ import {
   type UserSummary,
 } from "../lib/api";
 import { withBase } from "../lib/url-state";
+import {
+  indexAuthorRepos,
+  topAuthorsByRepos,
+  type AuthorRepoEntry,
+} from "../lib/repo-heuristics";
+import AuthorReposModal from "./AuthorReposModal";
 
 type SortKey = "count" | "latest" | "name";
 type HistoryMode = "replace" | "push";
@@ -166,6 +172,7 @@ export default function AuthorsList() {
   const [err, setErr] = useState<string | null>(null);
   const [users, setUsers] = useState<UserSummary[]>([]);
   const [view, setView] = useState<ViewState>(() => readViewState());
+  const [selectedAuthorKey, setSelectedAuthorKey] = useState<string | null>(null);
   const topRef = useRef<HTMLDivElement | null>(null);
 
   const { user, q, sort, page, pageSize } = view;
@@ -236,6 +243,18 @@ export default function AuthorsList() {
     [items, users]
   );
 
+  const authorRepoIndex = useMemo(
+    () => (items ? indexAuthorRepos(items) : new Map<string, AuthorRepoEntry>()),
+    [items]
+  );
+  const leaderboard = useMemo(
+    () => topAuthorsByRepos(authorRepoIndex, 10),
+    [authorRepoIndex]
+  );
+  const selectedAuthorEntry = selectedAuthorKey
+    ? authorRepoIndex.get(selectedAuthorKey) || null
+    : null;
+
   const totalPages = Math.max(1, Math.ceil(authors.length / pageSize));
   const currentPage = Math.min(page, totalPages);
   const visibleAuthors = useMemo(() => {
@@ -266,7 +285,7 @@ export default function AuthorsList() {
 
   return (
     <section className="px-4 md:px-8 py-10 pb-24 md:pb-10">
-      <div ref={topRef} className="max-w-6xl mx-auto">
+      <div ref={topRef} className="max-w-7xl mx-auto">
         <nav className="mb-6 flex flex-wrap items-center gap-2 text-xs font-bold uppercase tracking-wide">
           <a
             href={buildSearchHref({ user })}
@@ -360,6 +379,9 @@ export default function AuthorsList() {
           </p>
         )}
 
+        <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_300px] lg:gap-6">
+          <div className="min-w-0">
+
         {authors.length > 0 && (
           <div className="mb-4 flex items-center justify-between gap-3 flex-wrap rounded-xl bg-surface-container-low px-4 py-3 text-sm text-on-surface-variant">
             <p>
@@ -374,60 +396,83 @@ export default function AuthorsList() {
           </div>
         )}
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {visibleAuthors.map((a) => (
-            <a
-              key={a.handle || a.name}
-              href={buildSearchHref({
-                user,
-                author: a.handle || a.name,
-              })}
-              className="group glass-card p-4 rounded-xl border border-outline-variant/15 hover:border-primary/40 transition-all flex items-start gap-3"
-            >
-              <div className="w-10 h-10 rounded-full bg-surface-container-highest flex items-center justify-center flex-shrink-0">
-                <span className="text-sm font-bold text-primary">
-                  {initials(a.name)}
-                </span>
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="text-on-surface font-bold text-sm truncate group-hover:text-primary transition-colors">
-                  {a.name}
-                </p>
-                {a.handle && (
-                  <p className="text-on-surface-variant text-xs truncate">
-                    @{a.handle}
-                  </p>
-                )}
-                <div className="flex items-center gap-2 mt-2 flex-wrap">
-                  <span className="text-[10px] font-bold text-primary bg-primary/10 px-2 py-0.5 rounded">
-                    {a.count} marcador{a.count === 1 ? "" : "es"}
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+          {visibleAuthors.map((a) => {
+            const authorKey = a.handle || a.name;
+            const indexEntry = authorRepoIndex.get(authorKey);
+            const repoCount = indexEntry ? indexEntry.repos.size : 0;
+            return (
+              <div
+                key={authorKey}
+                className="group glass-card p-4 rounded-xl border border-outline-variant/15 hover:border-primary/40 transition-all flex items-start gap-3"
+              >
+                <div className="w-10 h-10 rounded-full bg-surface-container-highest flex items-center justify-center flex-shrink-0">
+                  <span className="text-sm font-bold text-primary">
+                    {initials(a.name)}
                   </span>
-                  {a.latest_date && (
-                    <span className="text-[10px] text-on-surface-variant">
-                      ultimo {formatDate(a.latest_date)}
-                    </span>
-                  )}
                 </div>
-                {a.domains.size > 0 && (
-                  <div className="flex flex-wrap gap-1 mt-2">
-                    {[...a.domains].slice(0, 3).map((d) => (
-                      <span
-                        key={d}
-                        className="text-[10px] text-on-surface-variant bg-surface-container-highest px-1.5 py-0.5 rounded"
-                      >
-                        {d}
+                <div className="min-w-0 flex-1">
+                  <a
+                    href={buildSearchHref({
+                      user,
+                      author: a.handle || a.name,
+                    })}
+                    className="block text-on-surface font-bold text-sm truncate hover:text-primary transition-colors"
+                  >
+                    {a.name}
+                  </a>
+                  {a.handle && (
+                    <p className="text-on-surface-variant text-xs truncate">
+                      @{a.handle}
+                    </p>
+                  )}
+                  <div className="flex items-center gap-2 mt-2 flex-wrap">
+                    <span className="text-[10px] font-bold text-primary bg-primary/10 px-2 py-0.5 rounded">
+                      {a.count} marcador{a.count === 1 ? "" : "es"}
+                    </span>
+                    {repoCount > 0 && (
+                      <span className="text-[10px] font-bold text-secondary bg-secondary/10 px-2 py-0.5 rounded font-mono">
+                        {repoCount} repo{repoCount === 1 ? "" : "s"}
                       </span>
-                    ))}
-                    {a.domains.size > 3 && (
+                    )}
+                    {a.latest_date && (
                       <span className="text-[10px] text-on-surface-variant">
-                        +{a.domains.size - 3}
+                        ultimo {formatDate(a.latest_date)}
                       </span>
                     )}
                   </div>
-                )}
+                  {a.domains.size > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-2">
+                      {[...a.domains].slice(0, 3).map((d) => (
+                        <span
+                          key={d}
+                          className="text-[10px] text-on-surface-variant bg-surface-container-highest px-1.5 py-0.5 rounded"
+                        >
+                          {d}
+                        </span>
+                      ))}
+                      {a.domains.size > 3 && (
+                        <span className="text-[10px] text-on-surface-variant">
+                          +{a.domains.size - 3}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  {repoCount > 0 && (
+                    <div className="mt-2">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedAuthorKey(authorKey)}
+                        className="text-[10px] text-primary border-2 border-primary bg-primary/10 px-2 py-0.5 hover:bg-primary hover:text-on-primary transition-colors font-mono"
+                      >
+                        &gt; ver repos
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
-            </a>
-          ))}
+            );
+          })}
         </div>
 
         {authors.length > pageSize && (
@@ -477,6 +522,72 @@ export default function AuthorsList() {
               </button>
             </nav>
           </div>
+        )}
+
+          </div>
+
+          <aside className="mt-8 lg:mt-0 lg:sticky lg:top-24 lg:self-start">
+            <div className="terminal-panel p-4 neo-shadow-purple-sm">
+              <p className="text-[10px] uppercase tracking-widest text-on-surface-variant font-mono">
+                $ leaderboard --by repos
+              </p>
+              <h3 className="mt-1 text-sm font-bold text-on-surface font-mono">
+                top contribuyentes
+              </h3>
+              <p className="mt-0.5 text-[10px] text-on-surface-variant font-mono">
+                ranking por repos unicos mencionados
+              </p>
+
+              {leaderboard.length === 0 && (
+                <p className="mt-4 text-xs text-on-surface-variant font-mono">
+                  Sin datos aun.
+                </p>
+              )}
+
+              {leaderboard.length > 0 && (
+                <ol className="mt-3 space-y-1.5">
+                  {leaderboard.map((entry, idx) => (
+                    <li key={entry.key}>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedAuthorKey(entry.key)}
+                        className="w-full flex items-center gap-2 border-2 border-outline-variant bg-surface-container-high p-2 text-left hover:border-primary hover:bg-surface-container-highest transition-colors font-mono"
+                      >
+                        <span className="shrink-0 w-5 text-center text-[11px] font-bold text-primary">
+                          {String(idx + 1).padStart(2, "0")}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-xs font-bold text-on-surface truncate">
+                            {entry.name}
+                          </p>
+                          {entry.handle && (
+                            <p className="text-[10px] text-on-surface-variant truncate">
+                              @{entry.handle}
+                            </p>
+                          )}
+                        </div>
+                        <div className="shrink-0 flex flex-col items-end gap-0.5">
+                          <span className="text-[10px] font-bold text-primary">
+                            {entry.repos.size} repo{entry.repos.size === 1 ? "" : "s"}
+                          </span>
+                          <span className="text-[9px] text-on-surface-variant">
+                            {entry.totalMentions} menc.
+                          </span>
+                        </div>
+                      </button>
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </div>
+          </aside>
+        </div>
+
+        {selectedAuthorEntry && (
+          <AuthorReposModal
+            entry={selectedAuthorEntry}
+            onClose={() => setSelectedAuthorKey(null)}
+          />
         )}
       </div>
     </section>
