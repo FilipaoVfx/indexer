@@ -7,22 +7,12 @@
 
 export const DEFAULT_USER_ID = "";
 
-const DEFAULT_LOCAL_API_BASE = "http://localhost:8787";
 const DEFAULT_REMOTE_API_BASE = "https://indexer-hzto.onrender.com";
-
-function isLocalBrowserRuntime(): boolean {
-  if (typeof window === "undefined") return false;
-  return ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
-}
 
 function resolveApiBase(): string {
   const browserOverride =
     typeof window !== "undefined" ? localStorage.getItem("INDEXBOOK_API") : "";
   if (browserOverride) return browserOverride;
-
-  if (isLocalBrowserRuntime()) {
-    return DEFAULT_LOCAL_API_BASE;
-  }
 
   return import.meta.env.PUBLIC_SEARCH_API_BASE || DEFAULT_REMOTE_API_BASE;
 }
