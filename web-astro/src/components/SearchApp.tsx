@@ -375,12 +375,12 @@ function Header({
 
   return (
     <>
-      <header className="bg-[#0b1326] backdrop-blur-xl bg-opacity-80 flex justify-between items-center w-full px-8 h-20 z-50 border-b border-outline-variant/15">
-        <div className="flex items-center gap-8 flex-1 min-w-0">
-          <span className="text-xl font-bold text-[#c0c1ff] font-headline tracking-tight hidden lg:block">
-            Consola de conocimiento
+      <header className="bg-background flex justify-between items-center w-full px-6 h-20 z-50 border-b-2 border-primary">
+        <div className="flex items-center gap-6 flex-1 min-w-0">
+          <span className="text-lg font-bold text-primary font-headline hidden lg:block">
+            <span className="text-secondary">$</span> search<span className="text-secondary">.</span>archive
           </span>
-          <div className="hidden md:flex items-center gap-2 rounded-full border border-outline-variant/20 bg-surface-container-low px-1 py-1">
+          <div className="hidden md:flex items-center gap-1 border-2 border-outline-variant bg-surface-container-low p-1">
             <ModeButton
               label="Hibrida"
               active={filters.mode === "hybrid"}
@@ -399,8 +399,8 @@ function Header({
               onSubmit();
             }}
           >
-            <span className="material-symbols-outlined absolute left-4 top-1/2 -translate-y-1/2 text-on-surface-variant">
-              {filters.mode === "goal" ? "route" : "search"}
+            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-primary font-bold text-sm">
+              {filters.mode === "goal" ? "~>" : "$"}
             </span>
             <input
               value={filters.q}
@@ -408,23 +408,22 @@ function Header({
               type="text"
               autoComplete="off"
               placeholder={placeholder}
-              className="w-full bg-surface-container-lowest border-none focus:ring-2 focus:ring-primary pl-12 pr-4 py-2.5 rounded-lg text-on-surface text-sm transition-all"
+              className="w-full bg-surface-container-lowest border-2 border-outline-variant focus:border-primary focus:ring-0 pl-10 pr-4 py-2.5 text-on-surface text-sm transition-colors font-mono placeholder:text-on-surface-variant"
             />
           </form>
         </div>
-        <div className="flex items-center gap-6 ml-6">
+        <div className="flex items-center gap-4 ml-4">
           <button
             onClick={() => setShowFilters(!showFilters)}
-            className="text-on-surface-variant hover:text-primary transition-colors"
+            className="text-on-surface-variant hover:text-secondary transition-colors border-2 border-transparent hover:border-secondary px-2 py-1"
             title="Filtros avanzados"
           >
             <span className="material-symbols-outlined">tune</span>
           </button>
-          <div className="flex items-center gap-2 border-l border-outline-variant/15 pl-6">
-            <span className="material-symbols-outlined text-on-surface-variant">
-              bolt
-            </span>
-            <span className="text-xs text-on-surface-variant">{elapsedLabel}</span>
+          <div className="flex items-center gap-2 border-l-2 border-outline-variant pl-4">
+            <span className="text-primary font-bold text-xs">[</span>
+            <span className="text-xs text-secondary font-bold">{elapsedLabel}</span>
+            <span className="text-primary font-bold text-xs">]</span>
           </div>
         </div>
       </header>
@@ -500,10 +499,10 @@ function ModeButton({
     <button
       type="button"
       onClick={onClick}
-      className={`rounded-full px-3 py-1.5 text-xs font-bold uppercase tracking-wider transition-colors ${
+      className={`px-3 py-1.5 text-xs font-bold uppercase tracking-wider transition-colors border-2 ${
         active
-          ? "bg-primary text-on-primary"
-          : "text-on-surface-variant hover:text-on-surface"
+          ? "bg-primary text-on-primary border-primary"
+          : "border-transparent text-on-surface-variant hover:text-secondary hover:border-secondary"
       }`}
     >
       {label}
@@ -534,7 +533,7 @@ function FilterField({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
-        className="mt-1 w-full bg-surface-container-lowest border-none rounded-md text-sm px-3 py-2 focus:ring-2 focus:ring-primary"
+        className="mt-1 w-full bg-surface-container-lowest border-2 border-outline-variant focus:border-primary focus:ring-0 text-sm px-3 py-2 font-mono"
       />
     </label>
   );
@@ -559,7 +558,7 @@ function SelectField({
       <select
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="mt-1 w-full bg-surface-container-lowest border-none rounded-md text-sm px-3 py-2 focus:ring-2 focus:ring-primary"
+        className="mt-1 w-full bg-surface-container-lowest border-2 border-outline-variant focus:border-primary focus:ring-0 text-sm px-3 py-2 font-mono"
       >
         {options.map((option) => (
           <option key={`${label}-${option.value || "all"}`} value={option.value}>
@@ -620,21 +619,28 @@ function DiscoveryHome({
 
   return (
     <section className="relative w-full min-h-full">
-      <div className="absolute inset-0 pointer-events-none opacity-20 bg-[radial-gradient(circle_at_50%_50%,_#4b4dd8_0%,_transparent_70%)]" />
+      <div className="absolute inset-0 pointer-events-none opacity-10 bg-[radial-gradient(circle_at_50%_50%,_#22d3ee_0%,_transparent_70%)]" />
       <div className="relative z-10 w-full max-w-5xl mx-auto pt-12 pb-20 px-6">
         <div className="flex flex-col items-center gap-6 mb-10">
-          <h1 className="font-headline text-4xl md:text-5xl font-bold tracking-tight text-center text-on-surface">
-            Explora tu archivo de conocimiento.
+          <div className="terminal-panel px-5 py-2 text-left w-full max-w-2xl">
+            <p className="text-xs text-secondary font-bold">
+              <span className="text-primary">[user@arch ~]</span>$ cat knowledge.archive
+            </p>
+          </div>
+          <h1 className="font-headline text-3xl md:text-4xl font-bold tracking-tight text-center text-primary">
+            <span className="text-secondary">&gt;</span> Explora tu archivo<span className="caret-blink"></span>
           </h1>
-          <p className="text-on-surface-variant text-center max-w-xl">
-            Usa la busqueda hibrida para recuperar con precision o cambia a Objetivo
-            para buscar por el resultado que quieres lograr.
+          <p className="text-on-surface-variant text-center max-w-xl text-sm">
+            Usa <span className="text-primary font-bold">hibrida</span> para recuperar con precision o cambia a{" "}
+            <span className="text-secondary font-bold">objetivo</span> para buscar por el resultado que quieres lograr.
           </p>
-          <div className="flex items-center gap-3 glass-card px-4 py-2 rounded-full border border-outline-variant/20">
-            <div className="w-2 h-2 rounded-full bg-secondary animate-pulse" />
+          <div className="flex items-center gap-3 border-2 border-primary bg-surface-container-low px-4 py-2 neo-shadow-purple-sm">
+            <div className="w-2 h-2 bg-primary animate-pulse" />
             <span className="text-[10px] uppercase tracking-[0.2em] font-bold text-on-surface-variant">
-              {corpus.items.length} cargados / {corpus.total} total • {authors.length}{" "}
-              autores • {repos.length} repos • {users.length} usuarios
+              <span className="text-primary">{corpus.items.length}</span>/{corpus.total} •{" "}
+              <span className="text-secondary">{authors.length}</span> autores •{" "}
+              <span className="text-secondary">{repos.length}</span> repos •{" "}
+              <span className="text-secondary">{users.length}</span> usuarios
             </span>
           </div>
         </div>
@@ -1361,20 +1367,23 @@ function ActiveFiltersCard({
   if (entries.length === 0) return null;
 
   return (
-    <div className="p-6 rounded-2xl bg-gradient-to-br from-primary-container to-tertiary-container text-on-primary shadow-xl">
-      <h4 className="font-headline font-bold mb-2">Filtros activos</h4>
-      <div className="text-sm opacity-90 mb-4 leading-relaxed space-y-1">
+    <div className="p-5 bg-surface-container-low border-2 border-secondary neo-shadow-purple">
+      <h4 className="font-headline font-bold mb-3 text-secondary uppercase tracking-wider text-sm">
+        <span className="text-primary">&gt;</span> filtros activos
+      </h4>
+      <div className="text-xs mb-4 leading-relaxed space-y-1 font-mono">
         {entries.map(([label, value]) => (
           <div key={label}>
-            <span className="font-bold">{label}:</span> {value}
+            <span className="text-primary font-bold">{label}:</span>{" "}
+            <span className="text-on-surface">{value}</span>
           </div>
         ))}
       </div>
       <button
         onClick={reset}
-        className="w-full py-2 bg-on-primary text-primary font-bold rounded text-xs uppercase tracking-widest hover:bg-white transition-colors"
+        className="w-full py-2 bg-primary text-on-primary border-2 border-primary font-bold text-xs uppercase tracking-widest hover:bg-secondary hover:border-secondary transition-colors"
       >
-        Limpiar filtros
+        $ reset --all
       </button>
     </div>
   );

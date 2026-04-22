@@ -135,7 +135,7 @@ export default function ResultCard({ item, anchorId }: Props) {
 
   const scoreBadge =
     typeof item.score === "number" && !isNaN(item.score) && item.score > 0 ? (
-      <span className="ml-2 text-[10px] font-bold text-primary bg-primary/10 px-2 py-0.5 rounded">
+      <span className="ml-2 text-[10px] font-bold text-on-primary bg-primary border-2 border-primary px-2 py-0.5">
         {item.score.toFixed(3)}
       </span>
     ) : null;
@@ -143,11 +143,11 @@ export default function ResultCard({ item, anchorId }: Props) {
   return (
     <article
       id={anchorId || undefined}
-      className="group relative scroll-mt-24 bg-surface-container-lowest p-6 rounded-xl hover:bg-surface-container-low transition-all duration-300 border-l-4 border-transparent hover:border-primary"
+      className="group relative scroll-mt-24 bg-surface-container-lowest p-6 border-2 border-outline-variant hover:border-primary hover:neo-shadow transition-all duration-150"
     >
       <div className="flex justify-between items-start mb-4 gap-3 flex-wrap">
         <div className="flex items-center gap-3 min-w-0">
-          <div className="w-10 h-10 rounded-full bg-surface-container-highest flex items-center justify-center flex-shrink-0 overflow-hidden">
+          <div className="w-10 h-10 bg-surface-container-highest border-2 border-primary flex items-center justify-center flex-shrink-0 overflow-hidden">
             {profileUrl && !avatarFailed ? (
               <img
                 src={profileUrl}
@@ -178,9 +178,9 @@ export default function ResultCard({ item, anchorId }: Props) {
         </div>
         <div className="flex items-center gap-2">
           <span
-            className={`flex items-center gap-1.5 px-2.5 py-1 bg-surface-container-high ${kindColor} text-[10px] uppercase tracking-widest font-bold rounded`}
+            className={`flex items-center gap-1.5 px-2.5 py-1 border-2 border-outline-variant bg-surface-container-high ${kindColor} text-[10px] uppercase tracking-widest font-bold`}
           >
-            <span className={`w-1.5 h-1.5 rounded-full ${kindBg}`} />
+            <span className={`w-1.5 h-1.5 ${kindBg}`} />
             {kind}
           </span>
           {scoreBadge}
@@ -224,7 +224,7 @@ export default function ResultCard({ item, anchorId }: Props) {
           {item.why_this_result.slice(0, 4).map((reason) => (
             <span
               key={reason}
-              className="inline-flex items-center rounded-full border border-primary/20 bg-primary/5 px-2 py-0.5 text-[11px] text-primary"
+              className="inline-flex items-center border-2 border-secondary bg-surface-container-low px-2 py-0.5 text-[11px] text-secondary font-bold"
             >
               {formatReason(reason)}
             </span>
@@ -238,7 +238,7 @@ export default function ResultCard({ item, anchorId }: Props) {
             type="button"
             onClick={() => setMediaOpen((prev) => !prev)}
             aria-expanded={mediaOpen}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-surface-container-high px-3 py-1.5 text-xs font-semibold text-on-surface transition-colors hover:text-primary"
+            className="inline-flex items-center gap-1.5 border-2 border-outline-variant bg-surface-container-high px-3 py-1.5 text-xs font-semibold text-on-surface transition-colors hover:text-primary hover:border-primary"
           >
             <span className="material-symbols-outlined text-sm">image</span>
             {mediaOpen ? "Ocultar" : "Ver"} {otherMedia.length} multimedia
@@ -258,7 +258,7 @@ export default function ResultCard({ item, anchorId }: Props) {
                   href={m}
                   target="_blank"
                   rel="noreferrer"
-                  className="aspect-video rounded-lg overflow-hidden bg-surface-container-highest block"
+                  className="aspect-video border-2 border-outline-variant hover:border-secondary overflow-hidden bg-surface-container-highest block transition-colors"
                 >
                   <img
                     src={m}
@@ -281,7 +281,7 @@ export default function ResultCard({ item, anchorId }: Props) {
               href={`https://github.com/${r.owner}/${r.repo}`}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex items-center gap-1 bg-primary/10 border border-primary/30 text-primary text-[11px] font-medium px-2 py-0.5 rounded hover:bg-primary/20 transition-colors"
+              className="inline-flex items-center gap-1 border-2 border-primary bg-surface-container-low text-primary text-[11px] font-bold px-2 py-0.5 hover:bg-primary hover:text-on-primary transition-colors"
             >
               <span className="material-symbols-outlined text-xs">code</span>
               {r.owner}/{r.repo}
@@ -316,7 +316,7 @@ export default function ResultCard({ item, anchorId }: Props) {
           {tags.map((t) => (
             <span
               key={t}
-              className="bg-surface-container-highest text-on-surface-variant px-2.5 py-1 rounded text-xs"
+              className="border border-outline-variant bg-surface-container-highest text-on-surface-variant px-2.5 py-1 text-xs font-mono"
             >
               {t}
             </span>
@@ -327,7 +327,7 @@ export default function ResultCard({ item, anchorId }: Props) {
             href={primaryUrl}
             target="_blank"
             rel="noreferrer"
-            className="text-primary text-sm font-medium flex items-center gap-1 hover:underline"
+            className="bg-primary text-on-primary border-2 border-primary px-3 py-1.5 text-sm font-bold uppercase tracking-wider flex items-center gap-1 hover:bg-secondary hover:border-secondary transition-colors"
           >
             {primaryCtaLabel}{" "}
             <span className="material-symbols-outlined text-sm">arrow_outward</span>

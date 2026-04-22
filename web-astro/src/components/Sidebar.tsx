@@ -95,12 +95,14 @@ export default function Sidebar({ current = "all" }: Props) {
   const isLive = status === "EN LINEA";
 
   return (
-    <aside className="hidden md:flex flex-col h-full py-8 px-4 gap-4 bg-[#060e20] bg-gradient-to-r from-[#0b1326] to-transparent w-64 border-r border-outline-variant/15">
-      <div className="mb-8 px-4">
-        <h1 className="text-[#c0c1ff] font-headline font-bold text-2xl tracking-tighter">
-          Consola
+    <aside className="hidden md:flex flex-col h-full py-6 px-4 gap-4 bg-background w-64 border-r-2 border-primary">
+      <div className="mb-6 px-3 py-3 terminal-panel">
+        <h1 className="text-primary font-headline font-bold text-lg tracking-tight">
+          <span className="text-secondary">$</span> indexbook
         </h1>
-        <p className="text-[#dae2fd] opacity-60 text-xs">Indexbook v1.0</p>
+        <p className="text-on-surface-variant text-[10px] mt-1 caret-blink">
+          ~/archive
+        </p>
       </div>
 
       <nav className="flex flex-col gap-2 flex-grow">
@@ -111,41 +113,41 @@ export default function Sidebar({ current = "all" }: Props) {
               key={it.key}
               href={buildNavHref(it.href)}
               className={
-                "flex items-center gap-3 px-4 py-3 rounded-lg transition-all " +
+                "flex items-center gap-3 px-3 py-2 border-2 transition-all text-sm font-medium " +
                 (active
-                  ? "text-[#c0c1ff] font-bold bg-[#31394d] translate-x-1"
-                  : "text-[#dae2fd] opacity-60 hover:bg-[#31394d] hover:opacity-100")
+                  ? "border-primary bg-primary text-on-primary neo-shadow-purple-sm"
+                  : "border-transparent text-on-surface-variant hover:border-secondary hover:text-secondary hover:bg-surface-container")
               }
             >
               <span className="material-symbols-outlined text-lg">{it.icon}</span>
-              <span className="text-sm font-medium">{it.label}</span>
+              <span className="uppercase tracking-wide">{it.label}</span>
             </a>
           );
         })}
       </nav>
 
-      <div className="mx-4 mt-4 py-3 px-4 bg-surface-container-low rounded-lg border border-outline-variant/20">
-        <div className="text-[10px] uppercase tracking-widest text-on-surface-variant mb-1">
-          Estado de la base
+      <div className="mx-1 mt-4 py-3 px-3 border-2 border-outline-variant bg-surface-container-low">
+        <div className="text-[10px] uppercase tracking-widest text-secondary mb-2 font-bold">
+          <span className="text-primary">&gt;</span> status
         </div>
         <div className="flex items-center gap-2">
           <span
             className={
-              "w-2 h-2 rounded-full animate-pulse " +
-              (isLive ? "bg-secondary" : "bg-error")
+              "w-2 h-2 animate-pulse " +
+              (isLive ? "bg-primary" : "bg-error")
             }
           />
           <span
             className={
-              "text-xs font-bold " + (isLive ? "text-secondary" : "text-error")
+              "text-xs font-bold uppercase " + (isLive ? "text-primary" : "text-error")
             }
           >
             {status}
           </span>
         </div>
-        <div className="mt-2 text-xs text-on-surface">
-          <span>{count}</span>{" "}
-          <span className="text-on-surface-variant">registros</span>
+        <div className="mt-2 text-xs">
+          <span className="text-secondary font-bold">{count}</span>{" "}
+          <span className="text-on-surface-variant">records</span>
         </div>
       </div>
 
@@ -154,10 +156,10 @@ export default function Sidebar({ current = "all" }: Props) {
           href="https://github.com/FilipaoVfx/indexer"
           target="_blank"
           rel="noreferrer"
-          className="flex items-center gap-3 px-4 py-2 text-[#dae2fd] opacity-60 hover:bg-[#31394d] hover:opacity-100 transition-all rounded-lg"
+          className="flex items-center gap-3 px-3 py-2 border-2 border-transparent text-on-surface-variant hover:border-secondary hover:text-secondary transition-all text-sm font-medium"
         >
           <span className="material-symbols-outlined text-lg">code</span>
-          <span className="text-sm font-medium">Codigo fuente</span>
+          <span className="uppercase tracking-wide">Source</span>
         </a>
       </div>
     </aside>
