@@ -14,6 +14,7 @@ import {
   type UserSummary,
 } from "../lib/api";
 import { withBase } from "../lib/url-state";
+import RepoMentionsModal from "./RepoMentionsModal";
 
 type SortKey = "count" | "latest" | "owner" | "repo";
 type HistoryMode = "replace" | "push";
@@ -165,6 +166,7 @@ export default function ReposList() {
   const [err, setErr] = useState<string | null>(null);
   const [users, setUsers] = useState<UserSummary[]>([]);
   const [view, setView] = useState<ViewState>(() => readViewState());
+  const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
   const topRef = useRef<HTMLDivElement | null>(null);
 
   const { user, q, sort, page, pageSize } = view;
@@ -441,11 +443,26 @@ export default function ReposList() {
                   >
                     Buscar en marcadores
                   </a>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedSlug(`${r.owner}/${r.repo}`)}
+                    className="text-[10px] text-primary border-2 border-primary bg-primary/10 px-2 py-0.5 hover:bg-primary hover:text-on-primary transition-colors font-mono"
+                  >
+                    &gt; ver menciones
+                  </button>
                 </div>
               </div>
             </div>
           ))}
         </div>
+
+        {selectedSlug && items && (
+          <RepoMentionsModal
+            slug={selectedSlug}
+            items={items}
+            onClose={() => setSelectedSlug(null)}
+          />
+        )}
 
         {repos.length > pageSize && (
           <div className="mt-8 overflow-x-auto pb-2 no-scrollbar">
