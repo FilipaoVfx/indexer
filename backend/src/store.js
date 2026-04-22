@@ -1,6 +1,11 @@
 import { createClient } from "@supabase/supabase-js";
 import { normalizeBookmark } from "./normalize.js";
 import { parseSearchQuery } from "./search-query.js";
+import {
+  isShortenerUrl,
+  resolveShortenerUrls,
+  rewriteLinksWithResolved
+} from "./url-resolver.js";
 
 function clampNumber(value, fallback, minimum, maximum) {
   const parsed = Number(value);
@@ -209,6 +214,64 @@ export class BookmarkStore {
     this.isReady = true;
   }
 
+  async expandShortenerLinks(bookmarks) {
+    if (!Array.isArray(bookmarks) || bookmarks.length === 0) {
+      return bookmarks || [];
+    }
+
+    const shortUrls = [];
+    for (const bookmark of bookmarks) {
+      if (!bookmark || typeof bookmark !== "object") continue;
+      const pools = [
+        Array.isArray(bookmark.links) ? bookmark.links : [],
+        Array.isArray(bookmark.first_comment_links)
+          ? bookmark.first_comment_links
+          : []
+      ];
+      for (const pool of pools) {
+        for (const url of pool) {
+          if (typeof url === "string" && isShortenerUrl(url)) {
+            shortUrls.push(url);
+          }
+        }
+      }
+    }
+
+    if (shortUrls.length === 0) {
+      return bookmarks;
+    }
+
+    let resolvedMap = new Map();
+    try {
+      resolvedMap = await resolveShortenerUrls(shortUrls);
+    } catch (error) {
+      console.warn(
+        "[x-indexer][store] shortener resolution failed",
+        error && error.message ? error.message : error
+      );
+      return bookmarks;
+    }
+
+    if (resolvedMap.size === 0) {
+      return bookmarks;
+    }
+
+    return bookmarks.map((bookmark) => {
+      if (!bookmark || typeof bookmark !== "object") return bookmark;
+      const next = { ...bookmark };
+      if (Array.isArray(bookmark.links)) {
+        next.links = rewriteLinksWithResolved(bookmark.links, resolvedMap);
+      }
+      if (Array.isArray(bookmark.first_comment_links)) {
+        next.first_comment_links = rewriteLinksWithResolved(
+          bookmark.first_comment_links,
+          resolvedMap
+        );
+      }
+      return next;
+    });
+  }
+
   async syncBookmarkContextLinks({ bookmarks, receivedAt }) {
     if (!this.capabilities.bookmarkContextLinks) {
       return null;
@@ -363,7 +426,9 @@ export class BookmarkStore {
 
     const bookmarksToUpsert = [];
 
-    for (const rawBookmark of bookmarks) {
+    const preparedBookmarks = await this.expandShortenerLinks(bookmarks);
+
+    for (const rawBookmark of preparedBookmarks) {
       const normalized = normalizeBookmark(rawBookmark, {
         userId,
         syncId,
