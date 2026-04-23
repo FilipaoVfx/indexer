@@ -346,6 +346,7 @@ const server = http.createServer(async (req, res) => {
         items: result.items,
         grouped_results: result.grouped_results,
         goal_parse: result.goal_parse,
+        steps: result.steps || [],
         next_steps: result.next_steps,
         strategy: result.strategy,
         latency_ms: result.latency_ms,

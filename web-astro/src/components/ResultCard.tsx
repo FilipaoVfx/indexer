@@ -234,6 +234,25 @@ export default function ResultCard({ item, anchorId }: Props) {
         </div>
       )}
 
+      {item.readme_match?.preview && (
+        <div className="mb-4 border-2 border-outline-variant bg-surface-container-lowest p-3">
+          <div className="flex items-center justify-between gap-2 mb-1">
+            <p className="text-[10px] font-mono uppercase tracking-wider text-primary">
+              $ readme --match {item.readme_match.slug}
+            </p>
+            {typeof item.readme_match.score === "number" &&
+              item.readme_match.score > 0 && (
+                <span className="text-[10px] font-mono text-on-surface-variant">
+                  score {item.readme_match.score.toFixed(3)}
+                </span>
+              )}
+          </div>
+          <p className="text-[11px] text-on-surface-variant leading-relaxed line-clamp-3 whitespace-pre-wrap break-words">
+            {item.readme_match.preview}
+          </p>
+        </div>
+      )}
+
       {otherMedia.length > 0 && (
         <div className="mb-4">
           <button

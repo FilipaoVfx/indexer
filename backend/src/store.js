@@ -175,6 +175,83 @@ function isMissingGithubReadmesFeatureError(error) {
   );
 }
 
+function isMissingGoalV3FeatureError(error) {
+  const message = extractDbErrorMessage(error).toLowerCase();
+  return (
+    (message.includes("search_goal_v3") || message.includes("goal_step_dictionary")) &&
+    (
+      message.includes("does not exist") ||
+      message.includes("schema cache") ||
+      message.includes("function") ||
+      message.includes("could not find") ||
+      message.includes("relation")
+    )
+  );
+}
+
+/**
+ * Turn the ordered path returned by `search_goal_v3.steps[]` into the short
+ * human-readable "next steps" bullet list the SPA already renders. The
+ * suggestions are template-based but derived from the composition detected
+ * in the goal so they feel tailored.
+ */
+function buildNextStepsFromPath(steps = []) {
+  if (!Array.isArray(steps) || steps.length === 0) {
+    return [
+      "Start from the highest-scoring repo or tutorial, then compare adjacent results for implementation tradeoffs."
+    ];
+  }
+
+  const STEP_HINTS = {
+    data_extraction:
+      "Lock the extraction layer first (scraper / crawler / ingestor) — everything downstream depends on its output schema.",
+    data_enrichment:
+      "Add an enrichment pass (cleanup, dedupe, normalization) before storing — it keeps downstream queries simple.",
+    storage:
+      "Pick the persistence store (Postgres, Supabase, vector DB) before building the API — migrations are the expensive step.",
+    api_layer:
+      "Define stable endpoint contracts before tuning ranking heuristics.",
+    search_layer:
+      "Validate the retrieval path first: corpus, parsing, and ranking.",
+    ai_reasoning:
+      "Lock the model / embedding dimensionality before storing vectors; swap later is costly.",
+    workflow:
+      "Wire orchestration (queues, cron, retries) once the happy path is green — avoids rework.",
+    outreach:
+      "Treat outreach channels (email, CRM, webhook) as the last step; test deliverability with a dry-run list first.",
+    visualization:
+      "Ship a minimal dashboard only after the pipeline is emitting real data — mocks hide integration gaps.",
+    auth_layer:
+      "Put authentication in early enough that later endpoints inherit the session / policy model.",
+    deployment:
+      "Automate deploy last, but design for it from day one (envs, secrets, migrations)."
+  };
+
+  const picked = steps
+    .map((entry) => STEP_HINTS[entry?.step])
+    .filter(Boolean);
+
+  if (picked.length === 0) {
+    return [
+      "Start from the highest-scoring repo or tutorial, then compare adjacent results for implementation tradeoffs."
+    ];
+  }
+
+  return picked.slice(0, 5);
+}
+
+function splitSlug(slug) {
+  const value = String(slug || "").trim();
+  const idx = value.indexOf("/");
+  if (idx <= 0) {
+    return { owner: "", repo: value };
+  }
+  return {
+    owner: value.slice(0, idx),
+    repo: value.slice(idx + 1)
+  };
+}
+
 function stripFirstCommentLinks(bookmarks = []) {
   return bookmarks.map(({ first_comment_links: _ignored, ...bookmark }) => bookmark);
 }
@@ -947,6 +1024,63 @@ export class BookmarkStore {
     const normalizedOffset = clampNumber(offset, 0, 0, 10_000);
     const startedAt = Date.now();
 
+    // Fast path: unified v3 RPC (parse + search + readme in one round-trip).
+    // Falls back to the v2 two-call path when the migration has not been
+    // applied yet — so deploys stay safe while SQL catches up.
+    const { data: v3Payload, error: v3Error } = await this.supabase.rpc(
+      "search_goal_v3",
+      {
+        p_goal: goal,
+        p_user_id: userId || null,
+        p_author: author || null,
+        p_domain: domain || null,
+        p_from: parsedQuery.filters.from || null,
+        p_to: parsedQuery.filters.to || null,
+        p_limit: normalizedLimit,
+        p_offset: normalizedOffset
+      }
+    );
+
+    if (!v3Error && v3Payload) {
+      const items = (v3Payload.items || []).map((row) =>
+        this.mapGoalSearchRowV3(row)
+      );
+
+      return {
+        total: Number(v3Payload.total || 0),
+        items,
+        grouped_results: groupGoalResults(items),
+        goal_parse: {
+          intent: v3Payload.intent || "explore",
+          topics:
+            items.length > 0
+              ? countTerms(items.map((item) => item.topics), 8)
+              : Array.isArray(v3Payload.tokens) ? v3Payload.tokens : [],
+          required_components: Array.isArray(v3Payload.components)
+            ? v3Payload.components
+            : [],
+          tokens: Array.isArray(v3Payload.tokens) ? v3Payload.tokens : [],
+          parsed_query: parsedQuery
+        },
+        steps: Array.isArray(v3Payload.steps) ? v3Payload.steps : [],
+        next_steps: buildNextStepsFromPath(
+          Array.isArray(v3Payload.steps) ? v3Payload.steps : []
+        ),
+        strategy: "goal_sql_v3",
+        latency_ms: Date.now() - startedAt,
+        warning: null
+      };
+    }
+
+    if (v3Error && !isMissingGoalV3FeatureError(v3Error)) {
+      throw new Error(
+        "Goal search v3 query failed in Supabase. " +
+          "Apply backend/sql/008_goal_search_v3.sql or inspect the function. " +
+          `Details: ${v3Error.message}`
+      );
+    }
+
+    // --- v2 fallback (legacy path) ----------------------------------------
     const { data: goalPlan, error: goalPlanError } = await this.supabase.rpc(
       "parse_goal_query",
       {
@@ -997,8 +1131,10 @@ export class BookmarkStore {
             ? countTerms(items.map((item) => item.topics), 8)
             : plan?.goal_terms || [],
         required_components: plan?.goal_components || [],
+        tokens: Array.isArray(plan?.goal_terms) ? plan.goal_terms : [],
         parsed_query: parsedQuery
       },
+      steps: [],
       next_steps:
         Array.isArray(plan?.next_steps) && plan.next_steps.length > 0
           ? plan.next_steps
@@ -1007,7 +1143,117 @@ export class BookmarkStore {
             ],
       strategy: "goal_sql_v2",
       latency_ms: Date.now() - startedAt,
-      warning: null
+      warning:
+        "Using goal search v2 (fallback). Apply backend/sql/008_goal_search_v3.sql to enable README-aware ranking in a single DB round-trip."
+    };
+  }
+
+  /**
+   * Map a v3 jsonb item (from `search_goal_v3`) to the client shape used by
+   * the SPA. Keeps backward compatibility with the v2 fields and synthesises
+   * a minimal `github_readmes` entry from the embedded `readme` payload so
+   * existing cards keep their "README available" badge without a second trip.
+   */
+  mapGoalSearchRowV3(row) {
+    if (!row || typeof row !== "object") return null;
+
+    const firstCommentLinks = Array.isArray(row.first_comment_links)
+      ? row.first_comment_links
+      : [];
+    const repoSlugs = Array.isArray(row.repo_slugs)
+      ? row.repo_slugs.filter(Boolean)
+      : [];
+    const inferredRepoSlug =
+      repoSlugs[0] ||
+      [
+        row.canonical_url,
+        row.source_url,
+        ...(Array.isArray(row.links) ? row.links : []),
+        ...firstCommentLinks
+      ]
+        .map((value) => extractGithubRepoSlugFromUrl(value))
+        .find(Boolean) ||
+      "";
+    const effectiveRepoSlugs = inferredRepoSlug
+      ? [...new Set([inferredRepoSlug, ...repoSlugs])]
+      : repoSlugs;
+    const effectiveAssetType =
+      row.asset_type === "repo" || effectiveRepoSlugs.length > 0
+        ? "repo"
+        : row.asset_type;
+
+    const readme = row.readme && typeof row.readme === "object" ? row.readme : null;
+    const githubReadmes = readme && readme.slug
+      ? [
+          {
+            repo_slug: readme.slug,
+            owner: splitSlug(readme.slug).owner,
+            repo: splitSlug(readme.slug).repo,
+            repo_url:
+              readme.url || `https://github.com/${readme.slug}`,
+            status: "ok",
+            content_preview: readme.preview || "",
+            content_chars: Number(readme.chars || 0),
+            readme_html_url: readme.url
+              ? `${readme.url}/blob/HEAD/README.md`
+              : null
+          }
+        ]
+      : [];
+
+    const breakdown = row.score_breakdown && typeof row.score_breakdown === "object"
+      ? row.score_breakdown
+      : {};
+
+    return {
+      id: row.bookmark_id,
+      asset_id: row.asset_id,
+      user_id: row.user_id,
+      tweet_id: row.tweet_id,
+      text_content: row.text_content,
+      author_username: row.author_username,
+      author_name: row.author_name,
+      created_at: row.created_at,
+      links: Array.isArray(row.links) ? row.links : [],
+      first_comment_links: firstCommentLinks,
+      media: Array.isArray(row.media) ? row.media : [],
+      source_url: row.source_url,
+      source_domain: row.source_domain || extractDomainFromUrl(row.source_url),
+      canonical_url: row.canonical_url || null,
+      repo_slugs: effectiveRepoSlugs,
+      asset_type: effectiveAssetType,
+      title: row.title,
+      summary: row.summary,
+      topics: Array.isArray(row.topics) ? row.topics : [],
+      subtopics: Array.isArray(row.subtopics) ? row.subtopics : [],
+      intent_tags: Array.isArray(row.intent_tags) ? row.intent_tags : [],
+      required_components: Array.isArray(row.required_components)
+        ? row.required_components
+        : [],
+      difficulty: row.difficulty,
+      score: Number(row.score || 0),
+      why_this_result: Array.isArray(row.why_this_result)
+        ? row.why_this_result
+        : [],
+      score_breakdown: {
+        text: Number(breakdown.fts || 0),
+        readme: Number(breakdown.readme || 0),
+        topics: Number(breakdown.topic || 0),
+        intent: Number(breakdown.intent || 0),
+        components: Number(breakdown.component || 0),
+        asset_type: Number(breakdown.type || 0),
+        freshness: Number(breakdown.fresh || 0)
+      },
+      readme_match: readme
+        ? {
+            slug: readme.slug,
+            url: readme.url,
+            preview: readme.preview,
+            chars: Number(readme.chars || 0),
+            score: Number(readme.score || 0)
+          }
+        : null,
+      github_readmes: githubReadmes
     };
   }
 

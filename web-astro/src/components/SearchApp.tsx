@@ -981,9 +981,29 @@ function ParseChips({ pq }: { pq?: ParsedQuery }) {
 }
 
 function GoalInsights({ response }: { response: GoalSearchResponse | null }) {
-  if (!response?.goal_parse && !response?.next_steps?.length) {
+  if (
+    !response?.goal_parse &&
+    !response?.steps?.length &&
+    !response?.next_steps?.length
+  ) {
     return null;
   }
+
+  const STEP_LABELS: Record<string, string> = {
+    data_extraction: "Extraccion",
+    data_enrichment: "Enriquecimiento",
+    storage: "Almacenamiento",
+    api_layer: "API",
+    search_layer: "Busqueda",
+    ai_reasoning: "IA / LLM",
+    workflow: "Automatizacion",
+    outreach: "Outreach",
+    visualization: "Dashboard",
+    auth_layer: "Auth",
+    deployment: "Deploy",
+  };
+
+  const pathSteps = (response.steps || []).slice(0, 6);
 
   return (
     <section className="p-6 rounded-2xl bg-surface-container-low">
@@ -1008,6 +1028,31 @@ function GoalInsights({ response }: { response: GoalSearchResponse | null }) {
               {component}
             </span>
           ))}
+        </div>
+      )}
+      {pathSteps.length > 0 && (
+        <div className="mb-4">
+          <p className="text-[10px] font-mono uppercase tracking-wider text-on-surface-variant mb-2">
+            $ path --compose
+          </p>
+          <ol className="flex flex-wrap items-center gap-1.5 text-[11px]">
+            {pathSteps.map((step, idx) => (
+              <li key={step.step} className="flex items-center gap-1.5">
+                {idx > 0 && (
+                  <span className="text-on-surface-variant font-mono">&rarr;</span>
+                )}
+                <span
+                  className="inline-flex items-center gap-1 rounded border-2 border-secondary bg-secondary/10 px-2 py-0.5 font-mono text-secondary"
+                  title={`${step.step} · tokens: ${(step.contributing_tokens || []).join(", ")}`}
+                >
+                  <span className="font-bold">
+                    {String(idx + 1).padStart(2, "0")}
+                  </span>
+                  <span>{STEP_LABELS[step.step] || step.step}</span>
+                </span>
+              </li>
+            ))}
+          </ol>
         </div>
       )}
       {!!response.next_steps?.length && (

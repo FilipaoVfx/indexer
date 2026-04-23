@@ -58,6 +58,14 @@ export interface GithubReadme {
   user_ids?: string[];
 }
 
+export interface ReadmeMatch {
+  slug: string;
+  url?: string | null;
+  preview?: string | null;
+  chars?: number;
+  score?: number;
+}
+
 export interface SearchItem {
   id?: string | number;
   user_id?: string;
@@ -85,6 +93,7 @@ export interface SearchItem {
   canonical_url?: string;
   repo_slugs?: string[];
   github_readmes?: GithubReadme[];
+  readme_match?: ReadmeMatch | null;
   why_this_result?: string[];
   score_breakdown?: Record<string, number | null> | null;
 }
@@ -104,6 +113,7 @@ export interface GoalParse {
   intent?: string;
   topics?: string[];
   required_components?: string[];
+  tokens?: string[];
   parsed_query?: ParsedQuery;
 }
 
@@ -112,6 +122,13 @@ export interface GoalGroupedResults {
   tutorials?: SearchItem[];
   repos?: SearchItem[];
   examples?: SearchItem[];
+}
+
+export interface GoalStep {
+  step: string;
+  score: number;
+  priority: number;
+  contributing_tokens: string[];
 }
 
 export interface GoalSearchResponse {
@@ -124,6 +141,7 @@ export interface GoalSearchResponse {
   latency_ms?: number;
   goal_parse?: GoalParse;
   grouped_results?: GoalGroupedResults;
+  steps?: GoalStep[];
   next_steps?: string[];
   warning?: string | null;
 }
