@@ -12,6 +12,8 @@ interface Props {
   current?: NavKey;
 }
 
+const COLLAPSE_STORAGE_KEY = "indexbook.sidebar.collapsed";
+
 const ITEMS: { key: NavKey; label: string; icon: string; href: string }[] = [
   { key: "all", label: "Todo el archivo", icon: "grid_view", href: "/" },
   { key: "recent", label: "Recientes", icon: "auto_graph", href: "/?sort=recent" },
@@ -26,6 +28,7 @@ export default function Sidebar({ current = "all" }: Props) {
   const [status, setStatus] = useState<"EN LINEA" | "SIN CONEXION" | "---">("---");
   const [count, setCount] = useState<string>("---");
   const [activeKey, setActiveKey] = useState<NavKey>(current);
+  const [collapsed, setCollapsed] = useState(false);
 
   function buildNavHref(href: string) {
     if (typeof window === "undefined") return withBase(href);
@@ -66,6 +69,17 @@ export default function Sidebar({ current = "all" }: Props) {
   }, []);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    const stored = window.localStorage.getItem(COLLAPSE_STORAGE_KEY);
+    setCollapsed(stored === "1");
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(COLLAPSE_STORAGE_KEY, collapsed ? "1" : "0");
+  }, [collapsed]);
+
+  useEffect(() => {
     if (current !== "all") {
       setActiveKey(current);
       return;
@@ -96,14 +110,57 @@ export default function Sidebar({ current = "all" }: Props) {
   const isLive = status === "EN LINEA";
 
   return (
-    <aside className="hidden md:flex flex-col h-full py-6 px-4 gap-4 bg-background w-64 border-r-2 border-primary">
-      <div className="mb-6 px-3 py-3 terminal-panel">
-        <h1 className="text-primary font-headline font-bold text-lg tracking-tight">
-          <span className="text-secondary">$</span> indexbook
-        </h1>
-        <p className="text-on-surface-variant text-[10px] mt-1 caret-blink">
-          ~/archive
-        </p>
+    <aside
+      className={`hidden md:flex h-full shrink-0 flex-col gap-4 border-r-2 border-primary bg-background py-6 transition-[width,padding] duration-200 ${
+        collapsed ? "w-20 px-2" : "w-64 px-4"
+      }`}
+    >
+      <div className={`mb-6 terminal-panel ${collapsed ? "px-2 py-3" : "px-3 py-3"}`}>
+        <div className={`flex items-start ${collapsed ? "justify-center" : "justify-between gap-3"}`}>
+          <div className={collapsed ? "text-center" : "min-w-0"}>
+            <h1 className="text-primary font-headline font-bold tracking-tight">
+              {collapsed ? (
+                <span className="text-lg">ib</span>
+              ) : (
+                <>
+                  <span className="text-secondary">$</span> indexbook
+                </>
+              )}
+            </h1>
+            {!collapsed && (
+              <p className="mt-1 text-[10px] text-on-surface-variant caret-blink">
+                ~/archive
+              </p>
+            )}
+          </div>
+          {!collapsed && (
+            <button
+              type="button"
+              onClick={() => setCollapsed(true)}
+              className="border-2 border-outline-variant bg-surface-container-high px-2 py-1 text-on-surface-variant transition-colors hover:border-primary hover:text-primary"
+              aria-label="Colapsar menu lateral"
+              title="Colapsar menu lateral"
+            >
+              <span className="material-symbols-outlined text-base">
+                keyboard_double_arrow_left
+              </span>
+            </button>
+          )}
+        </div>
+
+        {collapsed && (
+          <button
+            type="button"
+            onClick={() => setCollapsed(false)}
+            className="mt-3 flex w-full items-center justify-center border-2 border-outline-variant bg-surface-container-high px-2 py-1 text-on-surface-variant transition-colors hover:border-primary hover:text-primary"
+            aria-label="Expandir menu lateral"
+            title="Expandir menu lateral"
+          >
+            <span className="material-symbols-outlined text-base">
+              keyboard_double_arrow_right
+            </span>
+          </button>
+        )}
       </div>
 
       <nav className="flex flex-col gap-2 flex-grow">
@@ -113,25 +170,35 @@ export default function Sidebar({ current = "all" }: Props) {
             <a
               key={it.key}
               href={buildNavHref(it.href)}
+              aria-label={it.label}
+              title={collapsed ? it.label : undefined}
               className={
-                "flex items-center gap-3 px-3 py-2 border-2 transition-all text-sm font-medium " +
+                `flex items-center border-2 py-2 text-sm font-medium transition-all ${
+                  collapsed ? "justify-center px-2" : "gap-3 px-3"
+                } ` +
                 (active
                   ? "border-primary bg-primary text-on-primary neo-shadow-purple-sm"
                   : "border-transparent text-on-surface-variant hover:border-secondary hover:text-secondary hover:bg-surface-container")
               }
             >
               <span className="material-symbols-outlined text-lg">{it.icon}</span>
-              <span className="uppercase tracking-wide">{it.label}</span>
+              {!collapsed && <span className="uppercase tracking-wide">{it.label}</span>}
             </a>
           );
         })}
       </nav>
 
-      <div className="mx-1 mt-4 py-3 px-3 border-2 border-outline-variant bg-surface-container-low">
-        <div className="text-[10px] uppercase tracking-widest text-secondary mb-2 font-bold">
-          <span className="text-primary">&gt;</span> status
-        </div>
-        <div className="flex items-center gap-2">
+      <div
+        className={`mx-1 mt-4 border-2 border-outline-variant bg-surface-container-low ${
+          collapsed ? "px-2 py-3" : "px-3 py-3"
+        }`}
+      >
+        {!collapsed && (
+          <div className="mb-2 text-[10px] font-bold uppercase tracking-widest text-secondary">
+            <span className="text-primary">&gt;</span> status
+          </div>
+        )}
+        <div className={`flex items-center ${collapsed ? "justify-center" : "gap-2"}`}>
           <span
             className={
               "w-2 h-2 animate-pulse " +
@@ -146,10 +213,16 @@ export default function Sidebar({ current = "all" }: Props) {
             {status}
           </span>
         </div>
-        <div className="mt-2 text-xs">
-          <span className="text-secondary font-bold">{count}</span>{" "}
-          <span className="text-on-surface-variant">records</span>
-        </div>
+        {collapsed ? (
+          <div className="mt-2 text-center text-[11px] font-bold text-secondary">
+            {count}
+          </div>
+        ) : (
+          <div className="mt-2 text-xs">
+            <span className="text-secondary font-bold">{count}</span>{" "}
+            <span className="text-on-surface-variant">records</span>
+          </div>
+        )}
       </div>
 
       <div className="mt-auto flex flex-col gap-1">
@@ -157,10 +230,14 @@ export default function Sidebar({ current = "all" }: Props) {
           href="https://github.com/FilipaoVfx/indexer"
           target="_blank"
           rel="noreferrer"
-          className="flex items-center gap-3 px-3 py-2 border-2 border-transparent text-on-surface-variant hover:border-secondary hover:text-secondary transition-all text-sm font-medium"
+          aria-label="Source"
+          title={collapsed ? "Source" : undefined}
+          className={`flex items-center border-2 border-transparent py-2 text-sm font-medium text-on-surface-variant transition-all hover:border-secondary hover:text-secondary ${
+            collapsed ? "justify-center px-2" : "gap-3 px-3"
+          }`}
         >
           <span className="material-symbols-outlined text-lg">code</span>
-          <span className="uppercase tracking-wide">Source</span>
+          {!collapsed && <span className="uppercase tracking-wide">Source</span>}
         </a>
       </div>
     </aside>

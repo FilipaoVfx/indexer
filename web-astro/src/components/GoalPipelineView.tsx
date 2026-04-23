@@ -22,6 +22,7 @@ import {
   Background,
   Controls,
   Handle,
+  Panel,
   Position,
   ReactFlow,
   ReactFlowProvider,
@@ -30,7 +31,7 @@ import {
   type NodeProps,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { GoalSearchResponse, GoalStep, SearchItem } from "../lib/api";
 
@@ -122,12 +123,18 @@ interface StepCardData {
   step: GoalStep;
   stepIndex: number;
   matchPct: number;
-  onSelect: (id: string) => void;
+  onOpenModal: (id: string) => void;
   isSelected: boolean;
   [key: string]: unknown; // keep React Flow's generic happy
 }
 
 type StepCardNode = Node<StepCardData, "stepCard">;
+
+interface ParsedNodeSelection {
+  row: "p" | "a";
+  bucketIndex: number;
+  alternativeIndex: number | null;
+}
 
 // -----------------------------------------------------------------------------
 // Bucketing: pick best item per step (and collect alternatives).
@@ -262,12 +269,41 @@ function itemKey(item: SearchItem | undefined | null, fallback: string): string 
   );
 }
 
+function parseSelectedNodeId(value: string | null): ParsedNodeSelection | null {
+  if (!value) return null;
+  const match = value.match(/^([pa])-(\d+)(?:-(\d+))?$/);
+  if (!match) return null;
+  return {
+    row: match[1] as "p" | "a",
+    bucketIndex: Number(match[2]),
+    alternativeIndex: match[3] ? Number(match[3]) : null,
+  };
+}
+
+function getDefaultSelectedId(buckets: StepBucket[]): string | null {
+  for (let idx = 0; idx < buckets.length; idx += 1) {
+    if (buckets[idx].primary) return `p-${idx}`;
+    if (buckets[idx].alternatives.length > 0) return `a-${idx}-0`;
+  }
+  return null;
+}
+
+function buildItemUrl(item: SearchItem | undefined | null): string | undefined {
+  return (
+    (item?.source_url as string) ||
+    (item?.canonical_url as string) ||
+    (item?.repo_slugs?.[0]
+      ? `https://github.com/${item.repo_slugs[0]}`
+      : undefined)
+  );
+}
+
 // -----------------------------------------------------------------------------
 // Custom node — the step card
 // -----------------------------------------------------------------------------
 
 function StepCardNode({ data, id }: NodeProps<StepCardNode>) {
-  const { kind, item, step, stepIndex, matchPct, onSelect, isSelected } = data;
+  const { kind, item, step, stepIndex, matchPct, onOpenModal, isSelected } = data;
   const meta = STEP_META[step.step];
   const isEmpty = kind === "empty" || !item;
   const isPrimary = kind === "primary";
@@ -285,10 +321,24 @@ function StepCardNode({ data, id }: NodeProps<StepCardNode>) {
 
   return (
     <div
-      onClick={() => !isEmpty && onSelect(id)}
-      className={`relative w-[180px] rounded-xl border-2 ${borderCls} ${bgCls} p-3 transition-colors ${
+      className={`nopan relative w-[180px] rounded-xl border-2 ${borderCls} ${bgCls} p-3 transition-colors ${
         isEmpty ? "opacity-60" : "cursor-pointer hover:border-primary/90"
       }`}
+      role={isEmpty ? undefined : "button"}
+      tabIndex={isEmpty ? -1 : 0}
+      aria-pressed={isEmpty ? undefined : isSelected}
+      aria-label={
+        isEmpty
+          ? undefined
+          : `Abrir detalle de ${displayName(item)} para ${meta?.label || step.step}`
+      }
+      onKeyDown={(event) => {
+        if (isEmpty) return;
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onOpenModal(id);
+        }
+      }}
     >
       {/* step number badge only on primary row */}
       {isPrimary && (
@@ -334,9 +384,10 @@ function StepCardNode({ data, id }: NodeProps<StepCardNode>) {
       </div>
 
       {!isEmpty && (
-        <div className="flex items-center justify-between text-[11px]">
-          <span
-            className={`rounded-full px-1.5 py-0.5 font-mono ${
+        <>
+          <div className="flex items-center justify-between text-[11px]">
+            <span
+              className={`rounded-full px-1.5 py-0.5 font-mono ${
               matchPct >= 90
                 ? "bg-primary/20 text-primary"
                 : "bg-secondary/15 text-secondary"
@@ -347,7 +398,20 @@ function StepCardNode({ data, id }: NodeProps<StepCardNode>) {
           {starCount !== null && (
             <span className="text-on-surface-variant">★ {starCount}</span>
           )}
-        </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onOpenModal(id);
+            }}
+            className="nodrag nopan mt-3 inline-flex w-full items-center justify-center rounded-md border border-outline-variant/30 bg-surface-container-lowest px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-on-surface-variant transition-colors hover:border-primary hover:text-primary"
+          >
+            Ver detalle
+          </button>
+        </>
       )}
 
       {isEmpty && (
@@ -368,7 +432,7 @@ const NODE_TYPES = { stepCard: StepCardNode };
 function buildGraph(
   buckets: StepBucket[],
   selectedId: string | null,
-  onSelect: (id: string) => void
+  onOpenModal: (id: string) => void
 ): { nodes: StepCardNode[]; edges: Edge[] } {
   const COLUMN_WIDTH = 230;
   const PRIMARY_Y = 0;
@@ -391,11 +455,13 @@ function buildGraph(
         step: bucket.step,
         stepIndex: idx,
         matchPct: matchPercent(primaryItem),
-        onSelect,
+        onOpenModal,
         isSelected: selectedId === primaryId,
       },
       draggable: false,
-      selectable: false,
+      selectable: Boolean(primaryItem),
+      focusable: Boolean(primaryItem),
+      selected: selectedId === primaryId,
     });
 
     if (idx > 0) {
@@ -420,11 +486,13 @@ function buildGraph(
           step: bucket.step,
           stepIndex: idx,
           matchPct: matchPercent(alt),
-          onSelect,
+          onOpenModal,
           isSelected: selectedId === altId,
         },
         draggable: false,
-        selectable: false,
+        selectable: true,
+        focusable: true,
+        selected: selectedId === altId,
       });
 
       if (idx > 0 && altIdx === 0) {
@@ -450,10 +518,12 @@ function StepDetailPanel({
   bucket,
   selected,
   nextBucket,
+  onOpenModal,
 }: {
   bucket: StepBucket | null;
   selected: { kind: Kind; item: SearchItem | null } | null;
   nextBucket: StepBucket | null;
+  onOpenModal: (() => void) | null;
 }) {
   if (!bucket) {
     return (
@@ -470,26 +540,32 @@ function StepDetailPanel({
 
   const meta = STEP_META[bucket.step.step];
   const item = selected?.item || bucket.primary;
-  const url =
-    (item?.source_url as string) ||
-    (item?.canonical_url as string) ||
-    (item?.repo_slugs?.[0]
-      ? `https://github.com/${item.repo_slugs[0]}`
-      : undefined);
+  const url = buildItemUrl(item);
   return (
     <aside className="w-full space-y-4 rounded-2xl border border-outline-variant/20 bg-surface-container-low p-5 lg:p-6">
-      <div>
-        <p className="text-[10px] font-mono uppercase tracking-wider text-on-surface-variant">
-          Detalle del paso
-        </p>
-        <div className="mt-1 flex items-center gap-2">
-          <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-[12px] font-bold text-on-primary">
-            {(bucket.step.priority || 0) + 1}
-          </span>
-          <h4 className="text-sm font-bold text-on-surface">
-            {meta?.label || bucket.step.step}
-          </h4>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-[10px] font-mono uppercase tracking-wider text-on-surface-variant">
+            Detalle del paso
+          </p>
+          <div className="mt-1 flex items-center gap-2">
+            <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-[12px] font-bold text-on-primary">
+              {(bucket.step.priority || 0) + 1}
+            </span>
+            <h4 className="text-sm font-bold text-on-surface">
+              {meta?.label || bucket.step.step}
+            </h4>
+          </div>
         </div>
+        {item && onOpenModal && (
+          <button
+            type="button"
+            onClick={onOpenModal}
+            className="rounded-md border border-outline-variant/30 bg-surface-container-lowest px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider text-on-surface-variant transition-colors hover:border-primary hover:text-primary"
+          >
+            Abrir modal
+          </button>
+        )}
       </div>
 
       {item && (
@@ -583,6 +659,287 @@ function StepDetailPanel({
   );
 }
 
+function GoalNodeModal({
+  bucket,
+  selected,
+  nextBucket,
+  onClose,
+  onPrevious,
+  onNext,
+  hasPrevious,
+  hasNext,
+}: {
+  bucket: StepBucket;
+  selected: { kind: Kind; item: SearchItem | null };
+  nextBucket: StepBucket | null;
+  onClose: () => void;
+  onPrevious: () => void;
+  onNext: () => void;
+  hasPrevious: boolean;
+  hasNext: boolean;
+}) {
+  const closeRef = useRef<HTMLButtonElement | null>(null);
+  const item = selected.item || bucket.primary;
+
+  useEffect(() => {
+    if (!item) return;
+    closeRef.current?.focus();
+    const previousOverflow = document.body.style.overflow;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+      if (event.key === "ArrowLeft" && hasPrevious) onPrevious();
+      if (event.key === "ArrowRight" && hasNext) onNext();
+    };
+
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", onKey);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [hasNext, hasPrevious, item, onClose, onNext, onPrevious]);
+
+  if (!item) return null;
+
+  const meta = STEP_META[bucket.step.step];
+  const url = buildItemUrl(item);
+  const stepTypeLabel = selected.kind === "alternative" ? "Alternativa" : "Principal";
+  const tokens = (bucket.step.contributing_tokens || []).slice(0, 8);
+  const repos = item.repo_slugs || [];
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 backdrop-blur-sm p-4 md:p-8"
+      onClick={onClose}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="goal-node-modal-title"
+        className="relative w-full max-w-4xl terminal-panel neo-shadow-purple"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <header className="flex flex-wrap items-start justify-between gap-3 border-b-2 border-outline-variant px-5 py-4">
+          <div className="min-w-0">
+            <p className="text-[11px] uppercase tracking-widest text-on-surface-variant font-mono">
+              $ node.inspect --dynamic
+            </p>
+            <h2
+              id="goal-node-modal-title"
+              className="mt-1 truncate text-lg font-bold text-on-surface font-mono md:text-xl"
+            >
+              {displayName(item)}
+            </h2>
+            <p className="mt-1 text-xs text-on-surface-variant font-mono">
+              {meta?.label || bucket.step.step} · {languageLabel(item)}
+            </p>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              <span className="border-2 border-primary bg-primary/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-primary font-mono">
+                Paso {(bucket.step.priority || 0) + 1}
+              </span>
+              <span className="border-2 border-secondary bg-secondary/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-secondary font-mono">
+                {stepTypeLabel}
+              </span>
+              <span className="border-2 border-outline-variant bg-surface-container-high px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-on-surface font-mono">
+                {matchPercent(item)}% match
+              </span>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={onPrevious}
+              disabled={!hasPrevious}
+              className="border-2 border-outline-variant bg-surface-container-highest px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider text-on-surface transition-colors disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              [left] prev
+            </button>
+            <button
+              type="button"
+              onClick={onNext}
+              disabled={!hasNext}
+              className="border-2 border-outline-variant bg-surface-container-highest px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider text-on-surface transition-colors disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              next [right]
+            </button>
+            <button
+              ref={closeRef}
+              type="button"
+              onClick={onClose}
+              className="border-2 border-outline-variant bg-surface-container-highest px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider text-on-surface transition-colors hover:border-primary hover:text-primary"
+            >
+              [esc] cerrar
+            </button>
+          </div>
+        </header>
+
+        <div className="grid gap-4 px-5 py-4 md:grid-cols-[minmax(0,1.2fr)_minmax(280px,0.8fr)]">
+          <div className="space-y-4 min-w-0">
+            <section className="rounded-xl border border-outline-variant/20 bg-surface-container-low p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-[10px] uppercase tracking-widest text-on-surface-variant font-mono">
+                    &gt; resumen
+                  </p>
+                  <p className="mt-2 text-sm leading-relaxed text-on-surface-variant">
+                    {item.summary || "Sin resumen disponible para este recurso."}
+                  </p>
+                </div>
+                {url && (
+                  <a
+                    href={url}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                    className="shrink-0 rounded-md border border-outline-variant/40 p-2 text-on-surface-variant hover:text-primary"
+                    aria-label="Abrir recurso"
+                  >
+                    <span className="material-symbols-outlined text-[16px]">
+                      open_in_new
+                    </span>
+                  </a>
+                )}
+              </div>
+
+              {!!item.topics?.length && (
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                  {item.topics.slice(0, 8).map((topic) => (
+                    <span
+                      key={topic}
+                      className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] text-primary"
+                    >
+                      {topic}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            <section className="rounded-xl border border-outline-variant/20 bg-surface-container-low p-4">
+              <p className="text-[10px] uppercase tracking-widest text-on-surface-variant font-mono">
+                &gt; por que este match
+              </p>
+              {item.why_this_result?.length ? (
+                <ul className="mt-3 grid gap-2 md:grid-cols-2">
+                  {item.why_this_result.slice(0, 6).map((reason, idx) => (
+                    <li
+                      key={`${itemKey(item, "selected")}-reason-${idx}`}
+                      className="flex items-start gap-2 rounded-lg border border-outline-variant/15 bg-surface-container-lowest px-3 py-2 text-xs text-on-surface"
+                    >
+                      <span className="mt-0.5 text-primary">+</span>
+                      <span className="leading-snug">{reason}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-3 text-xs text-on-surface-variant">
+                  Sin explicaciones adicionales para este nodo.
+                </p>
+              )}
+            </section>
+
+            {item.readme_match?.preview && (
+              <section className="rounded-xl border border-outline-variant/20 bg-surface-container-low p-4">
+                <p className="text-[10px] uppercase tracking-widest text-on-surface-variant font-mono">
+                  &gt; readme.preview
+                </p>
+                <p className="mt-3 max-h-64 overflow-y-auto rounded-lg bg-surface-container-lowest p-3 text-[11px] leading-relaxed text-on-surface-variant">
+                  {item.readme_match.preview}
+                </p>
+              </section>
+            )}
+          </div>
+
+          <div className="space-y-4 min-w-0">
+            <section className="rounded-xl border border-outline-variant/20 bg-surface-container-low p-4">
+              <p className="text-[10px] uppercase tracking-widest text-on-surface-variant font-mono">
+                &gt; metadata
+              </p>
+              <div className="mt-3 space-y-2 text-xs font-mono">
+                <div>
+                  <span className="text-primary font-bold">kind:</span>{" "}
+                  <span className="text-on-surface">{item.asset_type || "recurso"}</span>
+                </div>
+                <div>
+                  <span className="text-primary font-bold">score:</span>{" "}
+                  <span className="text-on-surface">{item.score?.toFixed(3) || "n/a"}</span>
+                </div>
+                {item.required_components?.length ? (
+                  <div>
+                    <span className="text-primary font-bold">components:</span>{" "}
+                    <span className="text-on-surface">
+                      {item.required_components.join(", ")}
+                    </span>
+                  </div>
+                ) : null}
+              </div>
+            </section>
+
+            <section className="rounded-xl border border-outline-variant/20 bg-surface-container-low p-4">
+              <p className="text-[10px] uppercase tracking-widest text-on-surface-variant font-mono">
+                &gt; step tokens
+              </p>
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                {tokens.length > 0 ? (
+                  tokens.map((token) => (
+                    <span
+                      key={token}
+                      className="rounded-full border border-secondary/30 bg-secondary/10 px-2 py-0.5 text-[10px] text-secondary"
+                    >
+                      {token}
+                    </span>
+                  ))
+                ) : (
+                  <span className="text-xs text-on-surface-variant">
+                    Sin tokens de apoyo para este paso.
+                  </span>
+                )}
+              </div>
+            </section>
+
+            <section className="rounded-xl border border-outline-variant/20 bg-surface-container-low p-4">
+              <p className="text-[10px] uppercase tracking-widest text-on-surface-variant font-mono">
+                &gt; repos relacionados
+              </p>
+              {repos.length > 0 ? (
+                <div className="mt-3 space-y-2">
+                  {repos.slice(0, 5).map((slug) => (
+                    <a
+                      key={slug}
+                      href={`https://github.com/${slug}`}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      className="block rounded-lg border border-outline-variant/15 bg-surface-container-lowest px-3 py-2 text-xs text-on-surface transition-colors hover:border-primary hover:text-primary"
+                    >
+                      {slug}
+                    </a>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-3 text-xs text-on-surface-variant">
+                  No hay repos enlazados en este nodo.
+                </p>
+              )}
+            </section>
+
+            {nextBucket && (
+              <section className="rounded-xl border border-dashed border-primary/40 bg-primary/5 p-4">
+                <p className="text-[10px] uppercase tracking-widest text-on-surface-variant font-mono">
+                  &gt; siguiente paso
+                </p>
+                <p className="mt-2 text-sm font-semibold text-primary">
+                  {STEP_META[nextBucket.step.step]?.label || nextBucket.step.step}
+                </p>
+              </section>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // -----------------------------------------------------------------------------
 // Main component
 // -----------------------------------------------------------------------------
@@ -600,44 +957,90 @@ export default function GoalPipelineView({
     [steps, items]
   );
 
+  const interactiveNodeIds = useMemo(
+    () =>
+      buckets.flatMap((bucket, idx) => [
+        ...(bucket.primary ? [`p-${idx}`] : []),
+        ...bucket.alternatives.map((_, altIdx) => `a-${idx}-${altIdx}`),
+      ]),
+    [buckets]
+  );
+
   const [selectedId, setSelectedId] = useState<string | null>(() =>
-    buckets.length > 0 && buckets[0].primary ? "p-0" : null
+    getDefaultSelectedId(buckets)
+  );
+  const [isModalOpen, setIsModalOpen] = useState(false);
+
+  useEffect(() => {
+    if (interactiveNodeIds.length === 0) {
+      setSelectedId(null);
+      setIsModalOpen(false);
+      return;
+    }
+
+    if (!selectedId || !interactiveNodeIds.includes(selectedId)) {
+      setSelectedId(interactiveNodeIds[0]);
+      setIsModalOpen(false);
+    }
+  }, [interactiveNodeIds, selectedId]);
+
+  const openNodeModal = useCallback(
+    (nodeId: string) => {
+      if (!interactiveNodeIds.includes(nodeId)) return;
+      setSelectedId(nodeId);
+      setIsModalOpen(true);
+    },
+    [interactiveNodeIds]
+  );
+
+  const selectedParse = useMemo(
+    () => parseSelectedNodeId(selectedId),
+    [selectedId]
   );
 
   const { nodes, edges } = useMemo(
-    () => buildGraph(buckets, selectedId, setSelectedId),
-    [buckets, selectedId]
+    () => buildGraph(buckets, selectedId, openNodeModal),
+    [buckets, openNodeModal, selectedId]
   );
 
   const selectedBucket = useMemo(() => {
-    if (!selectedId) return null;
-    const match = selectedId.match(/^([pa])-(\d+)(?:-(\d+))?$/);
-    if (!match) return null;
-    const idx = Number(match[2]);
-    return buckets[idx] || null;
-  }, [selectedId, buckets]);
+    if (!selectedParse) return null;
+    return buckets[selectedParse.bucketIndex] || null;
+  }, [buckets, selectedParse]);
 
   const selectedItem: { kind: Kind; item: SearchItem | null } | null =
     useMemo(() => {
-      if (!selectedId || !selectedBucket) return null;
-      const match = selectedId.match(/^([pa])-(\d+)(?:-(\d+))?$/);
-      if (!match) return null;
-      const row = match[1];
-      const altIdx = match[3] ? Number(match[3]) : -1;
-      if (row === "p") {
+      if (!selectedParse || !selectedBucket) return null;
+      if (selectedParse.row === "p") {
         return { kind: "primary", item: selectedBucket.primary };
       }
       return {
         kind: "alternative",
-        item: selectedBucket.alternatives[altIdx] || null,
+        item:
+          selectedBucket.alternatives[selectedParse.alternativeIndex ?? -1] || null,
       };
-    }, [selectedId, selectedBucket]);
+    }, [selectedBucket, selectedParse]);
 
   const nextBucket = useMemo(() => {
     if (!selectedBucket) return null;
     const idx = buckets.indexOf(selectedBucket);
     return idx >= 0 && idx < buckets.length - 1 ? buckets[idx + 1] : null;
   }, [selectedBucket, buckets]);
+
+  const currentNodeIndex = selectedId ? interactiveNodeIds.indexOf(selectedId) : -1;
+  const hasPreviousNode = currentNodeIndex > 0;
+  const hasNextNode =
+    currentNodeIndex >= 0 && currentNodeIndex < interactiveNodeIds.length - 1;
+
+  const openPreviousNode = useCallback(() => {
+    if (!hasPreviousNode) return;
+    openNodeModal(interactiveNodeIds[currentNodeIndex - 1]);
+  }, [currentNodeIndex, hasPreviousNode, interactiveNodeIds, openNodeModal]);
+
+  const openNextNode = useCallback(() => {
+    if (!hasNextNode) return;
+    openNodeModal(interactiveNodeIds[currentNodeIndex + 1]);
+  }, [currentNodeIndex, hasNextNode, interactiveNodeIds, openNodeModal]);
 
   const primaryCount = buckets.filter((b) => b.primary).length;
   const toolsEvaluated =
@@ -673,6 +1076,8 @@ export default function GoalPipelineView({
                 nodes={nodes}
                 edges={edges}
                 nodeTypes={NODE_TYPES}
+                onNodeClick={(_, node) => openNodeModal(node.id)}
+                onPaneClick={() => setIsModalOpen(false)}
                 fitView
                 fitViewOptions={{ padding: 0.25 }}
                 proOptions={{ hideAttribution: true }}
@@ -681,13 +1086,43 @@ export default function GoalPipelineView({
                 panOnScroll
                 nodesDraggable={false}
                 nodesConnectable={false}
-                elementsSelectable={false}
+                nodesFocusable
+                edgesFocusable={false}
+                elementsSelectable
               >
                 <Background color="rgba(148, 163, 184, 0.25)" gap={16} />
                 <Controls
                   showInteractive={false}
                   className="!bg-surface-container-high !border-outline-variant/30"
                 />
+                <Panel position="top-left">
+                  <div className="rounded-lg border border-outline-variant/20 bg-background/90 px-3 py-2 text-xs text-on-surface backdrop-blur">
+                    <p className="text-[10px] uppercase tracking-widest text-on-surface-variant font-mono">
+                      click node · modal dinamico
+                    </p>
+                    <div className="mt-1 flex flex-wrap items-center gap-2">
+                      <span className="font-semibold">
+                        {selectedBucket
+                          ? STEP_META[selectedBucket.step.step]?.label ||
+                            selectedBucket.step.step
+                          : "Sin seleccion"}
+                      </span>
+                      {selectedItem?.item && (
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            setIsModalOpen(true);
+                          }}
+                          className="rounded-md border border-outline-variant/30 bg-surface-container-highest px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-on-surface-variant transition-colors hover:border-primary hover:text-primary"
+                        >
+                          abrir detalle
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </Panel>
               </ReactFlow>
             </ReactFlowProvider>
           </div>
@@ -697,7 +1132,21 @@ export default function GoalPipelineView({
         bucket={selectedBucket}
         selected={selectedItem}
         nextBucket={nextBucket}
+        onOpenModal={selectedItem?.item ? () => setIsModalOpen(true) : null}
       />
+
+      {isModalOpen && selectedBucket && selectedItem?.item && (
+        <GoalNodeModal
+          bucket={selectedBucket}
+          selected={selectedItem}
+          nextBucket={nextBucket}
+          onClose={() => setIsModalOpen(false)}
+          onPrevious={openPreviousNode}
+          onNext={openNextNode}
+          hasPrevious={hasPreviousNode}
+          hasNext={hasNextNode}
+        />
+      )}
 
       {/* Summary strip */}
       <div className="rounded-xl border border-outline-variant/20 bg-surface-container-low px-5 py-3 flex flex-wrap items-center gap-x-6 gap-y-1 text-xs text-on-surface-variant">
