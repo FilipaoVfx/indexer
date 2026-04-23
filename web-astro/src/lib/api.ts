@@ -114,6 +114,7 @@ export interface GoalParse {
   topics?: string[];
   required_components?: string[];
   tokens?: string[];
+  tokens_expanded?: string[];
   parsed_query?: ParsedQuery;
 }
 

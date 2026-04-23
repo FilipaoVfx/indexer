@@ -1060,6 +1060,9 @@ export class BookmarkStore {
             ? v3Payload.components
             : [],
           tokens: Array.isArray(v3Payload.tokens) ? v3Payload.tokens : [],
+          tokens_expanded: Array.isArray(v3Payload.tokens_expanded)
+            ? v3Payload.tokens_expanded
+            : [],
           parsed_query: parsedQuery
         },
         steps: Array.isArray(v3Payload.steps) ? v3Payload.steps : [],
