@@ -34,6 +34,7 @@ import {
   withBase,
 } from "../lib/url-state";
 import ResultCard from "./ResultCard";
+import GoalPipelineView from "./GoalPipelineView";
 
 const DEBOUNCE_MS = 400;
 
@@ -887,19 +888,22 @@ function ResultsView({
             </div>
           )}
 
-          {goalResponse?.grouped_results && (
-            <GoalGroups groupedResults={goalResponse.grouped_results} />
+          {mode === "goal" && goalResponse ? (
+            <GoalResultsSwitcher
+              response={goalResponse}
+              visibleItems={visibleItems}
+            />
+          ) : (
+            <div className="space-y-4">
+              {visibleItems.map((item, index) => (
+                <ResultCard
+                  key={item.asset_id || item.id || item.tweet_id || index}
+                  item={item}
+                  anchorId={buildResultAnchorId(item) || undefined}
+                />
+              ))}
+            </div>
           )}
-
-          <div className="space-y-4">
-            {visibleItems.map((item, index) => (
-              <ResultCard
-                key={item.asset_id || item.id || item.tweet_id || index}
-                item={item}
-                anchorId={buildResultAnchorId(item) || undefined}
-              />
-            ))}
-          </div>
         </div>
 
         <aside className="w-full lg:w-80 space-y-6 flex-shrink-0">
@@ -1065,6 +1069,59 @@ function GoalInsights({ response }: { response: GoalSearchResponse | null }) {
         </div>
       )}
     </section>
+  );
+}
+
+function GoalResultsSwitcher({
+  response,
+  visibleItems,
+}: {
+  response: GoalSearchResponse;
+  visibleItems: SearchItem[];
+}) {
+  const [view, setView] = useState<"pipeline" | "list">("pipeline");
+
+  return (
+    <div className="space-y-4">
+      <div className="inline-flex rounded-lg border-2 border-outline-variant/25 bg-surface-container-low p-0.5 text-xs font-mono">
+        <button
+          type="button"
+          onClick={() => setView("pipeline")}
+          className={`px-3 py-1 rounded-md transition-colors ${
+            view === "pipeline"
+              ? "bg-primary text-on-primary font-bold"
+              : "text-on-surface-variant hover:text-on-surface"
+          }`}
+        >
+          ~/ pipeline
+        </button>
+        <button
+          type="button"
+          onClick={() => setView("list")}
+          className={`px-3 py-1 rounded-md transition-colors ${
+            view === "list"
+              ? "bg-primary text-on-primary font-bold"
+              : "text-on-surface-variant hover:text-on-surface"
+          }`}
+        >
+          $ list
+        </button>
+      </div>
+
+      {view === "pipeline" ? (
+        <GoalPipelineView response={response} />
+      ) : (
+        <div className="space-y-4">
+          {visibleItems.map((item, index) => (
+            <ResultCard
+              key={item.asset_id || item.id || item.tweet_id || index}
+              item={item}
+              anchorId={buildResultAnchorId(item) || undefined}
+            />
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
