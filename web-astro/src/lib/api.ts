@@ -56,6 +56,27 @@ export interface GithubReadme {
   bookmark_count?: number;
   bookmark_ids?: string[];
   user_ids?: string[];
+  classification?: RepoClassification | null;
+}
+
+export interface RepoClassification {
+  repo_slug: string;
+  primary_category?: string | null;
+  secondary_categories?: string[];
+  capabilities?: string[];
+  input_types?: string[];
+  output_types?: string[];
+  integration_types?: string[];
+  target_domains?: string[];
+  tech_stack?: string[];
+  deployment_modes?: string[];
+  constraints?: string[];
+  complexity?: "basic" | "intermediate" | "advanced" | string;
+  maturity?: "unknown" | "prototype" | "usable" | "production" | string;
+  confidence?: number;
+  classifier_version?: string;
+  score_breakdown?: Record<string, unknown> | null;
+  updated_at?: string | null;
 }
 
 export interface ReadmeMatch {
@@ -194,6 +215,31 @@ function sanitizeGithubRepoSegment(value: string): string {
     .replace(/[^A-Za-z0-9._-]+$/g, "");
 }
 
+const GH_OWNER_RE = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/;
+const GH_REPO_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/;
+
+function normalizeGithubRepoMatch(ownerValue?: string, repoValue?: string) {
+  const owner = sanitizeGithubRepoSegment(ownerValue);
+  const repo = sanitizeGithubRepoSegment(repoValue);
+  if (!owner || !repo) return null;
+  if (!GH_OWNER_RE.test(owner) || !GH_REPO_RE.test(repo)) return null;
+  if (GH_NON_USERS.has(owner.toLowerCase())) return null;
+
+  return {
+    owner,
+    repo,
+    key: `${owner.toLowerCase()}/${repo.toLowerCase()}`,
+  };
+}
+
+function parseGithubRepoSlug(value?: string) {
+  const parts = String(value || "").trim().split("/");
+  if (parts.length !== 2) return null;
+  const [ownerValue = "", repoValue = ""] = parts;
+
+  return normalizeGithubRepoMatch(ownerValue, repoValue);
+}
+
 function uniqueUrls(values: string[]): string[] {
   const urls: string[] = [];
   const seen = new Set<string>();
@@ -228,28 +274,42 @@ export function extractGithubRepos(items: SearchItem[]): Map<string, RepoEntity>
   const repos = new Map<string, RepoEntity>();
 
   for (const it of items) {
+    const reposInItem = new Map<string, { owner: string; repo: string }>();
+    if (Array.isArray(it.repo_slugs)) {
+      for (const repoSlug of it.repo_slugs) {
+        const parsedRepo = parseGithubRepoSlug(repoSlug);
+        if (!parsedRepo) continue;
+        reposInItem.set(parsedRepo.key, {
+          owner: parsedRepo.owner,
+          repo: parsedRepo.repo,
+        });
+      }
+    }
+
     const haystack: string[] = [];
     haystack.push(...collectItemUrls(it));
-    if (Array.isArray(it.repo_slugs)) {
-      haystack.push(...it.repo_slugs.map((slug) => `https://github.com/${slug}`));
-    }
     if (it.text_content) haystack.push(it.text_content);
     if (it.summary) haystack.push(it.summary);
     const joined = haystack.filter(Boolean).join(" \n ");
-    if (!joined) continue;
+    if (joined) {
+      GH_REGEX.lastIndex = 0;
+      let match: RegExpExecArray | null;
 
-    GH_REGEX.lastIndex = 0;
-    let match: RegExpExecArray | null;
+      while ((match = GH_REGEX.exec(joined)) !== null) {
+        const parsedRepo = normalizeGithubRepoMatch(match[1], match[2]);
+        if (!parsedRepo) continue;
 
-    while ((match = GH_REGEX.exec(joined)) !== null) {
-      const owner = match[1];
-      const repo = sanitizeGithubRepoSegment(match[2]);
-      if (GH_NON_USERS.has(owner.toLowerCase()) || !repo) continue;
+        reposInItem.set(parsedRepo.key, {
+          owner: parsedRepo.owner,
+          repo: parsedRepo.repo,
+        });
+      }
+    }
 
-      const key = `${owner}/${repo}`;
+    for (const [key, repoInfo] of reposInItem) {
       const previous: RepoEntity = repos.get(key) || {
-        owner,
-        repo,
+        owner: repoInfo.owner,
+        repo: repoInfo.repo,
         count: 0,
         sample_author: null,
         latest_date: null,
@@ -267,7 +327,7 @@ export function extractGithubRepos(items: SearchItem[]): Map<string, RepoEntity>
         previous.latest_date = it.created_at;
       }
 
-      previous.urls.add(`https://github.com/${owner}/${repo}`);
+      previous.urls.add(`https://github.com/${repoInfo.owner}/${repoInfo.repo}`);
       repos.set(key, previous);
     }
   }
@@ -286,6 +346,17 @@ export function getPrimaryResourceUrl(item: SearchItem): string {
     item.source_url ||
     collectItemUrls(item)[0] ||
     ""
+  );
+}
+
+export function getPrimarySourceUrl(item: SearchItem): string {
+  const urls = collectItemUrls(item);
+  return (
+    item.canonical_url ||
+    item.source_url ||
+    urls.find((url) => !isGithubRepoUrl(url)) ||
+    urls[0] ||
+    getPrimaryResourceUrl(item)
   );
 }
 

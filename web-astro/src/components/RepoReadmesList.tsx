@@ -4,6 +4,7 @@ import {
   fetchUsers,
   formatDate,
   type GithubReadme,
+  type RepoClassification,
   type UserSummary,
 } from "../lib/api";
 
@@ -54,6 +55,126 @@ function formatBytes(value?: number | null): string {
   if (size < 1024) return `${size} B`;
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
   return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function formatClassifierLabel(value?: string | null): string {
+  return String(value || "")
+    .replace(/_/g, " ")
+    .trim();
+}
+
+function ClassifierTagGroup({
+  label,
+  values,
+  tone = "primary",
+}: {
+  label: string;
+  values?: string[];
+  tone?: "primary" | "secondary" | "neutral";
+}) {
+  const items = (values || []).filter(Boolean);
+  if (items.length === 0) return null;
+
+  const className =
+    tone === "secondary"
+      ? "border-secondary/20 bg-secondary/8 text-secondary"
+      : tone === "neutral"
+      ? "border-outline-variant bg-surface-container-high text-on-surface-variant"
+      : "border-primary/20 bg-primary/8 text-primary";
+
+  return (
+    <div>
+      <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.22em] text-on-surface-variant">
+        {label}
+      </p>
+      <div className="flex flex-wrap gap-1.5">
+        {items.map((value) => (
+          <span
+            key={`${label}-${value}`}
+            className={`border px-2 py-0.5 text-[11px] ${className}`}
+          >
+            {formatClassifierLabel(value)}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ClassificationSummary({ classification }: { classification?: RepoClassification | null }) {
+  if (!classification) return null;
+
+  return (
+    <section className="space-y-4 border-b-2 border-outline-variant bg-surface-container-low p-5">
+      <div className="flex flex-wrap items-center gap-2">
+        {classification.primary_category && (
+          <span className="border-2 border-primary bg-primary/10 px-2 py-1 text-[11px] font-bold uppercase tracking-[0.18em] text-primary">
+            {formatClassifierLabel(classification.primary_category)}
+          </span>
+        )}
+        {classification.maturity && (
+          <span className="border border-secondary/20 bg-secondary/8 px-2 py-1 text-[11px] text-secondary">
+            madurez: {formatClassifierLabel(classification.maturity)}
+          </span>
+        )}
+        {classification.complexity && (
+          <span className="border border-outline-variant bg-surface-container-high px-2 py-1 text-[11px] text-on-surface-variant">
+            complejidad: {formatClassifierLabel(classification.complexity)}
+          </span>
+        )}
+        {typeof classification.confidence === "number" && (
+          <span className="border border-outline-variant bg-surface-container-high px-2 py-1 text-[11px] text-on-surface-variant">
+            confianza {(classification.confidence * 100).toFixed(0)}%
+          </span>
+        )}
+      </div>
+
+      <ClassifierTagGroup
+        label="Categorias secundarias"
+        values={classification.secondary_categories}
+        tone="secondary"
+      />
+      <ClassifierTagGroup
+        label="Capacidades"
+        values={classification.capabilities}
+      />
+      <ClassifierTagGroup
+        label="Interfaces"
+        values={classification.integration_types}
+        tone="secondary"
+      />
+      <ClassifierTagGroup
+        label="Entradas"
+        values={classification.input_types}
+        tone="neutral"
+      />
+      <ClassifierTagGroup
+        label="Salidas"
+        values={classification.output_types}
+        tone="neutral"
+      />
+      <ClassifierTagGroup
+        label="Stack"
+        values={classification.tech_stack}
+        tone="secondary"
+      />
+      <ClassifierTagGroup
+        label="Despliegue"
+        values={classification.deployment_modes}
+        tone="neutral"
+      />
+      <ClassifierTagGroup
+        label="Restricciones"
+        values={classification.constraints}
+        tone="neutral"
+      />
+      <ClassifierTagGroup
+        label="Dominio"
+        values={classification.target_domains}
+        tone="secondary"
+      />
+    </section>
+  );
 }
 
 export default function RepoReadmesList() {
@@ -217,6 +338,11 @@ export default function RepoReadmesList() {
                   >
                     {statusLabel(item)}
                   </span>
+                  {item.classification?.primary_category && (
+                    <span className="mt-2 block text-[11px] opacity-85">
+                      {formatClassifierLabel(item.classification.primary_category)}
+                    </span>
+                  )}
                   <span className="mt-2 block text-xs opacity-80">
                     {item.bookmark_count || 0} bookmark(s)
                     {item.fetched_at ? ` | ${formatDate(item.fetched_at)}` : ""}
@@ -272,6 +398,8 @@ export default function RepoReadmesList() {
                     </p>
                   )}
                 </header>
+
+                <ClassificationSummary classification={selected.classification} />
 
                 {selected.status === "ok" ? (
                   <pre className="max-h-[calc(100vh-310px)] overflow-auto whitespace-pre-wrap break-words p-5 text-sm leading-relaxed text-on-surface-variant">

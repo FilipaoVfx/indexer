@@ -5,12 +5,12 @@ import {
   extractGithubRepos,
   formatDate,
   getDisplayAssetType,
-  getPrimaryResourceUrl,
+  getPrimarySourceUrl,
   initials,
   isGithubRepoUrl,
   safeDomain,
 } from "../lib/api";
-import { withBase } from "../lib/url-state";
+import MentionedReposModal from "./MentionedReposModal";
 
 interface Props {
   item: SearchItem;
@@ -81,6 +81,7 @@ function formatReason(reason: string): string {
 export default function ResultCard({ item, anchorId }: Props) {
   const [expanded, setExpanded] = useState(false);
   const [mediaOpen, setMediaOpen] = useState(false);
+  const [reposOpen, setReposOpen] = useState(false);
   const [avatarFailed, setAvatarFailed] = useState(false);
   const author = item.author_name || item.author_username || "anonimo";
   const handle = item.author_username ? `@${item.author_username}` : "";
@@ -94,7 +95,7 @@ export default function ResultCard({ item, anchorId }: Props) {
     : item.text_content || item.summary || "--- Sin contenido ---";
   const isLong = bodyText.length > LONG_TEXT_CHARS;
   const showToggle = isLong;
-  const primaryUrl = getPrimaryResourceUrl(item);
+  const primaryUrl = getPrimarySourceUrl(item);
   const domain =
     item.source_domain || safeDomain(primaryUrl || item.source_url || "");
 
@@ -110,11 +111,12 @@ export default function ResultCard({ item, anchorId }: Props) {
   if (otherMedia.length > 0) tags.push(`${otherMedia.length} multimedia`);
   if ((item.links || []).length > 0) tags.push(`${item.links!.length} enlaces`);
 
-  const cardRepos = [...extractGithubRepos([item]).values()].slice(0, 4);
+  const mentionedRepos = [...extractGithubRepos([item]).values()];
   const readmeSlugs = new Set((item.github_readmes || []).map((readme) => readme.repo_slug));
+  const readmeCount = readmeSlugs.size;
   const contextLinks = extractContextLinks(item, primaryUrl).slice(0, expanded ? 4 : 2);
   const primaryCtaLabel =
-    primaryUrl && isGithubRepoUrl(primaryUrl) ? "Abrir repo" : "Abrir fuente";
+    primaryUrl && isGithubRepoUrl(primaryUrl) ? "Abrir repo" : "Abrir post";
 
   const kind =
     otherMedia.length > 0
@@ -294,29 +296,21 @@ export default function ResultCard({ item, anchorId }: Props) {
         </div>
       )}
 
-      {cardRepos.length > 0 && (
-        <div className="flex flex-wrap gap-1.5 mb-3">
-          {cardRepos.map((r) => (
-            <span key={`${r.owner}/${r.repo}`} className="inline-flex flex-wrap gap-1">
-              <a
-                href={`https://github.com/${r.owner}/${r.repo}`}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-1 border-2 border-primary bg-surface-container-low text-primary text-[11px] font-bold px-2 py-0.5 hover:bg-primary hover:text-on-primary transition-colors"
-              >
-                <span className="material-symbols-outlined text-xs">code</span>
-                {r.owner}/{r.repo}
-              </a>
-              {readmeSlugs.has(`${r.owner}/${r.repo}`.toLowerCase()) && (
-                <a
-                  href={withBase(`/readmes?repo=${encodeURIComponent(`${r.owner}/${r.repo}`)}`)}
-                  className="inline-flex items-center gap-1 border-2 border-secondary bg-surface-container-low text-secondary text-[11px] font-bold px-2 py-0.5 hover:bg-secondary hover:text-on-primary transition-colors"
-                >
-                  README
-                </a>
-              )}
+      {mentionedRepos.length > 0 && (
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setReposOpen(true)}
+            className="inline-flex items-center gap-1.5 border-2 border-primary bg-surface-container-low px-3 py-1.5 text-xs font-bold text-primary transition-colors hover:bg-primary hover:text-on-primary"
+          >
+            <span className="material-symbols-outlined text-sm">hub</span>
+            Ver {mentionedRepos.length} repo{mentionedRepos.length === 1 ? "" : "s"} mencionados
+          </button>
+          {readmeCount > 0 && (
+            <span className="border border-secondary/20 bg-secondary/8 px-2 py-1 text-[11px] text-secondary">
+              {readmeCount} README disponible{readmeCount === 1 ? "" : "s"}
             </span>
-          ))}
+          )}
         </div>
       )}
 
@@ -368,6 +362,13 @@ export default function ResultCard({ item, anchorId }: Props) {
           </span>
         )}
       </div>
+
+      {reposOpen && (
+        <MentionedReposModal
+          item={item}
+          onClose={() => setReposOpen(false)}
+        />
+      )}
     </article>
   );
 }

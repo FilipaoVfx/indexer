@@ -13,7 +13,7 @@ import {
   fetchUsers,
   formatDate,
   getDisplayAssetType,
-  getPrimaryResourceUrl,
+  getPrimarySourceUrl,
   getCorpus,
   isGithubRepoUrl,
   safeDomain,
@@ -35,6 +35,7 @@ import {
 } from "../lib/url-state";
 import ResultCard from "./ResultCard";
 import GoalPipelineView from "./GoalPipelineView";
+import MentionedReposModal from "./MentionedReposModal";
 
 const DEBOUNCE_MS = 400;
 
@@ -136,7 +137,7 @@ function getGoalCardPreview(item: SearchItem): string {
 }
 
 function getGoalPrimaryUrl(item: SearchItem): string {
-  return getPrimaryResourceUrl(item);
+  return getPrimarySourceUrl(item);
 }
 
 function buildGoalSuggestion(sectionKey: string, item: SearchItem): string {
@@ -1318,6 +1319,7 @@ function GoalSequenceCard({
   stepLabel: string;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [reposOpen, setReposOpen] = useState(false);
   const title = getGoalCardTitle(item);
   const preview = getGoalCardPreview(item);
   const primaryUrl = getGoalPrimaryUrl(item);
@@ -1328,10 +1330,15 @@ function GoalSequenceCard({
   const difficulty = formatGoalDifficulty(item.difficulty);
   const assetType = formatGoalAssetType(getDisplayAssetType(item));
   const relatedLinks = extractContextLinks(item, primaryUrl).slice(0, 4);
-  const repos = [...extractGithubRepos([item]).values()].slice(0, 2);
+  const repos = [...extractGithubRepos([item]).values()];
+  const readmeCount = new Set(
+    (item.github_readmes || [])
+      .map((readme) => String(readme.repo_slug || "").toLowerCase())
+      .filter(Boolean)
+  ).size;
   const suggestion = buildGoalSuggestion(sectionKey, item);
   const primaryCtaLabel =
-    primaryUrl && isGithubRepoUrl(primaryUrl) ? "Abrir repo" : "Abrir fuente";
+    primaryUrl && isGithubRepoUrl(primaryUrl) ? "Abrir repo" : "Abrir post";
   const hasExpandableContent =
     preview.length > 180 ||
     relatedLinks.length > 0 ||
@@ -1432,23 +1439,6 @@ function GoalSequenceCard({
             </div>
           )}
 
-          {repos.length > 0 && (
-            <div className="flex flex-wrap gap-2">
-              {repos.map((repo) => (
-                <a
-                  key={`${repo.owner}/${repo.repo}`}
-                  href={`https://github.com/${repo.owner}/${repo.repo}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-1 rounded-full border border-primary/20 bg-primary/5 px-2.5 py-1 text-[11px] font-medium text-primary hover:bg-primary/10"
-                >
-                  <span className="material-symbols-outlined text-xs">code</span>
-                  {repo.owner}/{repo.repo}
-                </a>
-              ))}
-            </div>
-          )}
-
           {relatedLinks.length > 0 && (
             <div className="space-y-2">
               <p className="text-[11px] font-semibold uppercase tracking-wider text-on-surface-variant">
@@ -1491,6 +1481,17 @@ function GoalSequenceCard({
             <span className="material-symbols-outlined text-sm">south</span>
           </a>
         )}
+        {repos.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setReposOpen(true)}
+            className="inline-flex items-center gap-1 rounded-lg border border-primary/25 bg-primary/8 px-3 py-2 text-xs font-semibold text-primary hover:bg-primary/12"
+          >
+            Ver {repos.length} repo{repos.length === 1 ? "" : "s"}
+            {readmeCount > 0 ? ` | ${readmeCount} README` : ""}
+            <span className="material-symbols-outlined text-sm">hub</span>
+          </button>
+        )}
         {hasExpandableContent && (
           <button
             type="button"
@@ -1505,6 +1506,13 @@ function GoalSequenceCard({
           </button>
         )}
       </div>
+
+      {reposOpen && (
+        <MentionedReposModal
+          item={item}
+          onClose={() => setReposOpen(false)}
+        />
+      )}
     </article>
   );
 }
