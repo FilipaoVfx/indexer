@@ -25,7 +25,19 @@
       "mcp__02b5a8f8-16e6-4d58-96b2-eefbd115a524__list_projects",
       "mcp__02b5a8f8-16e6-4d58-96b2-eefbd115a524__execute_sql",
       "Bash(node_modules/.bin/tsc --noEmit --jsx preserve --module esnext --target es2022 --moduleResolution bundler --esModuleInterop --skipLibCheck --allowSyntheticDefaultImports --strict src/lib/repo-heuristics.ts src/components/RepoMentionsModal.tsx src/components/ReposList.tsx)",
-      "Bash(node_modules/.bin/tsc --noEmit -p .)"
+      "Bash(node_modules/.bin/tsc --noEmit -p .)",
+      "Bash(grep -E \",\\\\s*\\\\`\")",
+      "Bash(node src/import-readmes-from-disk.js)",
+      "Bash(node src/import-readmes-from-disk.js --apply)",
+      "Bash(node -e ' *)",
+      "Bash(node --check src/store.js)",
+      "Bash(node --check src/server.js)",
+      "Bash(npx --no-install tsc --noEmit -p tsconfig.json)",
+      "Read(//c/Users/Filipo/AppData/Local/Temp/claude/C--Users-Filipo-Documents-code-indexbook/e184ae1d-5740-4f6d-9378-49c44ba315d6/tasks/**)",
+      "Bash(2>/dev/null)",
+      "Bash(kill %1)",
+      "Bash(pkill -f \"astro dev\")",
+      "Bash(pkill -f \"vite\")"
     ]
   }
 }

@@ -809,106 +809,135 @@ function ResultsView({
   const parsedQuery = getParsedQuery(response);
   const goalResponse = getGoalResponse(response);
 
+  const isGoal = mode === "goal" && !!goalResponse;
+
+  // Goal mode: the pipeline is the investigation axis, so it takes the
+  // full central column. Analysis (parse chips, insights, contributors,
+  // filters) is demoted to a horizontal strip at the bottom.
+  // Hybrid mode keeps the classic layout: list + right-rail aside.
+
+  const header = (
+    <>
+      <div className="flex items-center justify-between mb-8 flex-wrap gap-3">
+        <div>
+          <h2 className="text-2xl font-headline font-bold text-on-surface flex items-center gap-3 flex-wrap">
+            {mode === "goal" ? "Resultados por objetivo" : "Resultados de busqueda"}
+            <span className="text-sm font-normal text-on-surface-variant bg-surface-container-high px-2 py-0.5 rounded-full">
+              {total} encontrados
+            </span>
+            {filters.user && (
+              <span className="text-sm font-normal text-tertiary bg-tertiary/10 px-2 py-0.5 rounded-full">
+                usuario {filters.user}
+              </span>
+            )}
+            {kindFilter && mode === "hybrid" && (
+              <span className="text-sm font-normal text-secondary bg-secondary/10 px-2 py-0.5 rounded-full">
+                {formatKindLabel(kindFilter)}
+              </span>
+            )}
+          </h2>
+          <p className="text-on-surface-variant text-sm mt-1">
+            {total > 0
+              ? mode === "goal"
+                ? `Mostrando los activos de conocimiento mas relevantes para "${queryText}".`
+                : `Mostrando las coincidencias mas relevantes para "${queryText}".`
+              : `No encontramos resultados para "${queryText}". Prueba con terminos mas amplios.`}
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <span className="flex items-center gap-2 px-3 py-1.5 bg-surface-container-high rounded-lg text-xs font-medium text-on-surface-variant">
+            <span className="material-symbols-outlined text-sm">
+              {mode === "goal" ? "route" : "psychology"}
+            </span>
+            {formatModeLabel(mode)} · {strategyLabel}
+          </span>
+        </div>
+      </div>
+
+      {error && (
+        <div className="p-4 rounded-xl bg-error-container/30 border border-error/40 mb-4">
+          <div className="flex items-center gap-2 text-error mb-1">
+            <span className="material-symbols-outlined">error</span>
+            <strong className="font-headline">La busqueda fallo</strong>
+          </div>
+          <p className="text-sm text-on-surface-variant">{error}</p>
+        </div>
+      )}
+
+      {!error && response?.warning && (
+        <div className="p-4 rounded-xl bg-secondary/10 border border-secondary/30 mb-4">
+          <p className="text-sm text-on-surface-variant">{response.warning}</p>
+        </div>
+      )}
+
+      {loading && (
+        <div className="text-center py-16 text-on-surface-variant">
+          <span className="material-symbols-outlined text-4xl animate-pulse">
+            psychology
+          </span>
+          <p className="mt-3 text-sm">Buscando y organizando resultados...</p>
+        </div>
+      )}
+
+      {!loading && !error && visibleItems.length === 0 && (
+        <div className="text-center py-16">
+          <span className="material-symbols-outlined text-5xl text-on-surface-variant opacity-40">
+            search_off
+          </span>
+          <h3 className="mt-4 font-headline font-bold text-on-surface">
+            Sin coincidencias
+          </h3>
+          <p className="mt-1 text-sm text-on-surface-variant">
+            Prueba palabras mas simples o elimina algun filtro.
+          </p>
+        </div>
+      )}
+    </>
+  );
+
+  if (isGoal) {
+    return (
+      <section className="px-4 md:px-8 py-10">
+        <div className="max-w-[1600px] mx-auto space-y-8">
+          <div className="space-y-6">{header}</div>
+
+          <GoalResultsSwitcher
+            response={goalResponse!}
+            visibleItems={visibleItems}
+          />
+
+          {/* Bottom analysis strip: ex right-rail, now horizontal */}
+          <GoalBottomAnalysis
+            parsedQuery={parsedQuery}
+            response={goalResponse}
+            items={visibleItems}
+            filters={filters}
+            reset={reset}
+          />
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section className="px-4 md:px-8 py-10">
       <div className="max-w-6xl mx-auto flex flex-col lg:flex-row gap-8 lg:gap-12">
         <div className="flex-1 space-y-6 min-w-0">
-          <div className="flex items-center justify-between mb-8 flex-wrap gap-3">
-            <div>
-              <h2 className="text-2xl font-headline font-bold text-on-surface flex items-center gap-3 flex-wrap">
-                {mode === "goal" ? "Resultados por objetivo" : "Resultados de busqueda"}
-                <span className="text-sm font-normal text-on-surface-variant bg-surface-container-high px-2 py-0.5 rounded-full">
-                  {total} encontrados
-                </span>
-                {filters.user && (
-                  <span className="text-sm font-normal text-tertiary bg-tertiary/10 px-2 py-0.5 rounded-full">
-                    usuario {filters.user}
-                  </span>
-                )}
-                {kindFilter && mode === "hybrid" && (
-                  <span className="text-sm font-normal text-secondary bg-secondary/10 px-2 py-0.5 rounded-full">
-                    {formatKindLabel(kindFilter)}
-                  </span>
-                )}
-              </h2>
-              <p className="text-on-surface-variant text-sm mt-1">
-                {total > 0
-                  ? mode === "goal"
-                    ? `Mostrando los activos de conocimiento mas relevantes para "${queryText}".`
-                    : `Mostrando las coincidencias mas relevantes para "${queryText}".`
-                  : `No encontramos resultados para "${queryText}". Prueba con terminos mas amplios.`}
-              </p>
-            </div>
-            <div className="flex gap-2">
-              <span className="flex items-center gap-2 px-3 py-1.5 bg-surface-container-high rounded-lg text-xs font-medium text-on-surface-variant">
-                <span className="material-symbols-outlined text-sm">
-                  {mode === "goal" ? "route" : "psychology"}
-                </span>
-                {formatModeLabel(mode)} · {strategyLabel}
-              </span>
-            </div>
+          {header}
+
+          <div className="space-y-4">
+            {visibleItems.map((item, index) => (
+              <ResultCard
+                key={item.asset_id || item.id || item.tweet_id || index}
+                item={item}
+                anchorId={buildResultAnchorId(item) || undefined}
+              />
+            ))}
           </div>
-
-          {error && (
-            <div className="p-4 rounded-xl bg-error-container/30 border border-error/40 mb-4">
-              <div className="flex items-center gap-2 text-error mb-1">
-                <span className="material-symbols-outlined">error</span>
-                <strong className="font-headline">La busqueda fallo</strong>
-              </div>
-              <p className="text-sm text-on-surface-variant">{error}</p>
-            </div>
-          )}
-
-          {!error && response?.warning && (
-            <div className="p-4 rounded-xl bg-secondary/10 border border-secondary/30 mb-4">
-              <p className="text-sm text-on-surface-variant">{response.warning}</p>
-            </div>
-          )}
-
-          {loading && (
-            <div className="text-center py-16 text-on-surface-variant">
-              <span className="material-symbols-outlined text-4xl animate-pulse">
-                psychology
-              </span>
-              <p className="mt-3 text-sm">Buscando y organizando resultados...</p>
-            </div>
-          )}
-
-          {!loading && !error && visibleItems.length === 0 && (
-            <div className="text-center py-16">
-              <span className="material-symbols-outlined text-5xl text-on-surface-variant opacity-40">
-                search_off
-              </span>
-              <h3 className="mt-4 font-headline font-bold text-on-surface">
-                Sin coincidencias
-              </h3>
-              <p className="mt-1 text-sm text-on-surface-variant">
-                Prueba palabras mas simples o elimina algun filtro.
-              </p>
-            </div>
-          )}
-
-          {mode === "goal" && goalResponse ? (
-            <GoalResultsSwitcher
-              response={goalResponse}
-              visibleItems={visibleItems}
-            />
-          ) : (
-            <div className="space-y-4">
-              {visibleItems.map((item, index) => (
-                <ResultCard
-                  key={item.asset_id || item.id || item.tweet_id || index}
-                  item={item}
-                  anchorId={buildResultAnchorId(item) || undefined}
-                />
-              ))}
-            </div>
-          )}
         </div>
 
         <aside className="w-full lg:w-80 space-y-6 flex-shrink-0">
           <ParseChips pq={parsedQuery} />
-          <GoalInsights response={goalResponse} />
           <Contributors items={visibleItems} />
           <ActiveFiltersCard filters={filters} reset={reset} />
         </aside>
@@ -917,11 +946,66 @@ function ResultsView({
   );
 }
 
-function ParseChips({ pq }: { pq?: ParsedQuery }) {
+function GoalBottomAnalysis({
+  parsedQuery,
+  response,
+  items,
+  filters,
+  reset,
+}: {
+  parsedQuery?: ParsedQuery;
+  response: GoalSearchResponse | null;
+  items: SearchItem[];
+  filters: Filters;
+  reset: () => void;
+}) {
+  return (
+    <section
+      aria-label="Análisis de la consulta"
+      className="rounded-2xl border-2 border-outline-variant/20 bg-surface-container-lowest p-4 md:p-5"
+    >
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-xs font-mono uppercase tracking-wider text-on-surface-variant">
+          $ analysis --compact
+        </h3>
+        <span className="text-[10px] text-on-surface-variant opacity-60">
+          Franja secundaria
+        </span>
+      </div>
+      <div className="grid gap-4 lg:grid-cols-4">
+        <ParseChips pq={parsedQuery} compact />
+        <GoalInsights response={response} compact />
+        <Contributors items={items} compact />
+        <ActiveFiltersCard filters={filters} reset={reset} compact />
+      </div>
+    </section>
+  );
+}
+
+function ParseChips({
+  pq,
+  compact = false,
+}: {
+  pq?: ParsedQuery;
+  compact?: boolean;
+}) {
+  const panelClass = compact
+    ? "rounded-xl border border-outline-variant/15 bg-surface-container-low p-4"
+    : "glass-panel p-6 rounded-2xl border border-outline-variant/15";
+  const titleClass = compact
+    ? "mb-3 text-on-surface font-headline font-bold text-xs uppercase tracking-wider"
+    : "text-on-surface font-headline font-bold mb-4 text-sm uppercase tracking-wider";
+  const chipsClass = compact
+    ? "flex flex-wrap gap-1.5 min-h-[1.75rem]"
+    : "flex flex-wrap gap-2 min-h-[2rem]";
+  const chipClass = compact
+    ? "px-2.5 py-0.5 border rounded-full text-[11px] font-medium"
+    : "px-3 py-1 border rounded-full text-xs font-medium";
+
   if (!pq) {
     return (
-      <section className="glass-panel p-6 rounded-2xl border border-outline-variant/15">
-        <h4 className="text-on-surface font-headline font-bold mb-4 text-sm uppercase tracking-wider">
+      <section className={panelClass}>
+        <h4 className={titleClass}>
           Analisis de consulta
         </h4>
         <span className="text-xs text-on-surface-variant opacity-50">
@@ -960,11 +1044,11 @@ function ParseChips({ pq }: { pq?: ParsedQuery }) {
   }
 
   return (
-    <section className="glass-panel p-6 rounded-2xl border border-outline-variant/15">
-      <h4 className="text-on-surface font-headline font-bold mb-4 text-sm uppercase tracking-wider">
+    <section className={panelClass}>
+      <h4 className={titleClass}>
         Analisis de consulta
       </h4>
-      <div className="flex flex-wrap gap-2 min-h-[2rem]">
+      <div className={chipsClass}>
         {chips.length === 0 ? (
           <span className="text-xs text-on-surface-variant opacity-50">
             Sin terminos detectados.
@@ -973,7 +1057,7 @@ function ParseChips({ pq }: { pq?: ParsedQuery }) {
           chips.map((chip, index) => (
             <span
               key={`${chip.label}-${index}`}
-              className={`px-3 py-1 border rounded-full text-xs font-medium ${chip.cls}`}
+              className={`${chipClass} ${chip.cls}`}
             >
               {chip.label}
             </span>
@@ -984,7 +1068,13 @@ function ParseChips({ pq }: { pq?: ParsedQuery }) {
   );
 }
 
-function GoalInsights({ response }: { response: GoalSearchResponse | null }) {
+function GoalInsights({
+  response,
+  compact = false,
+}: {
+  response: GoalSearchResponse | null;
+  compact?: boolean;
+}) {
   if (
     !response?.goal_parse &&
     !response?.steps?.length &&
@@ -1007,11 +1097,23 @@ function GoalInsights({ response }: { response: GoalSearchResponse | null }) {
     deployment: "Deploy",
   };
 
-  const pathSteps = (response.steps || []).slice(0, 6);
+  const pathSteps = (response.steps || []).slice(0, compact ? 4 : 6);
+  const sectionClass = compact
+    ? "rounded-xl border border-outline-variant/15 bg-surface-container-low p-4"
+    : "p-6 rounded-2xl bg-surface-container-low";
+  const titleClass = compact
+    ? "text-on-surface font-headline font-bold mb-3 text-xs uppercase tracking-wider"
+    : "text-on-surface font-headline font-bold mb-4 text-sm uppercase tracking-wider";
+  const componentClass = compact
+    ? "rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary"
+    : "rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-medium text-primary";
+  const pathTagClass = compact
+    ? "inline-flex items-center gap-1 rounded border border-secondary/40 bg-secondary/10 px-2 py-0.5 font-mono text-[10px] text-secondary"
+    : "inline-flex items-center gap-1 rounded border-2 border-secondary bg-secondary/10 px-2 py-0.5 font-mono text-secondary";
 
   return (
-    <section className="p-6 rounded-2xl bg-surface-container-low">
-      <h4 className="text-on-surface font-headline font-bold mb-4 text-sm uppercase tracking-wider">
+    <section className={sectionClass}>
+      <h4 className={titleClass}>
         Claves del objetivo
       </h4>
       {response.goal_parse?.intent && (
@@ -1025,10 +1127,7 @@ function GoalInsights({ response }: { response: GoalSearchResponse | null }) {
       {!!response.goal_parse?.required_components?.length && (
         <div className="mb-4 flex flex-wrap gap-2">
           {response.goal_parse.required_components.map((component) => (
-            <span
-              key={component}
-              className="rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-medium text-primary"
-            >
+            <span key={component} className={componentClass}>
               {component}
             </span>
           ))}
@@ -1046,7 +1145,7 @@ function GoalInsights({ response }: { response: GoalSearchResponse | null }) {
                   <span className="text-on-surface-variant font-mono">&rarr;</span>
                 )}
                 <span
-                  className="inline-flex items-center gap-1 rounded border-2 border-secondary bg-secondary/10 px-2 py-0.5 font-mono text-secondary"
+                  className={pathTagClass}
                   title={`${step.step} · tokens: ${(step.contributing_tokens || []).join(", ")}`}
                 >
                   <span className="font-bold">
@@ -1410,14 +1509,30 @@ function GoalSequenceCard({
   );
 }
 
-function Contributors({ items }: { items: SearchItem[] }) {
+function Contributors({
+  items,
+  compact = false,
+}: {
+  items: SearchItem[];
+  compact?: boolean;
+}) {
   const authors = [...extractAllAuthors(items).values()]
     .sort((a, b) => b.count - a.count)
-    .slice(0, 5);
+    .slice(0, compact ? 4 : 5);
+  const sectionClass = compact
+    ? "rounded-xl border border-outline-variant/15 bg-surface-container-low p-4"
+    : "p-6 rounded-2xl bg-surface-container-low";
+  const titleClass = compact
+    ? "text-on-surface font-headline font-bold mb-3 text-xs uppercase tracking-wider"
+    : "text-on-surface font-headline font-bold mb-4 text-sm uppercase tracking-wider";
+  const listClass = compact ? "space-y-2" : "space-y-3";
+  const badgeClass = compact
+    ? "text-[10px] font-bold text-primary bg-primary/10 px-1.5 py-0.5 rounded flex-shrink-0"
+    : "text-[10px] font-bold text-primary bg-primary/10 px-2 py-0.5 rounded flex-shrink-0";
 
   return (
-    <section className="p-6 rounded-2xl bg-surface-container-low">
-      <h4 className="text-on-surface font-headline font-bold mb-4 text-sm uppercase tracking-wider">
+    <section className={sectionClass}>
+      <h4 className={titleClass}>
         Principales autores
       </h4>
       {authors.length === 0 ? (
@@ -1425,18 +1540,22 @@ function Contributors({ items }: { items: SearchItem[] }) {
           Ejecuta una busqueda para ver autores destacados.
         </p>
       ) : (
-        <div className="space-y-3">
+        <div className={listClass}>
           {authors.map((author) => (
             <div key={author.handle || author.name} className="flex items-center justify-between">
               <div className="flex items-center gap-3 min-w-0">
-                <div className="w-8 h-8 rounded bg-surface-container-highest flex items-center justify-center flex-shrink-0">
+                <div
+                  className={`rounded bg-surface-container-highest flex items-center justify-center flex-shrink-0 ${
+                    compact ? "h-7 w-7" : "w-8 h-8"
+                  }`}
+                >
                   <span className="text-[10px] font-bold text-primary">
                     {(author.name[0] || "?").toUpperCase()}
                   </span>
                 </div>
                 <span className="text-xs font-medium truncate">{author.name}</span>
               </div>
-              <span className="text-[10px] font-bold text-primary bg-primary/10 px-2 py-0.5 rounded flex-shrink-0">
+              <span className={badgeClass}>
                 {author.count}
               </span>
             </div>
@@ -1450,9 +1569,11 @@ function Contributors({ items }: { items: SearchItem[] }) {
 function ActiveFiltersCard({
   filters,
   reset,
+  compact = false,
 }: {
   filters: Filters;
   reset: () => void;
+  compact?: boolean;
 }) {
   const entries: [string, string][] = [["Modo", formatModeLabel(filters.mode)]];
   if (filters.user) entries.push(["Usuario", filters.user]);
@@ -1467,13 +1588,25 @@ function ActiveFiltersCard({
     entries.push(["Orden", filters.sort === "recent" ? "recientes" : filters.sort]);
   }
   if (entries.length === 0) return null;
+  const wrapperClass = compact
+    ? "rounded-xl border border-secondary/35 bg-surface-container-low p-4"
+    : "p-5 bg-surface-container-low border-2 border-secondary neo-shadow-purple";
+  const titleClass = compact
+    ? "font-headline font-bold mb-3 text-secondary uppercase tracking-wider text-xs"
+    : "font-headline font-bold mb-3 text-secondary uppercase tracking-wider text-sm";
+  const contentClass = compact
+    ? "text-xs mb-3 leading-relaxed space-y-1 font-mono"
+    : "text-xs mb-4 leading-relaxed space-y-1 font-mono";
+  const buttonClass = compact
+    ? "w-full rounded-lg py-2 bg-primary text-on-primary font-bold text-[11px] uppercase tracking-widest hover:bg-secondary transition-colors"
+    : "w-full py-2 bg-primary text-on-primary border-2 border-primary font-bold text-xs uppercase tracking-widest hover:bg-secondary hover:border-secondary transition-colors";
 
   return (
-    <div className="p-5 bg-surface-container-low border-2 border-secondary neo-shadow-purple">
-      <h4 className="font-headline font-bold mb-3 text-secondary uppercase tracking-wider text-sm">
+    <div className={wrapperClass}>
+      <h4 className={titleClass}>
         <span className="text-primary">&gt;</span> filtros activos
       </h4>
-      <div className="text-xs mb-4 leading-relaxed space-y-1 font-mono">
+      <div className={contentClass}>
         {entries.map(([label, value]) => (
           <div key={label}>
             <span className="text-primary font-bold">{label}:</span>{" "}
@@ -1481,10 +1614,7 @@ function ActiveFiltersCard({
           </div>
         ))}
       </div>
-      <button
-        onClick={reset}
-        className="w-full py-2 bg-primary text-on-primary border-2 border-primary font-bold text-xs uppercase tracking-widest hover:bg-secondary hover:border-secondary transition-colors"
-      >
+      <button onClick={reset} className={buttonClass}>
         $ reset --all
       </button>
     </div>

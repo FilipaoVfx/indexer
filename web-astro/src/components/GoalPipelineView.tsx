@@ -7,8 +7,8 @@
  *   bottom row: up to 2 "alternative" nodes per step (same visual column),
  *               connected with dashed edges, not animated
  *
- * A right-side sidebar mirrors the currently selected node with metadata
- * (score breakdown, why_this_result, README preview, next suggested step).
+ * A detail panel under the canvas mirrors the currently selected node with
+ * metadata (why_this_result, README preview, next suggested step).
  *
  * Items are bucketed into steps using:
  *   1. repo_slugs whose content matches the step's canonical tokens
@@ -457,7 +457,7 @@ function StepDetailPanel({
 }) {
   if (!bucket) {
     return (
-      <aside className="w-full lg:w-80 rounded-xl border border-outline-variant/20 bg-surface-container-low p-5">
+      <aside className="w-full rounded-2xl border border-outline-variant/20 bg-surface-container-low p-5 lg:p-6">
         <h4 className="mb-2 text-xs font-bold uppercase tracking-wider text-on-surface-variant">
           Detalle del paso
         </h4>
@@ -476,9 +476,8 @@ function StepDetailPanel({
     (item?.repo_slugs?.[0]
       ? `https://github.com/${item.repo_slugs[0]}`
       : undefined);
-
   return (
-    <aside className="w-full lg:w-80 space-y-4 rounded-xl border border-outline-variant/20 bg-surface-container-low p-5">
+    <aside className="w-full space-y-4 rounded-2xl border border-outline-variant/20 bg-surface-container-low p-5 lg:p-6">
       <div>
         <p className="text-[10px] font-mono uppercase tracking-wider text-on-surface-variant">
           Detalle del paso
@@ -494,8 +493,8 @@ function StepDetailPanel({
       </div>
 
       {item && (
-        <div className="rounded-lg border border-outline-variant/20 bg-surface-container-lowest p-3">
-          <div className="flex items-start justify-between gap-2">
+        <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-4">
+          <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <p className="truncate text-base font-semibold text-on-surface">
                 {displayName(item)}
@@ -520,17 +519,17 @@ function StepDetailPanel({
           </div>
 
           {item.summary && (
-            <p className="mt-2 text-xs leading-relaxed text-on-surface-variant line-clamp-3">
+            <p className="mt-3 text-sm leading-relaxed text-on-surface-variant">
               {item.summary}
             </p>
           )}
 
           {!!item.topics?.length && (
-            <div className="mt-2 flex flex-wrap gap-1">
-              {item.topics.slice(0, 4).map((t) => (
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {item.topics.slice(0, 6).map((t) => (
                 <span
                   key={t}
-                  className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary"
+                  className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] text-primary"
                 >
                   {t}
                 </span>
@@ -545,9 +544,12 @@ function StepDetailPanel({
           <p className="text-[10px] font-mono uppercase tracking-wider text-on-surface-variant mb-2">
             Por qué este match
           </p>
-          <ul className="space-y-1 text-xs text-on-surface">
+          <ul className="grid gap-2 md:grid-cols-2">
             {item.why_this_result.slice(0, 4).map((w, idx) => (
-              <li key={idx} className="flex items-start gap-1.5">
+              <li
+                key={idx}
+                className="flex items-start gap-2 rounded-lg border border-outline-variant/15 bg-surface-container-lowest px-3 py-2 text-xs text-on-surface"
+              >
                 <span className="mt-0.5 text-primary">✓</span>
                 <span className="leading-snug">{w}</span>
               </li>
@@ -561,14 +563,14 @@ function StepDetailPanel({
           <p className="text-[10px] font-mono uppercase tracking-wider text-on-surface-variant mb-2">
             README · fragmento
           </p>
-          <p className="rounded-md bg-surface-container-lowest p-2 text-[11px] leading-relaxed text-on-surface-variant line-clamp-5">
+          <p className="rounded-lg bg-surface-container-lowest p-3 text-[11px] leading-relaxed text-on-surface-variant line-clamp-6">
             {item.readme_match.preview}
           </p>
         </div>
       )}
 
       {nextBucket && (
-        <div className="rounded-md border border-dashed border-primary/40 bg-primary/5 p-2 text-xs">
+        <div className="rounded-lg border border-dashed border-primary/40 bg-primary/5 p-3 text-xs">
           <p className="text-[10px] font-mono uppercase tracking-wider text-on-surface-variant">
             Siguiente paso sugerido
           </p>
@@ -656,8 +658,7 @@ export default function GoalPipelineView({
 
   return (
     <section className="space-y-4">
-      <div className="flex flex-col lg:flex-row gap-4">
-        <div className="flex-1 min-w-0 rounded-2xl border border-outline-variant/20 bg-surface-container-lowest overflow-hidden">
+      <div className="rounded-2xl border border-outline-variant/20 bg-surface-container-lowest overflow-hidden">
           <header className="flex items-center justify-between border-b border-outline-variant/15 px-4 py-2">
             <h3 className="text-sm font-bold uppercase tracking-wider text-on-surface">
               Ruta recomendada
@@ -666,7 +667,7 @@ export default function GoalPipelineView({
               {primaryCount}/{buckets.length} pasos · {toolsEvaluated} tools
             </span>
           </header>
-          <div style={{ height: 440 }}>
+          <div className="h-[430px] md:h-[500px] xl:h-[540px]">
             <ReactFlowProvider>
               <ReactFlow
                 nodes={nodes}
@@ -692,12 +693,11 @@ export default function GoalPipelineView({
           </div>
         </div>
 
-        <StepDetailPanel
-          bucket={selectedBucket}
-          selected={selectedItem}
-          nextBucket={nextBucket}
-        />
-      </div>
+      <StepDetailPanel
+        bucket={selectedBucket}
+        selected={selectedItem}
+        nextBucket={nextBucket}
+      />
 
       {/* Summary strip */}
       <div className="rounded-xl border border-outline-variant/20 bg-surface-container-low px-5 py-3 flex flex-wrap items-center gap-x-6 gap-y-1 text-xs text-on-surface-variant">
