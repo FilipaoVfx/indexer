@@ -8,6 +8,8 @@ const GITHUB_RESERVED_SEGMENTS = new Set([
 
 const GITHUB_REPO_URL_RE =
   /(?:https?:\/\/)?(?:www\.)?github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)(?=\.git\b|[/?#\s)\]}>,"'<]|$)/gi;
+const GITHUB_OWNER_RE = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/;
+const GITHUB_REPO_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/;
 
 function cleanRepoSegment(value) {
   return String(value || "")
@@ -42,6 +44,7 @@ export function normalizeGithubRepoSlug(value) {
   }
 
   if (!owner || !repo) return "";
+  if (!GITHUB_OWNER_RE.test(owner) || !GITHUB_REPO_RE.test(repo)) return "";
   if (GITHUB_RESERVED_SEGMENTS.has(owner.toLowerCase())) return "";
 
   return `${owner}/${repo}`.toLowerCase();

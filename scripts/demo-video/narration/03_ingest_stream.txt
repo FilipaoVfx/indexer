@@ -1,0 +1,1 @@
+No solo recolecta: limpia, deduplica y preserva mejor el contenido real de cada referencia.

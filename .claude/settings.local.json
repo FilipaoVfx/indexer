@@ -37,7 +37,19 @@
       "Bash(2>/dev/null)",
       "Bash(kill %1)",
       "Bash(pkill -f \"astro dev\")",
-      "Bash(pkill -f \"vite\")"
+      "Bash(pkill -f \"vite\")",
+      "WebFetch(domain:github.com)",
+      "Bash(npx --no-install astro check)",
+      "Bash(npx --no-install tsc --noEmit --jsx react-jsx --esModuleInterop --moduleResolution node --target es2020 --lib es2020,dom src/components/SearchApp.tsx)",
+      "Bash(ffmpeg -version)",
+      "Bash(where ffmpeg *)",
+      "Bash(powershell.exe -Command \"Get-Command ffmpeg -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source\")",
+      "Bash(powershell.exe -Command \"Get-NetTCPConnection -State Listen -LocalPort 4321,4322,3000,8787 -ErrorAction SilentlyContinue | Select-Object LocalPort,OwningProcess\")",
+      "Bash(node --check record.mjs)",
+      "Bash(node --check compose.mjs)",
+      "Bash(node --check narrate.mjs)",
+      "Bash(node -e \"JSON.parse\\(require\\('fs'\\).readFileSync\\('storyboard.json','utf8'\\)\\); console.log\\('storyboard.json OK'\\)\")",
+      "Bash(node narrate.mjs)"
     ]
   }
 }

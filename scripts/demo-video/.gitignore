@@ -1,0 +1,8 @@
+node_modules/
+clips/
+output/
+audio/voiceover.mp3
+audio/music.mp3
+narration/*.wav
+narration/*.aiff
+narration/*.mp3

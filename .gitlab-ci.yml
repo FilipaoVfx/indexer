@@ -1,32 +1,141 @@
 image: node:20
 
 stages:
-  - install
   - validate
   - build
 
-cache:
-  key: ${CI_COMMIT_REF_SLUG}
-  paths:
-    - backend/node_modules/
-    - web-astro/node_modules/
+variables:
+  NPM_CONFIG_CACHE: "$CI_PROJECT_DIR/.npm"
+  NPM_CONFIG_PREFER_OFFLINE: "true"
 
-install_backend:
-  stage: install
-  script:
-    - cd backend
-    - npm ci
+default:
+  interruptible: true
+  before_script:
+    - node --version
+    - npm --version
+
+cache:
+  key:
+    files:
+      - backend/package-lock.json
+      - web-astro/package-lock.json
+  paths:
+    - .npm/
+  policy: pull-push
 
 validate_backend:
   stage: validate
   script:
     - cd backend
-    - npm run lint || echo "Lint no configurado"
-    - npm run typecheck || echo "Typecheck no configurado"
+    - npm ci
+    - npm run --if-present lint
+    - npm run --if-present typecheck
+    - npm run --if-present test
+    - |
+      for file in src/*.js; do
+        node --check "$file"
+      done
+    - |
+      node --input-type=module - <<'NODE'
+      import fs from 'node:fs';
+      import path from 'node:path';
+
+      const sqlDir = path.join(process.cwd(), 'sql');
+      const migrations = fs
+        .readdirSync(sqlDir)
+        .filter((file) => file.endsWith('.sql'))
+        .sort();
+
+      if (migrations.length === 0) {
+        throw new Error('No SQL migrations found in backend/sql');
+      }
+
+      migrations.forEach((file, index) => {
+        const expectedPrefix = `${String(index + 1).padStart(3, '0')}_`;
+        const fullPath = path.join(sqlDir, file);
+
+        if (!file.startsWith(expectedPrefix)) {
+          throw new Error(`Unexpected migration order: ${file}; expected prefix ${expectedPrefix}`);
+        }
+
+        if (fs.statSync(fullPath).size === 0) {
+          throw new Error(`Empty SQL migration: ${file}`);
+        }
+      });
+      NODE
+
+validate_extension:
+  stage: validate
+  script:
+    - |
+      for file in extension/*.js; do
+        node --check "$file"
+      done
+    - |
+      node --input-type=module - <<'NODE'
+      import fs from 'node:fs';
+      import path from 'node:path';
+
+      const extensionDir = path.join(process.cwd(), 'extension');
+      const manifestPath = path.join(extensionDir, 'manifest.json');
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+
+      const assertFile = (relativePath, label) => {
+        if (!relativePath || typeof relativePath !== 'string') {
+          throw new Error(`Manifest is missing ${label}`);
+        }
+
+        const fullPath = path.join(extensionDir, relativePath);
+        if (!fs.existsSync(fullPath)) {
+          throw new Error(`Manifest references missing file: extension/${relativePath}`);
+        }
+      };
+
+      if (manifest.manifest_version !== 3) {
+        throw new Error('Chrome extension must use manifest_version 3');
+      }
+
+      if (!manifest.name || !manifest.version) {
+        throw new Error('Extension manifest requires name and version');
+      }
+
+      assertFile(manifest.background?.service_worker, 'background.service_worker');
+      assertFile(manifest.action?.default_popup, 'action.default_popup');
+
+      for (const contentScript of manifest.content_scripts ?? []) {
+        for (const script of contentScript.js ?? []) {
+          assertFile(script, 'content_scripts[].js[]');
+        }
+      }
+
+      for (const resourceGroup of manifest.web_accessible_resources ?? []) {
+        for (const resource of resourceGroup.resources ?? []) {
+          assertFile(resource, 'web_accessible_resources[].resources[]');
+        }
+      }
+      NODE
 
 build_web:
   stage: build
   script:
     - cd web-astro
     - npm ci
+    - npm run --if-present lint
+    - npm run --if-present typecheck
     - npm run build
+  artifacts:
+    expire_in: 1 week
+    paths:
+      - web-astro/dist/
+
+package_extension:
+  stage: build
+  image: mcr.microsoft.com/powershell:7.4-debian-12
+  before_script:
+    - pwsh --version
+  script:
+    - pwsh -NoProfile -File scripts/package-extension.ps1 -OutputDir dist -OutputName x-bookmarks-extension.zip
+  artifacts:
+    expire_in: 1 week
+    paths:
+      - dist/x-bookmarks-extension.zip

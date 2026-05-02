@@ -12,6 +12,11 @@ import {
   mapGithubReadmeRow,
   splitGithubRepoSlug
 } from "./github-readmes.js";
+import {
+  classifyRepoReadme,
+  mapRepoClassificationRow,
+  REPO_CLASSIFIER_VERSION
+} from "./repo-classifier.js";
 
 function clampNumber(value, fallback, minimum, maximum) {
   const parsed = Number(value);
@@ -21,6 +26,34 @@ function clampNumber(value, fallback, minimum, maximum) {
 
   return Math.min(Math.max(parsed, minimum), maximum);
 }
+
+function chunkArray(values = [], size = 200) {
+  const out = [];
+  for (let index = 0; index < values.length; index += size) {
+    out.push(values.slice(index, index + size));
+  }
+  return out;
+}
+
+const REPO_CLASSIFICATION_COLUMNS = [
+  "repo_slug",
+  "primary_category",
+  "secondary_categories",
+  "capabilities",
+  "input_types",
+  "output_types",
+  "integration_types",
+  "target_domains",
+  "tech_stack",
+  "deployment_modes",
+  "constraints",
+  "complexity",
+  "maturity",
+  "confidence",
+  "classifier_version",
+  "score_breakdown",
+  "updated_at"
+].join(",");
 
 function escapeForOrLike(value) {
   return String(value || "")
@@ -175,6 +208,23 @@ function isMissingGithubReadmesFeatureError(error) {
   );
 }
 
+function isMissingRepoClassifierFeatureError(error) {
+  const message = extractDbErrorMessage(error).toLowerCase();
+  return (
+    (
+      message.includes("repo_classifications") ||
+      message.includes("repo_classification_evidence")
+    ) &&
+    (
+      message.includes("schema cache") ||
+      message.includes("relation") ||
+      message.includes("table") ||
+      message.includes("does not exist") ||
+      message.includes("could not find")
+    )
+  );
+}
+
 function isMissingGoalV3FeatureError(error) {
   const message = extractDbErrorMessage(error).toLowerCase();
   return (
@@ -304,8 +354,10 @@ export class BookmarkStore {
       bookmarksFirstCommentLinks: true,
       bookmarkContextLinks: true,
       goalRefreshRpc: true,
-      githubReadmes: true
+      githubReadmes: true,
+      repoClassifier: true
     };
+    this.repoClassifierWarning = null;
   }
 
   async init() {
@@ -409,8 +461,8 @@ export class BookmarkStore {
 
       throw new Error(
         "Failed to clear bookmark context links. " +
-          "Apply backend/sql/005_bookmark_context_links.sql first. " +
-          `Details: ${deleteError.message}`
+        "Apply backend/sql/005_bookmark_context_links.sql first. " +
+        `Details: ${deleteError.message}`
       );
     }
 
@@ -439,8 +491,8 @@ export class BookmarkStore {
 
       throw new Error(
         "Failed to store bookmark context links. " +
-          "Apply backend/sql/005_bookmark_context_links.sql first. " +
-          `Details: ${insertError.message}`
+        "Apply backend/sql/005_bookmark_context_links.sql first. " +
+        `Details: ${insertError.message}`
       );
     }
   }
@@ -510,8 +562,8 @@ export class BookmarkStore {
 
       throw new Error(
         "Bookmarks were stored but the goal-search index refresh failed. " +
-          "Apply backend/sql/003_goal_search_schema.sql in Supabase first. " +
-          `Details: ${extractDbErrorMessage(refreshError)}`
+        "Apply backend/sql/003_goal_search_schema.sql in Supabase first. " +
+        `Details: ${extractDbErrorMessage(refreshError)}`
       );
     }
 
@@ -523,6 +575,18 @@ export class BookmarkStore {
     const warning =
       "Skipping GitHub README extraction because the Supabase schema is not available. " +
       "Apply backend/sql/007_github_repo_readmes.sql to enable production README caching.";
+    console.warn("[store]", warning, {
+      details: extractDbErrorMessage(error)
+    });
+    return warning;
+  }
+
+  missingRepoClassifierWarning(error) {
+    this.capabilities.repoClassifier = false;
+    const warning =
+      "Skipping repo classification because the Supabase schema is not available. " +
+      "Apply backend/sql/010_repo_classifier.sql to enable cached repo classifications.";
+    this.repoClassifierWarning = warning;
     console.warn("[store]", warning, {
       details: extractDbErrorMessage(error)
     });
@@ -631,6 +695,183 @@ export class BookmarkStore {
     return { repoSlugs: [...repoSlugs], warning: null };
   }
 
+  shouldRefreshRepoClassification(readmeRow, classificationRow, force = false) {
+    if (force) return true;
+    if (!classificationRow) return true;
+    if (classificationRow.classifier_version !== REPO_CLASSIFIER_VERSION) {
+      return true;
+    }
+
+    const readmeUpdatedAt = readmeRow?.updated_at
+      ? new Date(readmeRow.updated_at).getTime()
+      : 0;
+    const classificationUpdatedAt = classificationRow?.updated_at
+      ? new Date(classificationRow.updated_at).getTime()
+      : 0;
+
+    return readmeUpdatedAt > classificationUpdatedAt;
+  }
+
+  async fetchRepoClassificationMap(repoSlugs) {
+    const uniqueSlugs = [...new Set(repoSlugs)].filter(Boolean);
+    if (!this.capabilities.repoClassifier || uniqueSlugs.length === 0) {
+      return new Map();
+    }
+
+    const { data, error } = await this.supabase
+      .from("repo_classifications")
+      .select(REPO_CLASSIFICATION_COLUMNS)
+      .in("repo_slug", uniqueSlugs);
+
+    if (error) {
+      if (isMissingRepoClassifierFeatureError(error)) {
+        this.missingRepoClassifierWarning(error);
+        return new Map();
+      }
+      throw new Error(`Failed to fetch repo classifications: ${extractDbErrorMessage(error)}`);
+    }
+
+    return new Map(
+      (data || [])
+        .map((row) => mapRepoClassificationRow(row))
+        .filter(Boolean)
+        .map((row) => [row.repo_slug, row])
+    );
+  }
+
+  async hydrateReadmeRowsForClassification(readmeRows) {
+    const rowsNeedingContent = readmeRows.filter((row) => typeof row?.content !== "string");
+    if (rowsNeedingContent.length === 0) {
+      return readmeRows;
+    }
+
+    const { data, error } = await this.supabase
+      .from("github_repo_readmes")
+      .select("repo_slug,owner,repo,repo_url,status,content,content_chars,updated_at")
+      .in("repo_slug", rowsNeedingContent.map((row) => row.repo_slug));
+
+    if (error) {
+      if (isMissingGithubReadmesFeatureError(error)) {
+        this.missingGithubReadmesWarning(error);
+        return readmeRows;
+      }
+      throw new Error(`Failed to hydrate README rows for classification: ${extractDbErrorMessage(error)}`);
+    }
+
+    const hydratedBySlug = new Map((data || []).map((row) => [row.repo_slug, row]));
+    return readmeRows.map((row) => hydratedBySlug.get(row.repo_slug) || row);
+  }
+
+  async ensureRepoClassificationsForReadmeRows(readmeRows, { force = false } = {}) {
+    if (!this.capabilities.repoClassifier || !Array.isArray(readmeRows) || readmeRows.length === 0) {
+      return {
+        classifications: new Map(),
+        refreshed: 0,
+        warning: this.repoClassifierWarning
+      };
+    }
+
+    const uniqueRows = [
+      ...new Map(
+        readmeRows
+          .filter((row) => row?.repo_slug)
+          .map((row) => [row.repo_slug, row])
+      ).values()
+    ];
+
+    const existingMap = await this.fetchRepoClassificationMap(
+      uniqueRows.map((row) => row.repo_slug)
+    );
+
+    if (!this.capabilities.repoClassifier) {
+      return {
+        classifications: existingMap,
+        refreshed: 0,
+        warning: this.repoClassifierWarning
+      };
+    }
+
+    const candidates = uniqueRows.filter((row) =>
+      this.shouldRefreshRepoClassification(row, existingMap.get(row.repo_slug), force)
+    );
+
+    if (candidates.length > 0) {
+      const hydratedRows = await this.hydrateReadmeRowsForClassification(candidates);
+      const now = new Date().toISOString();
+      const classificationRows = [];
+      const evidenceRows = [];
+
+      for (const row of hydratedRows) {
+        const result = classifyRepoReadme(row, { now });
+        classificationRows.push(result.classification);
+        evidenceRows.push(...result.evidenceRows);
+      }
+
+      for (const chunk of chunkArray(classificationRows, 100)) {
+        const { error: upsertError } = await this.supabase
+          .from("repo_classifications")
+          .upsert(chunk, { onConflict: "repo_slug" });
+
+        if (upsertError) {
+          if (isMissingRepoClassifierFeatureError(upsertError)) {
+            return {
+              classifications: existingMap,
+              refreshed: 0,
+              warning: this.missingRepoClassifierWarning(upsertError)
+            };
+          }
+          throw new Error(`Failed to upsert repo classifications: ${extractDbErrorMessage(upsertError)}`);
+        }
+      }
+
+      for (const chunk of chunkArray(hydratedRows.map((row) => row.repo_slug), 100)) {
+        const { error: deleteError } = await this.supabase
+          .from("repo_classification_evidence")
+          .delete()
+          .eq("classifier_version", REPO_CLASSIFIER_VERSION)
+          .in("repo_slug", chunk);
+
+        if (deleteError) {
+          if (isMissingRepoClassifierFeatureError(deleteError)) {
+            return {
+              classifications: existingMap,
+              refreshed: classificationRows.length,
+              warning: this.missingRepoClassifierWarning(deleteError)
+            };
+          }
+          throw new Error(`Failed to clear repo classification evidence: ${extractDbErrorMessage(deleteError)}`);
+        }
+      }
+
+      for (const chunk of chunkArray(evidenceRows, 500)) {
+        const { error: evidenceError } = await this.supabase
+          .from("repo_classification_evidence")
+          .insert(chunk);
+
+        if (evidenceError) {
+          if (isMissingRepoClassifierFeatureError(evidenceError)) {
+            return {
+              classifications: existingMap,
+              refreshed: classificationRows.length,
+              warning: this.missingRepoClassifierWarning(evidenceError)
+            };
+          }
+          throw new Error(`Failed to store repo classification evidence: ${extractDbErrorMessage(evidenceError)}`);
+        }
+      }
+    }
+
+    const classifications = await this.fetchRepoClassificationMap(
+      uniqueRows.map((row) => row.repo_slug)
+    );
+
+    return {
+      classifications,
+      refreshed: candidates.length,
+      warning: null
+    };
+  }
+
   shouldFetchGithubReadme(row) {
     if (!row || row.status !== "ok" || !row.fetched_at) {
       return true;
@@ -690,10 +931,33 @@ export class BookmarkStore {
       fetched += 1;
     }
 
+    let warning = null;
+    if (this.capabilities.repoClassifier) {
+      const { data: classificationRows, error: classificationRowsError } = await this.supabase
+        .from("github_repo_readmes")
+        .select("repo_slug,owner,repo,repo_url,status,content,content_chars,updated_at")
+        .in("repo_slug", uniqueSlugs);
+
+      if (classificationRowsError) {
+        if (isMissingGithubReadmesFeatureError(classificationRowsError)) {
+          warning = this.missingGithubReadmesWarning(classificationRowsError);
+        } else {
+          throw new Error(
+            `Failed to load README rows for classification: ${extractDbErrorMessage(classificationRowsError)}`
+          );
+        }
+      } else {
+        const classificationResult = await this.ensureRepoClassificationsForReadmeRows(
+          classificationRows || []
+        );
+        warning = classificationResult.warning || null;
+      }
+    }
+
     return {
       fetched,
       skipped: uniqueSlugs.length - candidates.length,
-      warning: null
+      warning
     };
   }
 
@@ -895,7 +1159,7 @@ export class BookmarkStore {
     }
 
     const { count, error } = await queryBuilder;
-    
+
     if (error) {
       throw new Error(`Failed to count bookmarks: ${error.message}`);
     }
@@ -1069,7 +1333,7 @@ export class BookmarkStore {
         next_steps: buildNextStepsFromPath(
           Array.isArray(v3Payload.steps) ? v3Payload.steps : []
         ),
-        strategy: "goal_sql_v3",
+        strategy: "",
         latency_ms: Date.now() - startedAt,
         warning: null
       };
@@ -1078,8 +1342,8 @@ export class BookmarkStore {
     if (v3Error && !isMissingGoalV3FeatureError(v3Error)) {
       throw new Error(
         "Goal search v3 query failed in Supabase. " +
-          "Apply backend/sql/008_goal_search_v3.sql or inspect the function. " +
-          `Details: ${v3Error.message}`
+        "Apply backend/sql/008_goal_search_v3.sql or inspect the function. " +
+        `Details: ${v3Error.message}`
       );
     }
 
@@ -1094,8 +1358,8 @@ export class BookmarkStore {
     if (goalPlanError) {
       throw new Error(
         "Goal search schema is not installed in Supabase yet. " +
-          "Apply backend/sql/003_goal_search_schema.sql first. " +
-          `Details: ${goalPlanError.message}`
+        "Apply backend/sql/003_goal_search_schema.sql first. " +
+        `Details: ${goalPlanError.message}`
       );
     }
 
@@ -1113,8 +1377,8 @@ export class BookmarkStore {
     if (error) {
       throw new Error(
         "Goal search query failed in Supabase. " +
-          "Confirm backend/sql/003_goal_search_schema.sql is applied. " +
-          `Details: ${error.message}`
+        "Confirm backend/sql/003_goal_search_schema.sql is applied. " +
+        `Details: ${error.message}`
       );
     }
 
@@ -1142,8 +1406,8 @@ export class BookmarkStore {
         Array.isArray(plan?.next_steps) && plan.next_steps.length > 0
           ? plan.next_steps
           : [
-              "Start from the highest-scoring repo or tutorial, then compare adjacent results for implementation tradeoffs."
-            ],
+            "Start from the highest-scoring repo or tutorial, then compare adjacent results for implementation tradeoffs."
+          ],
       strategy: "goal_sql_v2",
       latency_ms: Date.now() - startedAt,
       warning:
@@ -1188,20 +1452,20 @@ export class BookmarkStore {
     const readme = row.readme && typeof row.readme === "object" ? row.readme : null;
     const githubReadmes = readme && readme.slug
       ? [
-          {
-            repo_slug: readme.slug,
-            owner: splitSlug(readme.slug).owner,
-            repo: splitSlug(readme.slug).repo,
-            repo_url:
-              readme.url || `https://github.com/${readme.slug}`,
-            status: "ok",
-            content_preview: readme.preview || "",
-            content_chars: Number(readme.chars || 0),
-            readme_html_url: readme.url
-              ? `${readme.url}/blob/HEAD/README.md`
-              : null
-          }
-        ]
+        {
+          repo_slug: readme.slug,
+          owner: splitSlug(readme.slug).owner,
+          repo: splitSlug(readme.slug).repo,
+          repo_url:
+            readme.url || `https://github.com/${readme.slug}`,
+          status: "ok",
+          content_preview: readme.preview || "",
+          content_chars: Number(readme.chars || 0),
+          readme_html_url: readme.url
+            ? `${readme.url}/blob/HEAD/README.md`
+            : null
+        }
+      ]
       : [];
 
     const breakdown = row.score_breakdown && typeof row.score_breakdown === "object"
@@ -1249,12 +1513,12 @@ export class BookmarkStore {
       },
       readme_match: readme
         ? {
-            slug: readme.slug,
-            url: readme.url,
-            preview: readme.preview,
-            chars: Number(readme.chars || 0),
-            score: Number(readme.score || 0)
-          }
+          slug: readme.slug,
+          url: readme.url,
+          preview: readme.preview,
+          chars: Number(readme.chars || 0),
+          score: Number(readme.score || 0)
+        }
         : null,
       github_readmes: githubReadmes
     };
@@ -1394,9 +1658,19 @@ export class BookmarkStore {
       throw new Error(`Failed to fetch GitHub README cache: ${extractDbErrorMessage(error)}`);
     }
 
+    const classificationResult = await this.ensureRepoClassificationsForReadmeRows(data || []);
+    const classifications = classificationResult.classifications;
+
     return new Map(
       (data || [])
-        .map((row) => mapGithubReadmeRow(row, { includeContent }))
+        .map((row) => {
+          const readme = mapGithubReadmeRow(row, { includeContent });
+          if (!readme) return null;
+          return {
+            ...readme,
+            classification: classifications.get(readme.repo_slug) || null
+          };
+        })
         .filter(Boolean)
         .map((readme) => [readme.repo_slug, readme])
     );
@@ -1535,6 +1809,9 @@ export class BookmarkStore {
       throw new Error(`Failed to list GitHub READMEs: ${extractDbErrorMessage(error)}`);
     }
 
+    const classificationResult = await this.ensureRepoClassificationsForReadmeRows(data || []);
+    const classifications = classificationResult.classifications;
+
     const repoSlugs = (data || []).map((row) => row.repo_slug);
     if (!userId && repoSlugs.length > 0) {
       const { data: allMentions, error: mentionsError } = await this.supabase
@@ -1564,6 +1841,7 @@ export class BookmarkStore {
         const mentions = mentionsByRepo.get(row.repo_slug);
         return {
           ...readme,
+          classification: classifications.get(row.repo_slug) || null,
           bookmark_count: mentions ? mentions.bookmark_ids.size : 0,
           bookmark_ids: mentions ? [...mentions.bookmark_ids].sort() : [],
           user_ids: mentions ? [...mentions.user_ids].sort() : []
@@ -1574,14 +1852,27 @@ export class BookmarkStore {
         return (
           item.repo_slug?.toLowerCase().includes(normalizedQuery) ||
           item.repo_url?.toLowerCase().includes(normalizedQuery) ||
-          item.content?.toLowerCase().includes(normalizedQuery)
+          item.content?.toLowerCase().includes(normalizedQuery) ||
+          item.classification?.primary_category?.toLowerCase().includes(normalizedQuery) ||
+          item.classification?.secondary_categories?.some((value) =>
+            value.toLowerCase().includes(normalizedQuery)
+          ) ||
+          item.classification?.capabilities?.some((value) =>
+            value.toLowerCase().includes(normalizedQuery)
+          ) ||
+          item.classification?.integration_types?.some((value) =>
+            value.toLowerCase().includes(normalizedQuery)
+          ) ||
+          item.classification?.tech_stack?.some((value) =>
+            value.toLowerCase().includes(normalizedQuery)
+          )
         );
       });
 
     return {
       total: mapped.length,
       items: mapped.slice(normalizedOffset, normalizedOffset + normalizedLimit),
-      warning: null
+      warning: classificationResult.warning || null
     };
   }
 

@@ -1,0 +1,21 @@
+{
+  "name": "indexbook-demo-video",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pipeline local para producir el demo promocional de Indexbook (Playwright + ffmpeg).",
+  "type": "module",
+  "scripts": {
+    "record": "node record.mjs",
+    "record:one": "node record.mjs --only",
+    "record:headed": "node record.mjs --headed",
+    "narrate": "node narrate.mjs",
+    "narrate:synth": "node narrate.mjs --synth",
+    "compose": "node compose.mjs",
+    "compose:fast": "node compose.mjs --noTransitions --preset veryfast --crf 23",
+    "all": "npm run record && npm run narrate && npm run compose",
+    "postinstall": "npx --yes playwright install chromium"
+  },
+  "dependencies": {
+    "playwright": "^1.48.0"
+  }
+}

@@ -1,0 +1,35 @@
+# 01_cold_open (5s) - Cold open / montaje
+Tus bookmarks ya no deberian vivir enterrados en una lista infinita.
+
+# 02_extension_scrape (7s) - Extension: scrape all bookmarks
+Indexbook captura tus bookmarks en lote y los convierte en un corpus consultable.
+
+# 03_ingest_stream (6s) - Ingesta: cards apareciendo
+No solo recolecta: limpia, deduplica y preserva mejor el contenido real de cada referencia.
+
+# 04_hybrid_search (8s) - Busqueda hibrida
+Cada resultado llega con mas contexto: texto completo, autor, multimedia, enlaces y repos detectados.
+
+# 05_mentioned_repos (7s) - Modal: ver repos mencionados
+Un post deja de ser una pieza aislada y pasa a revelar las herramientas que realmente menciona.
+
+# 06_goal_input (10s) - Goal mode: entrada en espanol
+Describe lo que quieres construir en lenguaje natural, incluso en espanol.
+
+# 07_pipeline_view (12s) - Pipeline visual con React Flow
+Indexbook traduce la necesidad en una ruta de implementacion, paso por paso.
+
+# 08_step_detail (8s) - Detalle del paso: why_this_result + README
+Cada recomendacion explica por que aparece y como encaja con el siguiente paso.
+
+# 09_repos_mentions (9s) - /repos con panel de menciones
+Tambien puedes explorar el mapa de repos desde la conversacion real de la comunidad.
+
+# 10_authors (8s) - /authors leaderboard + modal
+Y seguir a las personas que mas herramientas descubren, comparan y recomiendan.
+
+# 11_readmes (10s) - /readmes + clasificacion
+Detras del post, tambien vive la documentacion: READMEs cacheados y cada vez mas estructurados.
+
+# 12_closing (5s) - Cierre / montaje final
+Indexbook convierte bookmarks en conocimiento accionable.

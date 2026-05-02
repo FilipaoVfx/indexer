@@ -1,0 +1,1 @@
+Cada resultado llega con mas contexto: texto completo, autor, multimedia, enlaces y repos detectados.

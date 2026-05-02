@@ -1,0 +1,227 @@
+{
+  "$schema": "./storyboard.schema.json",
+  "meta": {
+    "title": "Indexbook - Demo Promocional",
+    "aspect": "16:9",
+    "resolution": { "width": 1600, "height": 900 },
+    "fps": 30,
+    "totalSeconds": 95,
+    "baseUrl": "http://localhost:4321",
+    "tagline": "De bookmarks a decisiones."
+  },
+  "scenes": [
+    {
+      "id": "01_cold_open",
+      "label": "Cold open / montaje",
+      "startSec": 0,
+      "durationSec": 5,
+      "url": "/",
+      "actions": [
+        { "type": "wait", "ms": 600 },
+        { "type": "scrollBy", "y": 120, "ms": 800 },
+        { "type": "wait", "ms": 800 },
+        { "type": "goto", "path": "/repos" },
+        { "type": "wait", "ms": 900 },
+        { "type": "goto", "path": "/readmes" },
+        { "type": "wait", "ms": 900 }
+      ],
+      "caption": "Indexbook",
+      "voiceover": "Tus bookmarks ya no deberian vivir enterrados en una lista infinita."
+    },
+    {
+      "id": "02_extension_scrape",
+      "label": "Extension: scrape all bookmarks",
+      "startSec": 5,
+      "durationSec": 7,
+      "url": "/",
+      "mock": "extension_scrape",
+      "caption": "Captura masiva desde X / Twitter",
+      "voiceover": "Indexbook captura tus bookmarks en lote y los convierte en un corpus consultable."
+    },
+    {
+      "id": "03_ingest_stream",
+      "label": "Ingesta: cards apareciendo",
+      "startSec": 12,
+      "durationSec": 6,
+      "url": "/?q=scraper",
+      "actions": [
+        { "type": "wait", "ms": 600 },
+        { "type": "scrollBy", "y": 600, "ms": 2800 },
+        { "type": "scrollBy", "y": 600, "ms": 2200 }
+      ],
+      "caption": "Limpieza, dedup, recuperacion de URLs completas",
+      "voiceover": "No solo recolecta: limpia, deduplica y preserva mejor el contenido real de cada referencia."
+    },
+    {
+      "id": "04_hybrid_search",
+      "label": "Busqueda hibrida",
+      "startSec": 18,
+      "durationSec": 8,
+      "url": "/",
+      "actions": [
+        { "type": "ensureMode", "mode": "hybrid" },
+        { "type": "fillSearch", "text": "scraping leads dashboard" },
+        { "type": "press", "key": "Enter" },
+        { "type": "wait", "ms": 3500 },
+        { "type": "scrollBy", "y": 400, "ms": 1800 }
+      ],
+      "caption": "Busqueda hibrida con contexto completo",
+      "voiceover": "Cada resultado llega con mas contexto: texto completo, autor, multimedia, enlaces y repos detectados."
+    },
+    {
+      "id": "05_mentioned_repos",
+      "label": "Modal: ver repos mencionados",
+      "startSec": 26,
+      "durationSec": 7,
+      "url": "/",
+      "actions": [
+        { "type": "ensureMode", "mode": "hybrid" },
+        { "type": "fillSearch", "text": "agentes scraping" },
+        { "type": "press", "key": "Enter" },
+        { "type": "wait", "ms": 2500 },
+        { "type": "clickText", "text": "Ver repos" },
+        { "type": "wait", "ms": 3500 }
+      ],
+      "caption": "Repos mencionados en cada post",
+      "voiceover": "Un post deja de ser una pieza aislada y pasa a revelar las herramientas que realmente menciona."
+    },
+    {
+      "id": "06_goal_input",
+      "label": "Goal mode: entrada en espanol",
+      "startSec": 33,
+      "durationSec": 10,
+      "url": "/",
+      "actions": [
+        { "type": "ensureMode", "mode": "goal" },
+        { "type": "fillSearch", "text": "quiero montar un flujo de scraping, API y dashboard para leads" },
+        { "type": "press", "key": "Enter" },
+        { "type": "wait", "ms": 5000 },
+        { "type": "scrollBy", "y": 200, "ms": 1200 }
+      ],
+      "caption": "Describe tu objetivo en lenguaje natural",
+      "voiceover": "Describe lo que quieres construir en lenguaje natural, incluso en espanol."
+    },
+    {
+      "id": "07_pipeline_view",
+      "label": "Pipeline visual con React Flow",
+      "startSec": 43,
+      "durationSec": 12,
+      "url": "/?mode=goal&q=quiero%20montar%20un%20flujo%20de%20scraping%2C%20API%20y%20dashboard%20para%20leads",
+      "actions": [
+        { "type": "wait", "ms": 3500 },
+        { "type": "scrollIntoView", "selector": "[data-testid=\"goal-pipeline\"], section:has(.react-flow)" },
+        { "type": "wait", "ms": 1000 },
+        { "type": "clickNth", "selector": ".react-flow__node", "index": 0 },
+        { "type": "wait", "ms": 1800 },
+        { "type": "clickNth", "selector": ".react-flow__node", "index": 2 },
+        { "type": "wait", "ms": 1800 },
+        { "type": "clickNth", "selector": ".react-flow__node", "index": 4 },
+        { "type": "wait", "ms": 2000 }
+      ],
+      "caption": "Pipeline: extraccion -> storage -> API -> dashboard",
+      "voiceover": "Indexbook traduce la necesidad en una ruta de implementacion, paso por paso."
+    },
+    {
+      "id": "08_step_detail",
+      "label": "Detalle del paso: why_this_result + README",
+      "startSec": 55,
+      "durationSec": 8,
+      "url": "/?mode=goal&q=quiero%20montar%20un%20flujo%20de%20scraping%2C%20API%20y%20dashboard%20para%20leads",
+      "actions": [
+        { "type": "wait", "ms": 3500 },
+        { "type": "clickNth", "selector": ".react-flow__node", "index": 1 },
+        { "type": "wait", "ms": 1800 },
+        { "type": "scrollIntoView", "selector": "section:has-text('siguiente paso'), aside:has-text('why_this_result'), [data-testid=\"step-detail\"]" },
+        { "type": "wait", "ms": 2200 }
+      ],
+      "caption": "why_this_result + preview del README + siguiente paso",
+      "voiceover": "Cada recomendacion explica por que aparece y como encaja con el siguiente paso."
+    },
+    {
+      "id": "09_repos_mentions",
+      "label": "/repos con panel de menciones",
+      "startSec": 63,
+      "durationSec": 9,
+      "url": "/repos",
+      "actions": [
+        { "type": "wait", "ms": 1500 },
+        { "type": "scrollBy", "y": 300, "ms": 1400 },
+        { "type": "clickText", "text": "ver menciones" },
+        { "type": "wait", "ms": 4500 },
+        { "type": "scrollBy", "y": 300, "ms": 1200 }
+      ],
+      "caption": "Menciones: intent, sentiment, keywords",
+      "voiceover": "Tambien puedes explorar el mapa de repos desde la conversacion real de la comunidad."
+    },
+    {
+      "id": "10_authors",
+      "label": "/authors leaderboard + modal",
+      "startSec": 72,
+      "durationSec": 8,
+      "url": "/authors",
+      "actions": [
+        { "type": "wait", "ms": 1500 },
+        { "type": "scrollBy", "y": 200, "ms": 1000 },
+        { "type": "clickNth", "selector": "a[href*='authors/'], button:has-text('ver repos')", "index": 0 },
+        { "type": "wait", "ms": 4500 }
+      ],
+      "caption": "Autores que descubren herramientas",
+      "voiceover": "Y seguir a las personas que mas herramientas descubren, comparan y recomiendan."
+    },
+    {
+      "id": "11_readmes",
+      "label": "/readmes + clasificacion",
+      "startSec": 80,
+      "durationSec": 10,
+      "url": "/readmes",
+      "actions": [
+        { "type": "wait", "ms": 1500 },
+        { "type": "fillPlaceholder", "placeholder": "Buscar", "text": "scrapy" },
+        { "type": "wait", "ms": 1500 },
+        { "type": "clickNth", "selector": "article, li, .result-card", "index": 0 },
+        { "type": "wait", "ms": 4500 },
+        { "type": "scrollBy", "y": 500, "ms": 2000 }
+      ],
+      "caption": "README cacheado + clasificacion canonica",
+      "voiceover": "Detras del post, tambien vive la documentacion: READMEs cacheados y cada vez mas estructurados."
+    },
+    {
+      "id": "12_closing",
+      "label": "Cierre / montaje final",
+      "startSec": 90,
+      "durationSec": 5,
+      "url": "/",
+      "actions": [
+        { "type": "wait", "ms": 600 },
+        { "type": "goto", "path": "/repos" },
+        { "type": "wait", "ms": 600 },
+        { "type": "goto", "path": "/authors" },
+        { "type": "wait", "ms": 600 },
+        { "type": "goto", "path": "/readmes" },
+        { "type": "wait", "ms": 800 }
+      ],
+      "caption": "De bookmarks a decisiones.",
+      "voiceover": "Indexbook convierte bookmarks en conocimiento accionable."
+    }
+  ],
+  "transitions": {
+    "type": "xfade",
+    "variant": "fade",
+    "durationSec": 0.5
+  },
+  "overlay": {
+    "enable": true,
+    "fontFile": null,
+    "fontSize": 28,
+    "fontColor": "white",
+    "boxColor": "black@0.55",
+    "boxBorderW": 14,
+    "position": { "x": "(w-text_w)/2", "y": "h-120" }
+  },
+  "audio": {
+    "voiceoverFile": "audio/voiceover.mp3",
+    "musicFile": "audio/music.mp3",
+    "musicDuckDb": -18,
+    "voiceGainDb": 0
+  }
+}

@@ -1,0 +1,1 @@
+Indexbook captura tus bookmarks en lote y los convierte en un corpus consultable.
