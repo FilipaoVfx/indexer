@@ -1,6 +1,6 @@
 name: Sync to GitLab
 
-# Required GitHub secret: GITLAB_TOKEN with write_repository permission.
+# Required GitHub secret: GITLAB_TOKEN with api and write_repository permission.
 # Optional: GITLAB_USERNAME if the token requires a specific username, or
 # GITLAB_REPOSITORY_URL if you prefer storing the authenticated URL directly.
 
@@ -59,10 +59,7 @@ jobs:
           git remote add gitlab "${remote_url}"
 
           push_options=(
-            -o "ci.variable=DEPLOY=true"
-            -o "ci.variable=SOURCE_REPOSITORY=github"
-            -o "ci.variable=SOURCE_REF=${SOURCE_REF}"
-            -o "ci.variable=SOURCE_COMMIT=${SOURCE_SHA}"
+            -o "ci.skip"
           )
 
           if [ "${SOURCE_REF_TYPE}" = "tag" ]; then
@@ -70,3 +67,32 @@ jobs:
           else
             git push gitlab "${push_options[@]}" "HEAD:refs/heads/${SOURCE_REF_NAME}"
           fi
+
+      - name: Trigger GitLab pipeline
+        env:
+          GITLAB_API_URL: https://gitlab.com/api/v4
+          GITLAB_PROJECT_ID: "81847042"
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          SOURCE_REF: ${{ github.ref }}
+          SOURCE_REF_NAME: ${{ github.ref_name }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${GITLAB_TOKEN}" ]; then
+            echo "::error::Define GITLAB_TOKEN in GitHub Actions secrets with api and write_repository scopes."
+            exit 1
+          fi
+
+          curl --fail --show-error --silent --request POST \
+            --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+            --form "ref=${SOURCE_REF_NAME}" \
+            --form "variables[][key]=DEPLOY" \
+            --form "variables[][value]=true" \
+            --form "variables[][key]=SOURCE_REPOSITORY" \
+            --form "variables[][value]=github" \
+            --form "variables[][key]=SOURCE_REF" \
+            --form "variables[][value]=${SOURCE_REF}" \
+            --form "variables[][key]=SOURCE_COMMIT" \
+            --form "variables[][value]=${SOURCE_SHA}" \
+            "${GITLAB_API_URL}/projects/${GITLAB_PROJECT_ID}/pipeline"
