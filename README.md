@@ -29,3 +29,5 @@ MVP funcional para extraer bookmarks de X, ingerirlos por lotes en backend propi
 - Ver `backend/src/migrate.js` para migrar datos locales a Supabase.
 - El esquema SQL para Supabase/Postgres esta en `backend/sql/001_bookmarks_schema.sql`.
 - Guia de despliegue a produccion: `docs/production-deploy.md`.
+
+CI trigger test - 05/02/2026 08:50:07
