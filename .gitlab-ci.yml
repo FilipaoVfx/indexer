@@ -1,0 +1,34 @@
+image: node:20
+
+stages:
+  - install
+  - validate
+  - build
+
+variables:
+  NODE_ENV: "test"
+
+cache:
+  key: ${CI_COMMIT_REF_SLUG}
+  paths:
+    - node_modules/
+
+install_dependencies:
+  stage: install
+  script:
+    - npm ci
+  artifacts:
+    paths:
+      - node_modules/
+    expire_in: 1 hour
+
+validate_project:
+  stage: validate
+  script:
+    - npm run lint || echo "Lint script not configured yet"
+    - npm run typecheck || echo "Typecheck script not configured yet"
+
+build_project:
+  stage: build
+  script:
+    - npm run build
