@@ -629,7 +629,7 @@ function DiscoveryHome({
             </p>
           </div>
           <h1 className="font-headline text-3xl md:text-4xl font-bold tracking-tight text-center text-primary">
-            <span className="text-secondary">&gt;</span> Explora tu archivo<span className="caret-blink"></span>
+            <span className="text-secondary">&gt;</span> Explora tu archivoxxx<span className="caret-blink"></span>
           </h1>
           <p className="text-on-surface-variant text-center max-w-xl text-sm">
             Usa <span className="text-primary font-bold">hibrida</span> para recuperar con precision o cambia a{" "}
