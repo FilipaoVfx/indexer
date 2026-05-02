@@ -502,8 +502,8 @@ function ModeButton({
       type="button"
       onClick={onClick}
       className={`px-3 py-1.5 text-xs font-bold uppercase tracking-wider transition-colors border-2 ${active
-          ? "bg-primary text-on-primary border-primary"
-          : "border-transparent text-on-surface-variant hover:text-secondary hover:border-secondary"
+        ? "bg-primary text-on-primary border-primary"
+        : "border-transparent text-on-surface-variant hover:text-secondary hover:border-secondary"
         }`}
     >
       {label}
@@ -629,7 +629,7 @@ function DiscoveryHome({
             </p>
           </div>
           <h1 className="font-headline text-3xl md:text-4xl font-bold tracking-tight text-center text-primary">
-            <span className="text-secondary">&gt;</span> Explora tu archivoxxxx<span className="caret-blink"></span>
+            <span className="text-secondary">&gt;</span> Explora tu archivo<span className="caret-blink"></span>
           </h1>
           <p className="text-on-surface-variant text-center max-w-xl text-sm">
             Usa <span className="text-primary font-bold">hibrida</span> para recuperar con precision o cambia a{" "}
@@ -1187,8 +1187,8 @@ function GoalResultsSwitcher({
           type="button"
           onClick={() => setView("pipeline")}
           className={`px-3 py-1 rounded-md transition-colors ${view === "pipeline"
-              ? "bg-primary text-on-primary font-bold"
-              : "text-on-surface-variant hover:text-on-surface"
+            ? "bg-primary text-on-primary font-bold"
+            : "text-on-surface-variant hover:text-on-surface"
             }`}
         >
           ~/ pipeline
@@ -1197,8 +1197,8 @@ function GoalResultsSwitcher({
           type="button"
           onClick={() => setView("list")}
           className={`px-3 py-1 rounded-md transition-colors ${view === "list"
-              ? "bg-primary text-on-primary font-bold"
-              : "text-on-surface-variant hover:text-on-surface"
+            ? "bg-primary text-on-primary font-bold"
+            : "text-on-surface-variant hover:text-on-surface"
             }`}
         >
           $ list
