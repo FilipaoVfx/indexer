@@ -17,7 +17,7 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://x.com/*"],
+      "matches": ["https://x.com/*", "https://twitter.com/*"],
       "js": ["content.js"],
       "run_at": "document_start"
     }
@@ -25,7 +25,7 @@
   "web_accessible_resources": [
     {
       "resources": ["page-bridge.js"],
-      "matches": ["https://x.com/*"]
+      "matches": ["https://x.com/*", "https://twitter.com/*"]
     }
   ]
 }

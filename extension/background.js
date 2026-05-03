@@ -3,6 +3,7 @@ const DEFAULT_USER_ID = "local-user";
 const QUEUE_STORAGE_KEY = "ingest_queue_v1";
 const ACTIVITY_STORAGE_KEY = "activity_log_v1";
 const COUNTERS_STORAGE_KEY = "counters_v1";
+const SCANNER_IDS_CACHE_KEY = "bookmark_scanner_saved_ids_v1";
 const SETTINGS_KEYS = ["apiBaseUrl", "userId"];
 const MAX_RETRIES = 3;
 const RETRY_BASE_DELAY_MS = 1200;
@@ -10,6 +11,7 @@ const ACTIVITY_LOG_MAX = 25;
 const LOG_PREFIX = "[x-indexer:bg]";
 const URL_RESOLVE_TIMEOUT_MS = 4500;
 const MAX_URLS_PER_BOOKMARK = 40;
+const SCANNER_IMPORT_BATCH_SIZE = 40;
 const DETAIL_LOOKUP_TIMEOUT_MS = 16_000;
 const DETAIL_LOOKUP_MESSAGE_DELAY_MS = 900;
 const DETAIL_LOOKUP_MESSAGE_MAX_ATTEMPTS = 6;
@@ -349,6 +351,18 @@ function sanitizeUserId(value) {
   }
   const trimmed = value.trim().slice(0, 120);
   return trimmed || DEFAULT_USER_ID;
+}
+
+function buildBackendUrl(baseUrl, path, params = {}) {
+  const endpoint = `${sanitizeBaseUrl(baseUrl)}${path}`;
+  const url = new URL(endpoint);
+  for (const [key, value] of Object.entries(params)) {
+    const text = cleanText(String(value ?? ""));
+    if (text) {
+      url.searchParams.set(key, text);
+    }
+  }
+  return url.toString();
 }
 
 function cleanText(value) {
@@ -738,6 +752,215 @@ function replaceResolvedUrlsInText(text, mappings) {
     output = output.split(entry.original).join(entry.resolved);
   }
   return output;
+}
+
+function normalizeScannerPendingItemForDelivery(item, tweetId) {
+  return {
+    tweet_id: tweetId || cleanText(item?.tweet_id || ""),
+    text: cleanText(item?.text || ""),
+    author_username: cleanText(item?.author_handle || item?.author_username || "").replace(/^@+/, ""),
+    author_name: cleanText(item?.author_name || ""),
+    source_url: sanitizeAbsoluteUrl(item?.url || item?.source_url || "") ||
+      (tweetId ? `https://x.com/i/web/status/${tweetId}` : ""),
+    links: Array.isArray(item?.links) ? item.links : [],
+    first_comment_links: Array.isArray(item?.first_comment_links)
+      ? item.first_comment_links
+      : [],
+    media: Array.isArray(item?.media) ? item.media : []
+  };
+}
+
+async function readScannerIdsCache(settings) {
+  const current = await chrome.storage.local.get([SCANNER_IDS_CACHE_KEY]);
+  const cached = current[SCANNER_IDS_CACHE_KEY];
+  if (!cached || typeof cached !== "object") {
+    return null;
+  }
+
+  if (
+    cached.userId !== settings.userId ||
+    cached.apiBaseUrl !== sanitizeBaseUrl(settings.apiBaseUrl) ||
+    !Array.isArray(cached.ids)
+  ) {
+    return null;
+  }
+
+  return cached;
+}
+
+async function writeScannerIdsCache(settings, payload) {
+  const cacheEntry = {
+    apiBaseUrl: sanitizeBaseUrl(settings.apiBaseUrl),
+    userId: settings.userId,
+    version: cleanText(payload.version || ""),
+    count: Number(payload.count) || (Array.isArray(payload.ids) ? payload.ids.length : 0),
+    ids: Array.isArray(payload.ids) ? payload.ids.map(String).filter(Boolean) : [],
+    fetchedAt: new Date().toISOString()
+  };
+
+  await chrome.storage.local.set({
+    [SCANNER_IDS_CACHE_KEY]: cacheEntry
+  });
+
+  return cacheEntry;
+}
+
+async function fetchBookmarkScannerSavedIds() {
+  const settings = await getSettings();
+  const endpoint = buildBackendUrl(settings.apiBaseUrl, "/bookmarks/ids", {
+    user_id: settings.userId
+  });
+
+  try {
+    const response = await fetch(endpoint, {
+      method: "GET",
+      cache: "no-store",
+      headers: {
+        Accept: "application/json"
+      }
+    });
+
+    const payload = await response.json().catch(() => null);
+    if (!response.ok || !payload || !payload.ok || !Array.isArray(payload.ids)) {
+      throw new Error(
+        payload?.error?.message || payload?.error || `HTTP ${response.status}`
+      );
+    }
+
+    const cached = await writeScannerIdsCache(settings, payload);
+    return {
+      ok: true,
+      online: true,
+      cached: false,
+      version: cached.version,
+      count: cached.count,
+      ids: cached.ids
+    };
+  } catch (error) {
+    const cached = await readScannerIdsCache(settings);
+    if (cached) {
+      return {
+        ok: true,
+        online: false,
+        cached: true,
+        version: cached.version || "",
+        count: Number(cached.count) || cached.ids.length,
+        ids: cached.ids,
+        error: extractErrorMessage(error) || "bookmark_ids_fetch_failed"
+      };
+    }
+
+    return {
+      ok: false,
+      online: false,
+      cached: false,
+      version: "",
+      count: 0,
+      ids: [],
+      error: extractErrorMessage(error) || "bookmark_ids_fetch_failed"
+    };
+  }
+}
+
+async function importBookmarkScannerPending(items, source = "x_bookmarks_dom_scan") {
+  const settings = await getSettings();
+  const endpoint = buildBackendUrl(settings.apiBaseUrl, "/bookmarks/import-batch");
+  const normalizedItems = Array.isArray(items) ? items : [];
+  const cached = await readScannerIdsCache(settings);
+  const cachedIds = new Set(Array.isArray(cached?.ids) ? cached.ids.map(String) : []);
+  const localSeenIds = new Set();
+  const payloadItems = [];
+  const localDuplicateIds = [];
+
+  for (const item of normalizedItems) {
+    const tweetId = getTweetIdForBookmark({
+      tweet_id: item?.tweet_id,
+      source_url: item?.url || item?.source_url
+    });
+
+    if (tweetId && (localSeenIds.has(tweetId) || cachedIds.has(tweetId))) {
+      localDuplicateIds.push(tweetId);
+      continue;
+    }
+
+    if (tweetId) {
+      localSeenIds.add(tweetId);
+    }
+    payloadItems.push(normalizeScannerPendingItemForDelivery(item, tweetId));
+  }
+
+  const aggregate = {
+    ok: true,
+    inserted: 0,
+    duplicates: localDuplicateIds.length,
+    failed: 0,
+    duplicate_ids: localDuplicateIds.slice(),
+    imported_ids: [],
+    invalid: [],
+    warnings: []
+  };
+
+  const preparedItems = await prepareBookmarksForDelivery(payloadItems, {
+    traceId: `scanner-${Date.now().toString(36)}`
+  });
+
+  for (let index = 0; index < preparedItems.length; index += SCANNER_IMPORT_BATCH_SIZE) {
+    const chunk = preparedItems.slice(index, index + SCANNER_IMPORT_BATCH_SIZE);
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json"
+      },
+      body: JSON.stringify({
+        user_id: settings.userId,
+        source: cleanText(source) || "x_bookmarks_dom_scan",
+        items: chunk
+      })
+    });
+
+    const payload = await response.json().catch(() => null);
+    if (!response.ok || !payload || payload.ok === false) {
+      throw new Error(
+        payload?.error?.message || payload?.error || `HTTP ${response.status}`
+      );
+    }
+
+    aggregate.inserted += Number(payload.inserted) || 0;
+    aggregate.duplicates += Number(payload.duplicates) || 0;
+    aggregate.failed += Number(payload.failed) || 0;
+    aggregate.duplicate_ids.push(
+      ...(Array.isArray(payload.duplicate_ids) ? payload.duplicate_ids : [])
+    );
+    aggregate.imported_ids.push(
+      ...(Array.isArray(payload.imported_ids) ? payload.imported_ids : [])
+    );
+    aggregate.invalid.push(...(Array.isArray(payload.invalid) ? payload.invalid : []));
+    aggregate.warnings.push(...(Array.isArray(payload.warnings) ? payload.warnings : []));
+    aggregate.user_id = payload.user_id || settings.userId;
+    aggregate.source = payload.source || source;
+    aggregate.total_stored = payload.total_stored ?? aggregate.total_stored ?? null;
+  }
+
+  aggregate.received = normalizedItems.length;
+  aggregate.imported_ids = [...new Set(aggregate.imported_ids.map(String).filter(Boolean))];
+  aggregate.duplicate_ids = [...new Set(aggregate.duplicate_ids.map(String).filter(Boolean))];
+
+  const importedIds = aggregate.imported_ids;
+  const duplicateIds = aggregate.duplicate_ids;
+
+  if (cached) {
+    const ids = new Set(cached.ids.map(String));
+    for (const id of [...importedIds, ...duplicateIds]) {
+      ids.add(id);
+    }
+    await writeScannerIdsCache(settings, {
+      version: new Date().toISOString(),
+      ids: [...ids]
+    });
+  }
+
+  return aggregate;
 }
 
 async function prepareBookmarksForDelivery(bookmarks, context = {}) {
@@ -1140,6 +1363,21 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         ok: state.queue.length === 0,
         pendingQueue: state.queue.length
       });
+      return;
+    }
+
+    if (message.type === "BOOKMARK_SCANNER_FETCH_IDS") {
+      const result = await fetchBookmarkScannerSavedIds();
+      sendResponse(result);
+      return;
+    }
+
+    if (message.type === "BOOKMARK_SCANNER_IMPORT_BATCH") {
+      const result = await importBookmarkScannerPending(
+        message?.payload?.items,
+        message?.payload?.source
+      );
+      sendResponse(result);
       return;
     }
 

@@ -70,6 +70,76 @@ function normalizeClusterType(value) {
   return ["author", "domain", "repo"].includes(value) ? value : "domain";
 }
 
+function isBookmarkIdsRoute(routePath) {
+  return routePath === "/bookmarks/ids" || routePath === "/api/bookmarks/ids";
+}
+
+function isBookmarkImportBatchRoute(routePath) {
+  return (
+    routePath === "/bookmarks/import-batch" ||
+    routePath === "/api/bookmarks/import-batch"
+  );
+}
+
+function normalizeImportSource(value) {
+  const source = typeof value === "string" ? value.trim().slice(0, 120) : "";
+  return source || "x_bookmarks_dom_scan";
+}
+
+function normalizeScannerImportItems(items) {
+  const normalized = [];
+  const invalid = [];
+  const duplicateIds = [];
+  const seen = new Set();
+
+  for (const item of Array.isArray(items) ? items : []) {
+    if (!item || typeof item !== "object") {
+      invalid.push({ reason: "item_not_object" });
+      continue;
+    }
+
+    const tweetId = String(item.tweet_id || item.tweetId || "").trim();
+    if (!/^\d+$/.test(tweetId)) {
+      invalid.push({ tweet_id: tweetId || null, reason: "invalid_tweet_id" });
+      continue;
+    }
+
+    if (seen.has(tweetId)) {
+      duplicateIds.push(tweetId);
+      continue;
+    }
+    seen.add(tweetId);
+
+    const sourceUrlCandidate = typeof item.url === "string"
+      ? item.url
+      : typeof item.source_url === "string"
+      ? item.source_url
+      : "";
+    const sourceUrl =
+      sourceUrlCandidate.trim() || `https://x.com/i/web/status/${tweetId}`;
+
+    normalized.push({
+      tweet_id: tweetId,
+      text: typeof item.text === "string" ? item.text : "",
+      author_username:
+        typeof item.author_handle === "string"
+          ? item.author_handle.replace(/^@+/, "")
+          : typeof item.author_username === "string"
+          ? item.author_username.replace(/^@+/, "")
+          : "",
+      author_name: typeof item.author_name === "string" ? item.author_name : "",
+      source_url: sourceUrl,
+      links: Array.isArray(item.links) ? item.links : [],
+      first_comment_links: Array.isArray(item.first_comment_links)
+        ? item.first_comment_links
+        : [],
+      media: Array.isArray(item.media) ? item.media : []
+    });
+  }
+
+  return { normalized, invalid, duplicateIds };
+}
+
 function mergeTargetIntoCorpus(target, corpusItems) {
   if (!target) return corpusItems;
   if (corpusItems.some((item) => item.id === target.id)) {
@@ -162,6 +232,101 @@ const server = http.createServer(async (req, res) => {
         ok: true,
         item: result.items[0],
         warning: result.warning
+      });
+      return;
+    }
+
+    if (req.method === "GET" && isBookmarkIdsRoute(routePath)) {
+      const userId = sanitizeUserId(requestUrl.searchParams.get("user_id") || "");
+      const hardLimit = clampNumber(
+        requestUrl.searchParams.get("limit"),
+        100_000,
+        1,
+        500_000
+      );
+      const result = await store.listBookmarkIds({
+        userId: userId || null,
+        hardLimit
+      });
+
+      sendJson(res, 200, {
+        ok: true,
+        user_id: userId || null,
+        ...result
+      });
+      return;
+    }
+
+    if (req.method === "POST" && isBookmarkImportBatchRoute(routePath)) {
+      const body = await parseJsonBody(req);
+      const traceId = sanitizeTraceId(body.traceId) || createServerTraceId("import");
+      req.traceId = traceId;
+
+      if (!Array.isArray(body.items)) {
+        throw createHttpError(
+          400,
+          "items_must_be_array",
+          "Field items must be an array"
+        );
+      }
+
+      if (body.items.length > config.maxBatchSize) {
+        throw createHttpError(
+          413,
+          "batch_too_large",
+          `Batch size exceeds max of ${config.maxBatchSize}`
+        );
+      }
+
+      const userId = sanitizeUserId(body.user_id) || "local-user";
+      const source = normalizeImportSource(body.source);
+      const receivedAt = new Date().toISOString();
+      const { normalized, invalid, duplicateIds } = normalizeScannerImportItems(body.items);
+      const existingIds = await store.getExistingTweetIds({
+        userId,
+        tweetIds: normalized.map((item) => item.tweet_id)
+      });
+      const duplicates = [...duplicateIds];
+      const newItems = [];
+
+      for (const item of normalized) {
+        if (existingIds.has(item.tweet_id)) {
+          duplicates.push(item.tweet_id);
+        } else {
+          newItems.push(item);
+        }
+      }
+
+      const summary = newItems.length > 0
+        ? await store.upsertBatch({
+            userId,
+            syncId: source,
+            bookmarks: newItems,
+            receivedAt,
+            insertOnly: true
+          })
+        : {
+            received: 0,
+            inserted: 0,
+            updated: 0,
+            ignored_invalid: 0,
+            warnings: []
+          };
+
+      sendJson(res, 200, {
+        ok: true,
+        trace_id: traceId,
+        user_id: userId,
+        source,
+        received: body.items.length,
+        inserted: summary.inserted || 0,
+        duplicates: [...new Set(duplicates)].length,
+        failed: invalid.length + (summary.ignored_invalid || 0),
+        duplicate_ids: [...new Set(duplicates)],
+        imported_ids: newItems.map((item) => item.tweet_id),
+        invalid,
+        total_stored: summary.total_stored ?? null,
+        warnings: summary.warnings || []
       });
       return;
     }

@@ -536,6 +536,51 @@ export class BookmarkStore {
     };
   }
 
+  async insertBookmarksWithFallback(bookmarksToInsert) {
+    let effectiveBookmarks = this.capabilities.bookmarksFirstCommentLinks
+      ? bookmarksToInsert
+      : stripFirstCommentLinks(bookmarksToInsert);
+    const warnings = [];
+
+    let { data, error } = await this.supabase
+      .from("bookmarks")
+      .upsert(effectiveBookmarks, {
+        onConflict: "id",
+        ignoreDuplicates: true
+      })
+      .select("id");
+
+    if (error && this.capabilities.bookmarksFirstCommentLinks && isMissingFirstCommentLinksColumnError(error)) {
+      this.capabilities.bookmarksFirstCommentLinks = false;
+      const warning =
+        "Stored bookmarks without the first_comment_links column because Supabase schema is outdated. " +
+        "Apply backend/sql/004_search_bookmarks_scalable.sql or backend/sql/005_bookmark_context_links.sql.";
+      warnings.push(warning);
+      console.warn("[store]", warning, {
+        details: extractDbErrorMessage(error)
+      });
+
+      effectiveBookmarks = stripFirstCommentLinks(bookmarksToInsert);
+      ({ data, error } = await this.supabase
+        .from("bookmarks")
+        .upsert(effectiveBookmarks, {
+          onConflict: "id",
+          ignoreDuplicates: true
+        })
+        .select("id"));
+    }
+
+    if (error) {
+      throw new Error(`Failed to insert bookmarks: ${extractDbErrorMessage(error)}`);
+    }
+
+    return {
+      data: Array.isArray(data) ? data : [],
+      effectiveBookmarks,
+      warnings
+    };
+  }
+
   async refreshGoalSearchIndex(userId) {
     if (!this.capabilities.goalRefreshRpc) {
       return null;
@@ -986,7 +1031,7 @@ export class BookmarkStore {
     }
   }
 
-  async upsertBatch({ userId, syncId, bookmarks, receivedAt }) {
+  async upsertBatch({ userId, syncId, bookmarks, receivedAt, insertOnly = false }) {
     await this.init();
 
     let inserted = 0;
@@ -1024,33 +1069,45 @@ export class BookmarkStore {
       const {
         data,
         warnings: upsertWarnings
-      } = await this.upsertBookmarksWithFallback(bookmarksToUpsert);
+      } = insertOnly
+        ? await this.insertBookmarksWithFallback(bookmarksToUpsert)
+        : await this.upsertBookmarksWithFallback(bookmarksToUpsert);
       warnings.push(...upsertWarnings);
 
       // Supabase returns the upserted records. 
       // We can distinguish between inserted and updated if we query before, 
       // but for simplicity in a batch we'll count total successes.
       inserted = data.length;
+      const storedBookmarkIds = new Set(
+        (Array.isArray(data) ? data : [])
+          .map((row) => String(row?.id || "").trim())
+          .filter(Boolean)
+      );
+      const storedBookmarks = insertOnly
+        ? bookmarksToUpsert.filter((bookmark) => storedBookmarkIds.has(String(bookmark.id || "")))
+        : bookmarksToUpsert;
 
-      const contextWarning = await this.syncBookmarkContextLinks({
-        bookmarks: bookmarksToUpsert,
-        receivedAt
-      });
-      if (contextWarning) {
-        warnings.push(contextWarning);
-      }
+      if (storedBookmarks.length > 0) {
+        const contextWarning = await this.syncBookmarkContextLinks({
+          bookmarks: storedBookmarks,
+          receivedAt
+        });
+        if (contextWarning) {
+          warnings.push(contextWarning);
+        }
 
-      const githubReadmeResult = await this.processGithubReadmesForBookmarks({
-        bookmarks: bookmarksToUpsert,
-        receivedAt
-      });
-      githubReadmesFetched = githubReadmeResult.fetched;
-      githubReadmesSkipped = githubReadmeResult.skipped;
-      warnings.push(...githubReadmeResult.warnings);
+        const githubReadmeResult = await this.processGithubReadmesForBookmarks({
+          bookmarks: storedBookmarks,
+          receivedAt
+        });
+        githubReadmesFetched = githubReadmeResult.fetched;
+        githubReadmesSkipped = githubReadmeResult.skipped;
+        warnings.push(...githubReadmeResult.warnings);
 
-      const refreshWarning = await this.refreshGoalSearchIndex(userId);
-      if (refreshWarning) {
-        warnings.push(refreshWarning);
+        const refreshWarning = await this.refreshGoalSearchIndex(userId);
+        if (refreshWarning) {
+          warnings.push(refreshWarning);
+        }
       }
     }
 
@@ -1164,6 +1221,108 @@ export class BookmarkStore {
       throw new Error(`Failed to count bookmarks: ${error.message}`);
     }
     return count;
+  }
+
+  async listBookmarkIds({ userId, hardLimit = 100_000, batchSize = 1000 } = {}) {
+    await this.init();
+
+    const ids = [];
+    const seen = new Set();
+    let offset = 0;
+    let total = Infinity;
+    let version = "";
+    const normalizedHardLimit = clampNumber(hardLimit, 100_000, 1, 500_000);
+    const normalizedBatchSize = clampNumber(batchSize, 1000, 1, 5000);
+
+    while (offset < total && ids.length < normalizedHardLimit) {
+      const limit = Math.min(normalizedBatchSize, normalizedHardLimit - ids.length);
+      let queryBuilder = this.supabase
+        .from("bookmarks")
+        .select("tweet_id,updated_at,inserted_at", { count: "exact" })
+        .order("inserted_at", { ascending: true })
+        .range(offset, offset + limit - 1);
+
+      if (userId) {
+        queryBuilder = queryBuilder.eq("user_id", userId);
+      }
+
+      const { data, count, error } = await queryBuilder;
+
+      if (error) {
+        throw new Error(`Failed to list bookmark ids: ${error.message}`);
+      }
+
+      total = typeof count === "number" ? count : total;
+      const rows = Array.isArray(data) ? data : [];
+
+      for (const row of rows) {
+        const tweetId = String(row.tweet_id || "").trim();
+        if (!tweetId || seen.has(tweetId)) continue;
+        seen.add(tweetId);
+        ids.push(tweetId);
+
+        const rowVersion = String(row.updated_at || row.inserted_at || "").trim();
+        if (rowVersion && (!version || rowVersion > version)) {
+          version = rowVersion;
+        }
+      }
+
+      if (rows.length === 0 || rows.length < limit) {
+        break;
+      }
+
+      offset += rows.length;
+    }
+
+    return {
+      version: version || new Date(0).toISOString(),
+      count: ids.length,
+      ids
+    };
+  }
+
+  async getExistingTweetIds({ userId, tweetIds } = {}) {
+    await this.init();
+
+    const uniqueTweetIds = [...new Set(
+      (Array.isArray(tweetIds) ? tweetIds : [])
+        .map((value) => String(value || "").trim())
+        .filter(Boolean)
+    )];
+
+    if (uniqueTweetIds.length === 0) {
+      return new Set();
+    }
+
+    const existingIds = new Set();
+    const chunkSize = 1000;
+
+    for (let index = 0; index < uniqueTweetIds.length; index += chunkSize) {
+      const chunk = uniqueTweetIds.slice(index, index + chunkSize);
+      let queryBuilder = this.supabase
+        .from("bookmarks")
+        .select("tweet_id")
+        .in("tweet_id", chunk);
+
+      if (userId) {
+        queryBuilder = queryBuilder.eq("user_id", userId);
+      }
+
+      const { data, error } = await queryBuilder;
+
+      if (error) {
+        throw new Error(`Failed to inspect existing bookmark ids: ${error.message}`);
+      }
+
+      for (const row of Array.isArray(data) ? data : []) {
+        const tweetId = String(row.tweet_id || "").trim();
+        if (tweetId) {
+          existingIds.add(tweetId);
+        }
+      }
+    }
+
+    return existingIds;
   }
 
   async listUsers({ query = "", hardLimit = 10_000, batchSize = 1000 } = {}) {
