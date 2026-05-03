@@ -75,6 +75,19 @@ function isMissingContentScriptError(message) {
   );
 }
 
+function isXPageUrl(url) {
+  try {
+    const parsed = new URL(url || "");
+    return /(^|\.)x\.com$|(^|\.)twitter\.com$/i.test(parsed.hostname || "");
+  } catch (_error) {
+    return false;
+  }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function sendRuntimeMessage(message) {
   return new Promise((resolve, reject) => {
     try {
@@ -158,6 +171,18 @@ async function getActiveTab() {
   return tabs[0] || null;
 }
 
+async function injectContentScript(tabId) {
+  if (!chrome.scripting || typeof chrome.scripting.executeScript !== "function") {
+    throw new Error("scripting_permission_unavailable");
+  }
+
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    files: ["content.js"]
+  });
+  await sleep(250);
+}
+
 function renderScannerStatus(status = {}) {
   scannerScannedElement.textContent = String(status.scannedCount || 0);
   scannerSavedElement.textContent = String(status.savedCount || 0);
@@ -183,7 +208,9 @@ function renderScannerStatus(status = {}) {
   }
 
   if (!status.idsLoaded) {
-    scannerStatusElement.textContent = "Scanner offline: saved IDs are not loaded.";
+    const detail = status.lastError ? ` Last error: ${String(status.lastError).slice(0, 120)}` : "";
+    scannerStatusElement.textContent =
+      `Scanner waiting for saved IDs. Unknown=${status.unknownCount || 0}.${detail}`;
     return;
   }
 
@@ -198,13 +225,29 @@ function renderScannerStatus(status = {}) {
     `Using ${source}. Saved IDs=${status.savedIdsCount || 0}`;
 }
 
-async function sendActiveTabMessage(message) {
+async function sendActiveTabMessage(message, options = {}) {
   const activeTab = await getActiveTab();
   if (!activeTab || !activeTab.id) {
     throw new Error("No active tab found.");
   }
 
-  return chrome.tabs.sendMessage(activeTab.id, message);
+  try {
+    return await chrome.tabs.sendMessage(activeTab.id, message);
+  } catch (error) {
+    const messageText = toErrorMessage(error);
+    const canInject =
+      options.retryInject !== false &&
+      isMissingContentScriptError(messageText) &&
+      isXPageUrl(activeTab.url);
+
+    if (!canInject) {
+      throw error;
+    }
+
+    appendLog("Content script was not active; injecting it into the current X tab...");
+    await injectContentScript(activeTab.id);
+    return chrome.tabs.sendMessage(activeTab.id, message);
+  }
 }
 
 async function refreshScannerStatus() {
@@ -232,8 +275,12 @@ async function rescanBookmarkDomScanner() {
   }
 
   appendLog(
-    `Scroll scan: rounds=${response.rounds || response.scrollScanRounds || 0} scanned=${response.scannedCount || 0} saved=${response.savedCount || 0} pending=${response.pendingCount || 0}`
+    `Scroll scan: rounds=${response.rounds || response.scrollScanRounds || 0} scanned=${response.scannedCount || 0} saved=${response.savedCount || 0} pending=${response.pendingCount || 0} unknown=${response.unknownCount || 0}`
   );
+
+  if (!response.idsLoaded && response.lastError) {
+    appendLog(`Saved ID load failed: ${String(response.lastError).slice(0, 180)}`);
+  }
 }
 
 async function importScannerPending() {
@@ -294,7 +341,7 @@ async function checkAutoSync() {
       throw new Error("No active tab found.");
     }
 
-    const response = await chrome.tabs.sendMessage(activeTab.id, {
+    const response = await sendActiveTabMessage({
       type: "GET_CAPTURE_STATUS"
     });
 
@@ -337,7 +384,7 @@ async function startBulkScrape() {
       return;
     }
 
-    const response = await chrome.tabs.sendMessage(activeTab.id, {
+    const response = await sendActiveTabMessage({
       type: "START_SYNC"
     });
 

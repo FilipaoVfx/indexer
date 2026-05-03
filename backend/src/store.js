@@ -1229,16 +1229,15 @@ export class BookmarkStore {
     const ids = [];
     const seen = new Set();
     let offset = 0;
-    let total = Infinity;
     let version = "";
     const normalizedHardLimit = clampNumber(hardLimit, 100_000, 1, 500_000);
     const normalizedBatchSize = clampNumber(batchSize, 1000, 1, 5000);
 
-    while (offset < total && ids.length < normalizedHardLimit) {
+    while (ids.length < normalizedHardLimit) {
       const limit = Math.min(normalizedBatchSize, normalizedHardLimit - ids.length);
       let queryBuilder = this.supabase
         .from("bookmarks")
-        .select("tweet_id,updated_at,inserted_at", { count: "exact" })
+        .select("tweet_id,updated_at,inserted_at")
         .order("inserted_at", { ascending: true })
         .range(offset, offset + limit - 1);
 
@@ -1246,13 +1245,12 @@ export class BookmarkStore {
         queryBuilder = queryBuilder.eq("user_id", userId);
       }
 
-      const { data, count, error } = await queryBuilder;
+      const { data, error } = await queryBuilder;
 
       if (error) {
         throw new Error(`Failed to list bookmark ids: ${error.message}`);
       }
 
-      total = typeof count === "number" ? count : total;
       const rows = Array.isArray(data) ? data : [];
 
       for (const row of rows) {

@@ -12,6 +12,8 @@ const LOG_PREFIX = "[x-indexer:bg]";
 const URL_RESOLVE_TIMEOUT_MS = 4500;
 const MAX_URLS_PER_BOOKMARK = 40;
 const SCANNER_IMPORT_BATCH_SIZE = 40;
+const SCANNER_IDS_FETCH_TIMEOUT_MS = 30_000;
+const SCANNER_IMPORT_CHUNK_TIMEOUT_MS = 90_000;
 const DETAIL_LOOKUP_TIMEOUT_MS = 16_000;
 const DETAIL_LOOKUP_MESSAGE_DELAY_MS = 900;
 const DETAIL_LOOKUP_MESSAGE_MAX_ATTEMPTS = 6;
@@ -805,20 +807,93 @@ async function writeScannerIdsCache(settings, payload) {
   return cacheEntry;
 }
 
+async function fetchBookmarkScannerSavedIdsViaSearch(settings) {
+  const ids = [];
+  const seen = new Set();
+  const limit = 100;
+  let offset = 0;
+  let total = Infinity;
+  let version = "";
+
+  while (offset < total && offset <= 10_000) {
+    const endpoint = buildBackendUrl(settings.apiBaseUrl, "/api/bookmarks/search", {
+      user_id: settings.userId,
+      limit,
+      offset
+    });
+    const response = await withTimeout(
+      (signal) =>
+        fetch(endpoint, {
+          method: "GET",
+          cache: "no-store",
+          headers: {
+            Accept: "application/json"
+          },
+          signal
+        }),
+      SCANNER_IDS_FETCH_TIMEOUT_MS
+    );
+    const payload = await response.json().catch(() => null);
+
+    if (!response.ok || !payload || payload.ok === false || !Array.isArray(payload.items)) {
+      throw new Error(
+        payload?.error?.message || payload?.error || `HTTP ${response.status}`
+      );
+    }
+
+    const rows = payload.items;
+    total = Number.isFinite(Number(payload.total)) ? Number(payload.total) : total;
+
+    for (const row of rows) {
+      const tweetId = cleanText(row?.tweet_id || "");
+      if (tweetId && !seen.has(tweetId)) {
+        seen.add(tweetId);
+        ids.push(tweetId);
+      }
+
+      const rowVersion = cleanText(row?.updated_at || row?.inserted_at || "");
+      if (rowVersion && (!version || rowVersion > version)) {
+        version = rowVersion;
+      }
+    }
+
+    if (rows.length < limit) {
+      break;
+    }
+
+    offset += rows.length;
+  }
+
+  return {
+    ok: true,
+    version: version || new Date(0).toISOString(),
+    count: ids.length,
+    ids,
+    fallback: "search",
+    truncated: offset > 10_000 && ids.length < total
+  };
+}
+
 async function fetchBookmarkScannerSavedIds() {
   const settings = await getSettings();
   const endpoint = buildBackendUrl(settings.apiBaseUrl, "/bookmarks/ids", {
     user_id: settings.userId
   });
+  let primaryError = null;
 
   try {
-    const response = await fetch(endpoint, {
-      method: "GET",
-      cache: "no-store",
-      headers: {
-        Accept: "application/json"
-      }
-    });
+    const response = await withTimeout(
+      (signal) =>
+        fetch(endpoint, {
+          method: "GET",
+          cache: "no-store",
+          headers: {
+            Accept: "application/json"
+          },
+          signal
+        }),
+      SCANNER_IDS_FETCH_TIMEOUT_MS
+    );
 
     const payload = await response.json().catch(() => null);
     if (!response.ok || !payload || !payload.ok || !Array.isArray(payload.ids)) {
@@ -837,6 +912,25 @@ async function fetchBookmarkScannerSavedIds() {
       ids: cached.ids
     };
   } catch (error) {
+    primaryError = error;
+  }
+
+  try {
+    const fallbackPayload = await fetchBookmarkScannerSavedIdsViaSearch(settings);
+    const cached = await writeScannerIdsCache(settings, fallbackPayload);
+    return {
+      ok: true,
+      online: true,
+      cached: false,
+      fallback: fallbackPayload.fallback,
+      truncated: Boolean(fallbackPayload.truncated),
+      version: cached.version,
+      count: cached.count,
+      ids: cached.ids,
+      warning: "bookmark_ids_search_fallback_used",
+      primary_error: extractErrorMessage(primaryError)
+    };
+  } catch (error) {
     const cached = await readScannerIdsCache(settings);
     if (cached) {
       return {
@@ -846,7 +940,10 @@ async function fetchBookmarkScannerSavedIds() {
         version: cached.version || "",
         count: Number(cached.count) || cached.ids.length,
         ids: cached.ids,
-        error: extractErrorMessage(error) || "bookmark_ids_fetch_failed"
+        error:
+          extractErrorMessage(error) ||
+          extractErrorMessage(primaryError) ||
+          "bookmark_ids_fetch_failed"
       };
     }
 
@@ -857,14 +954,108 @@ async function fetchBookmarkScannerSavedIds() {
       version: "",
       count: 0,
       ids: [],
-      error: extractErrorMessage(error) || "bookmark_ids_fetch_failed"
+      error:
+        extractErrorMessage(error) ||
+        extractErrorMessage(primaryError) ||
+        "bookmark_ids_fetch_failed"
     };
   }
 }
 
+async function postBookmarkScannerImportJson(endpoint, body) {
+  const response = await withTimeout(
+    (signal) =>
+      fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json"
+        },
+        body: JSON.stringify(body),
+        signal
+      }),
+    SCANNER_IMPORT_CHUNK_TIMEOUT_MS
+  );
+  const payload = await response.json().catch(() => null);
+
+  if (!response.ok || !payload || payload.ok === false) {
+    throw new Error(
+      payload?.error?.message || payload?.error || `HTTP ${response.status}`
+    );
+  }
+
+  return payload;
+}
+
+function shouldUseLegacyScannerImportEndpoint(error) {
+  return /HTTP 404|HTTP 405|not[_ -]?found|Cannot POST/i.test(
+    extractErrorMessage(error)
+  );
+}
+
+function normalizeLegacyScannerImportResponse(payload, chunk, settings, source) {
+  const warnings = Array.isArray(payload?.warnings) ? payload.warnings.slice() : [];
+  warnings.push("bookmark_import_legacy_batch_fallback_used");
+
+  return {
+    ok: true,
+    inserted: Number(payload?.inserted) || 0,
+    duplicates: 0,
+    failed: Number(payload?.ignored_invalid) || 0,
+    duplicate_ids: [],
+    imported_ids: chunk
+      .map((item) => getTweetIdForBookmark(item))
+      .filter(Boolean),
+    invalid: [],
+    warnings,
+    user_id: payload?.user_id || settings.userId,
+    source,
+    total_stored: payload?.total_stored ?? null,
+    used_legacy_endpoint: true
+  };
+}
+
+async function postBookmarkScannerImportChunk(settings, chunk, source, batchIndex, state) {
+  const normalizedSource = cleanText(source) || "x_bookmarks_dom_scan";
+
+  if (!state.useLegacyEndpoint) {
+    try {
+      return await postBookmarkScannerImportJson(
+        buildBackendUrl(settings.apiBaseUrl, "/bookmarks/import-batch"),
+        {
+          user_id: settings.userId,
+          source: normalizedSource,
+          items: chunk
+        }
+      );
+    } catch (error) {
+      if (!shouldUseLegacyScannerImportEndpoint(error)) {
+        throw error;
+      }
+      state.useLegacyEndpoint = true;
+    }
+  }
+
+  const legacyPayload = await postBookmarkScannerImportJson(
+    buildBackendUrl(settings.apiBaseUrl, "/api/bookmarks/batch"),
+    {
+      user_id: settings.userId,
+      sync_id: normalizedSource,
+      batch_index: batchIndex,
+      bookmarks: chunk
+    }
+  );
+
+  return normalizeLegacyScannerImportResponse(
+    legacyPayload,
+    chunk,
+    settings,
+    normalizedSource
+  );
+}
+
 async function importBookmarkScannerPending(items, source = "x_bookmarks_dom_scan") {
   const settings = await getSettings();
-  const endpoint = buildBackendUrl(settings.apiBaseUrl, "/bookmarks/import-batch");
   const normalizedItems = Array.isArray(items) ? items : [];
   const cached = await readScannerIdsCache(settings);
   const cachedIds = new Set(Array.isArray(cached?.ids) ? cached.ids.map(String) : []);
@@ -903,28 +1094,19 @@ async function importBookmarkScannerPending(items, source = "x_bookmarks_dom_sca
   const preparedItems = await prepareBookmarksForDelivery(payloadItems, {
     traceId: `scanner-${Date.now().toString(36)}`
   });
+  const importState = {
+    useLegacyEndpoint: false
+  };
 
   for (let index = 0; index < preparedItems.length; index += SCANNER_IMPORT_BATCH_SIZE) {
     const chunk = preparedItems.slice(index, index + SCANNER_IMPORT_BATCH_SIZE);
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json"
-      },
-      body: JSON.stringify({
-        user_id: settings.userId,
-        source: cleanText(source) || "x_bookmarks_dom_scan",
-        items: chunk
-      })
-    });
-
-    const payload = await response.json().catch(() => null);
-    if (!response.ok || !payload || payload.ok === false) {
-      throw new Error(
-        payload?.error?.message || payload?.error || `HTTP ${response.status}`
-      );
-    }
+    const payload = await postBookmarkScannerImportChunk(
+      settings,
+      chunk,
+      source,
+      Math.floor(index / SCANNER_IMPORT_BATCH_SIZE),
+      importState
+    );
 
     aggregate.inserted += Number(payload.inserted) || 0;
     aggregate.duplicates += Number(payload.duplicates) || 0;

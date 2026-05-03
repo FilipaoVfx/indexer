@@ -23,6 +23,8 @@ const NETWORK_REPLY_RECHECK_WAIT_MS = 250;
 const BOOKMARK_SCANNER_SOURCE = "x_bookmarks_dom_scan";
 const BOOKMARK_SCANNER_SCAN_DEBOUNCE_MS = 500;
 const BOOKMARK_SCANNER_TEXT_LIMIT = 12000;
+const BOOKMARK_SCANNER_IDS_TIMEOUT_MS = 90_000;
+const BOOKMARK_SCANNER_IMPORT_TIMEOUT_MS = 300_000;
 const BOOKMARK_SCANNER_BADGE_CLASS = "x-indexer-dom-scan-badge";
 const BOOKMARK_SCANNER_SCROLL_CONFIG = {
   maxRounds: 80,
@@ -486,13 +488,26 @@ async function sendRuntimeMessage(message, meta = {}) {
   let lastError = null;
   const traceId = cleanText(meta.traceId || message?.payload?.traceId || "");
   const label = cleanText(meta.label || message?.type || "runtime_message");
+  const timeoutMs = Math.max(
+    1_000,
+    Number(meta.timeoutMs) || AUTO_CAPTURE_CONFIG.runtimeResponseTimeoutMs
+  );
+  const maxAttempts = Math.max(
+    1,
+    Math.floor(Number(meta.maxAttempts) || AUTO_CAPTURE_CONFIG.runtimeMaxAttempts)
+  );
+  const retryDelayMs = Math.max(
+    0,
+    Number(meta.retryDelayMs) || AUTO_CAPTURE_CONFIG.runtimeRetryDelayMs
+  );
 
-  for (let attempt = 1; attempt <= AUTO_CAPTURE_CONFIG.runtimeMaxAttempts; attempt += 1) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     rememberDebugEvent("info", "runtime_message_attempt", {
       traceId,
       label,
       attempt,
-      maxAttempts: AUTO_CAPTURE_CONFIG.runtimeMaxAttempts
+      maxAttempts,
+      timeoutMs
     });
 
     try {
@@ -504,7 +519,7 @@ async function sendRuntimeMessage(message, meta = {}) {
           }
           settled = true;
           reject(new Error("runtime_response_timeout"));
-        }, AUTO_CAPTURE_CONFIG.runtimeResponseTimeoutMs);
+        }, timeoutMs);
 
         try {
           chrome.runtime.sendMessage(message, (nextResponse) => {
@@ -549,7 +564,7 @@ async function sendRuntimeMessage(message, meta = {}) {
       const contextInvalidated = isExtensionContextInvalidatedMessage(messageText);
       const scannerRuntimeMessage = isBookmarkScannerRuntimeLabel(label);
       const shouldRetry =
-        attempt < AUTO_CAPTURE_CONFIG.runtimeMaxAttempts &&
+        attempt < maxAttempts &&
         isRetryableRuntimeErrorMessage(messageText);
       const stage = shouldRetry
         ? "runtime_message_attempt_retrying"
@@ -563,9 +578,10 @@ async function sendRuntimeMessage(message, meta = {}) {
         traceId,
         label,
         attempt,
-        maxAttempts: AUTO_CAPTURE_CONFIG.runtimeMaxAttempts,
+        maxAttempts,
         shouldRetry,
-        retryInMs: shouldRetry ? AUTO_CAPTURE_CONFIG.runtimeRetryDelayMs : 0,
+        retryInMs: shouldRetry ? retryDelayMs : 0,
+        timeoutMs,
         error: formattedError,
         raw: safeJsonStringify(error, 500)
       });
@@ -574,9 +590,10 @@ async function sendRuntimeMessage(message, meta = {}) {
         traceId,
         label,
         attempt,
-        maxAttempts: AUTO_CAPTURE_CONFIG.runtimeMaxAttempts,
+        maxAttempts,
         shouldRetry,
-        retryInMs: shouldRetry ? AUTO_CAPTURE_CONFIG.runtimeRetryDelayMs : 0,
+        retryInMs: shouldRetry ? retryDelayMs : 0,
+        timeoutMs,
         error: formattedError,
         raw: safeJsonStringify(error, 500)
       });
@@ -588,9 +605,10 @@ async function sendRuntimeMessage(message, meta = {}) {
           traceId,
           label,
           attempt,
-          maxAttempts: AUTO_CAPTURE_CONFIG.runtimeMaxAttempts,
+          maxAttempts,
           shouldRetry,
-          retryInMs: shouldRetry ? AUTO_CAPTURE_CONFIG.runtimeRetryDelayMs : 0,
+          retryInMs: shouldRetry ? retryDelayMs : 0,
+          timeoutMs,
           error: formattedError
         }
       });
@@ -606,7 +624,7 @@ async function sendRuntimeMessage(message, meta = {}) {
         break;
       }
 
-      await sleep(AUTO_CAPTURE_CONFIG.runtimeRetryDelayMs);
+      await sleep(retryDelayMs);
     }
   }
 
@@ -1911,7 +1929,7 @@ async function runBookmarkScannerScrollScan(options = {}) {
   }
 
   const initStatus = await initializeBookmarkScanner({
-    retryIds: !bookmarkScannerState.backendOnline
+    retryIds: !bookmarkScannerState.idsLoaded || !bookmarkScannerState.backendOnline
   });
   if (!initStatus.ok || !isBookmarkScannerPage()) {
     return initStatus;
@@ -2035,7 +2053,9 @@ async function loadBookmarkScannerSavedIds() {
         source: BOOKMARK_SCANNER_SOURCE
       }
     }, {
-      label: "BOOKMARK_SCANNER_FETCH_IDS"
+      label: "BOOKMARK_SCANNER_FETCH_IDS",
+      timeoutMs: BOOKMARK_SCANNER_IDS_TIMEOUT_MS,
+      maxAttempts: 2
     });
   } catch (error) {
     bookmarkScannerState.backendOnline = false;
@@ -2157,7 +2177,9 @@ async function importBookmarkScannerPending() {
       items
     }
   }, {
-    label: "BOOKMARK_SCANNER_IMPORT_BATCH"
+    label: "BOOKMARK_SCANNER_IMPORT_BATCH",
+    timeoutMs: BOOKMARK_SCANNER_IMPORT_TIMEOUT_MS,
+    maxAttempts: 1
   });
 
   if (!response || !response.ok) {
