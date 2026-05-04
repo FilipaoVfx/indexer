@@ -1167,7 +1167,7 @@ export class BookmarkStore {
         throw error;
       }
 
-      const items = await this.attachGithubReadmes((data || []).map((row) =>
+      let items = await this.attachGithubReadmes((data || []).map((row) =>
         this.mapBookmarkRow(row, {
           highlight: row.highlight || null,
           score: Number(row.score || 0),
@@ -1179,8 +1179,37 @@ export class BookmarkStore {
         })
       ));
 
+      if (parsedQuery.exclude.length > 0) {
+        const excludeLower = parsedQuery.exclude.map((t) => t.toLowerCase());
+        items = items.filter((item) => {
+          const text = (item.text_content || "").toLowerCase();
+          return !excludeLower.some((term) => text.includes(term));
+        });
+      }
+
+      if (items.length === 0 && parsedQuery.terms.length > 1) {
+        const expanded = await this.searchExpandedTerms({
+          userId,
+          terms: parsedQuery.terms,
+          filters: parsedQuery.filters,
+          exclude: parsedQuery.exclude,
+          limit: normalizedLimit
+        });
+
+        if (expanded.length > 0) {
+          return {
+            total: expanded.length,
+            items: expanded,
+            parsed_query: parsedQuery,
+            strategy: "fts_trgm_v2_expanded",
+            latency_ms: Date.now() - startedAt,
+            warning: "No exact matches found. Showing results for individual terms."
+          };
+        }
+      }
+
       return {
-        total: Number(data?.[0]?.total_count || 0),
+        total: items.length,
         items,
         parsed_query: parsedQuery,
         strategy: "fts_trgm_v2",
@@ -1203,6 +1232,57 @@ export class BookmarkStore {
           "Ranked search function not available yet. Apply backend/sql/004_search_bookmarks_scalable.sql to enable the scalable hybrid search."
       };
     }
+  }
+
+  async searchExpandedTerms({ userId, terms, filters, exclude, limit }) {
+    const seen = new Set();
+    const merged = [];
+    const perTermLimit = Math.max(Math.ceil(limit / terms.length), 5);
+
+    for (const term of terms.slice(0, 4)) {
+      try {
+        const { data } = await this.supabase.rpc("search_bookmarks", {
+          search_query: term,
+          user_filter: userId || null,
+          author_filter: filters.author || null,
+          domain_filter: filters.domain || null,
+          from_date: filters.from || null,
+          to_date: filters.to || null,
+          limit_count: perTermLimit,
+          offset_count: 0
+        });
+
+        for (const row of data || []) {
+          if (seen.has(row.id)) continue;
+          seen.add(row.id);
+          merged.push(
+            this.mapBookmarkRow(row, {
+              highlight: row.highlight || null,
+              score: Number(row.score || 0) * 0.8,
+              score_breakdown: {
+                lexical: Number(row.text_rank || 0),
+                author: Number(row.author_boost || 0),
+                freshness: Number(row.freshness_boost || 0)
+              }
+            })
+          );
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    let results = merged;
+
+    if (exclude.length > 0) {
+      const excludeLower = exclude.map((t) => t.toLowerCase());
+      results = results.filter((item) => {
+        const text = (item.text_content || "").toLowerCase();
+        return !excludeLower.some((t) => text.includes(t));
+      });
+    }
+
+    return results.sort((a, b) => (b.score || 0) - (a.score || 0)).slice(0, limit);
   }
 
   async count({ userId } = {}) {
