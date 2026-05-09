@@ -151,6 +151,19 @@ export interface GoalStep {
   score: number;
   priority: number;
   contributing_tokens: string[];
+  label?: string;
+  description?: string;
+  inputs?: string[];
+  outputs?: string[];
+  icon?: string;
+  has_match?: boolean;
+}
+
+export interface RouteScore {
+  score: number;
+  coverage: number;
+  total_steps: number;
+  matched_steps: number;
 }
 
 export interface GoalSearchResponse {
@@ -164,6 +177,7 @@ export interface GoalSearchResponse {
   goal_parse?: GoalParse;
   grouped_results?: GoalGroupedResults;
   steps?: GoalStep[];
+  route_score?: RouteScore | null;
   next_steps?: string[];
   warning?: string | null;
 }

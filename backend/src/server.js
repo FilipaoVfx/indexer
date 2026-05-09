@@ -512,6 +512,7 @@ const server = http.createServer(async (req, res) => {
         grouped_results: result.grouped_results,
         goal_parse: result.goal_parse,
         steps: result.steps || [],
+        route_score: result.route_score || null,
         next_steps: result.next_steps,
         strategy: result.strategy,
         latency_ms: result.latency_ms,

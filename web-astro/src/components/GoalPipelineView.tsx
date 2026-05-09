@@ -230,18 +230,41 @@ function bucketItemsByStep(steps: GoalStep[], items: SearchItem[]): StepBucket[]
 
 function displayName(item: SearchItem | undefined | null): string {
   if (!item) return "—";
+
+  // 1. repo slug name (most reliable for tools/repos)
   const slug = (item.repo_slugs || [])[0];
   if (slug) {
     const [, repo] = slug.split("/");
     if (repo) return repo;
   }
-  return item.title || "sin título";
+
+  // 2. readme match slug
+  if (item.readme_match?.slug) {
+    const [, repo] = item.readme_match.slug.split("/");
+    if (repo) return repo;
+  }
+
+  // 3. github_readmes repo name
+  const firstReadme = (item.github_readmes || [])[0];
+  if (firstReadme?.repo) return firstReadme.repo;
+
+  // 4. summary as name if short enough (likely a tool name, not a post)
+  if (item.summary && item.summary.length <= 60 && !item.summary.includes("\n")) {
+    return item.summary;
+  }
+
+  // 5. title only as last resort — truncate if it's a long post
+  const title = item.title || "sin título";
+  return title.length > 50 ? title.slice(0, 47) + "…" : title;
 }
 
 function languageLabel(item: SearchItem | undefined | null): string {
   if (!item) return "";
+
+  // Show asset type + first topic as context (e.g. "repo · automation")
   const type = item.asset_type || "";
   const topic = (item.topics || [])[0];
+  if (type && topic) return `${type} · ${topic}`;
   return topic || type || "asset";
 }
 
@@ -539,8 +562,12 @@ function StepDetailPanel({
   }
 
   const meta = STEP_META[bucket.step.step];
+  const step = bucket.step;
   const item = selected?.item || bucket.primary;
   const url = buildItemUrl(item);
+  const stepInputs = step.inputs && step.inputs.length > 0 ? step.inputs : null;
+  const stepOutputs = step.outputs && step.outputs.length > 0 ? step.outputs : null;
+
   return (
     <aside className="w-full space-y-4 rounded-2xl border border-outline-variant/20 bg-surface-container-low p-5 lg:p-6">
       <div className="flex items-start justify-between gap-3">
@@ -550,10 +577,10 @@ function StepDetailPanel({
           </p>
           <div className="mt-1 flex items-center gap-2">
             <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-[12px] font-bold text-on-primary">
-              {(bucket.step.priority || 0) + 1}
+              {(step.priority || 0) + 1}
             </span>
             <h4 className="text-sm font-bold text-on-surface">
-              {meta?.label || bucket.step.step}
+              {step.label || meta?.label || step.step}
             </h4>
           </div>
         </div>
@@ -567,6 +594,41 @@ function StepDetailPanel({
           </button>
         )}
       </div>
+
+      {step.description && (
+        <p className="text-sm leading-relaxed text-on-surface-variant">
+          {step.description}
+        </p>
+      )}
+
+      {(stepInputs || stepOutputs) && (
+        <div className="flex gap-4 text-[11px]">
+          {stepInputs && (
+            <div className="flex-1">
+              <p className="mb-1 font-bold uppercase tracking-wider text-on-surface-variant">Inputs</p>
+              <ul className="space-y-0.5 text-on-surface-variant">
+                {stepInputs.map((input) => (
+                  <li key={input} className="flex items-center gap-1">
+                    <span className="text-primary">&#8594;</span> {input}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {stepOutputs && (
+            <div className="flex-1">
+              <p className="mb-1 font-bold uppercase tracking-wider text-on-surface-variant">Outputs</p>
+              <ul className="space-y-0.5 text-on-surface-variant">
+                {stepOutputs.map((output) => (
+                  <li key={output} className="flex items-center gap-1">
+                    <span className="text-secondary">&#8592;</span> {output}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
 
       {item && (
         <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-4">
@@ -1066,9 +1128,24 @@ export default function GoalPipelineView({
             <h3 className="text-sm font-bold uppercase tracking-wider text-on-surface">
               Ruta recomendada
             </h3>
-            <span className="text-[11px] text-on-surface-variant font-mono">
-              {primaryCount}/{buckets.length} pasos · {toolsEvaluated} tools
-            </span>
+            <div className="flex items-center gap-3">
+              {response.route_score && (
+                <span
+                  className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${
+                    response.route_score.score >= 70
+                      ? "bg-primary/20 text-primary"
+                      : response.route_score.score >= 40
+                      ? "bg-secondary/15 text-secondary"
+                      : "bg-error/15 text-error"
+                  }`}
+                >
+                  {response.route_score.score}% cobertura
+                </span>
+              )}
+              <span className="text-[11px] text-on-surface-variant font-mono">
+                {primaryCount}/{buckets.length} pasos · {toolsEvaluated} tools
+              </span>
+            </div>
           </header>
           <div className="h-[430px] md:h-[500px] xl:h-[540px]">
             <ReactFlowProvider>

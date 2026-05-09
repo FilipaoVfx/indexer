@@ -142,6 +142,28 @@ function groupGoalResults(items) {
   };
 }
 
+function computeRouteScore(enrichedSteps, items) {
+  if (enrichedSteps.length === 0) return { score: 0, coverage: 0, total_steps: 0, matched_steps: 0 };
+
+  const matchedCount = enrichedSteps.filter((s) => s.has_match).length;
+  const coverage = matchedCount / enrichedSteps.length;
+
+  // Average item score for matched steps (quality signal)
+  const avgItemScore = items.length > 0
+    ? items.reduce((sum, item) => sum + (item.score || 0), 0) / items.length
+    : 0;
+
+  // Route score: 70% coverage + 30% quality
+  const score = Math.round((coverage * 0.7 + Math.min(1, avgItemScore) * 0.3) * 100);
+
+  return {
+    score,
+    coverage: Math.round(coverage * 100),
+    total_steps: enrichedSteps.length,
+    matched_steps: matchedCount
+  };
+}
+
 function extractDbErrorMessage(error) {
   if (!error) return "";
   if (typeof error === "string") return error.trim();
@@ -1285,6 +1307,49 @@ export class BookmarkStore {
     return results.sort((a, b) => (b.score || 0) - (a.score || 0)).slice(0, limit);
   }
 
+  async enrichStepsWithMetadata(steps, items) {
+    if (steps.length === 0) return steps;
+
+    const stepNames = steps.map((s) => s.step).filter(Boolean);
+    let metadataMap = {};
+
+    try {
+      const { data } = await this.supabase.rpc("get_step_metadata", {
+        p_steps: stepNames
+      });
+      if (data) {
+        for (const row of data) {
+          metadataMap[row.step_name] = row;
+        }
+      }
+    } catch {
+      // metadata table not applied yet — degrade gracefully
+    }
+
+    return steps.map((step) => {
+      const meta = metadataMap[step.step] || {};
+      const hasItemMatch = items.some((item) => {
+        const tokens = new Set([
+          ...(item.topics || []),
+          ...(item.required_components || [])
+        ].map((t) => t.toLowerCase()));
+        return (step.contributing_tokens || []).some((t) =>
+          tokens.has(t.toLowerCase())
+        );
+      });
+
+      return {
+        ...step,
+        label: meta.label || step.step,
+        description: meta.description || null,
+        inputs: meta.inputs || [],
+        outputs: meta.outputs || [],
+        icon: meta.icon || "widgets",
+        has_match: hasItemMatch
+      };
+    });
+  }
+
   async count({ userId } = {}) {
     await this.init();
     let queryBuilder = this.supabase
@@ -1547,6 +1612,10 @@ export class BookmarkStore {
         this.mapGoalSearchRowV3(row)
       );
 
+      const rawSteps = Array.isArray(v3Payload.steps) ? v3Payload.steps : [];
+      const enrichedSteps = await this.enrichStepsWithMetadata(rawSteps, items);
+      const routeScore = computeRouteScore(enrichedSteps, items);
+
       return {
         total: Number(v3Payload.total || 0),
         items,
@@ -1566,10 +1635,9 @@ export class BookmarkStore {
             : [],
           parsed_query: parsedQuery
         },
-        steps: Array.isArray(v3Payload.steps) ? v3Payload.steps : [],
-        next_steps: buildNextStepsFromPath(
-          Array.isArray(v3Payload.steps) ? v3Payload.steps : []
-        ),
+        steps: enrichedSteps,
+        route_score: routeScore,
+        next_steps: buildNextStepsFromPath(rawSteps),
         strategy: "",
         latency_ms: Date.now() - startedAt,
         warning: null
