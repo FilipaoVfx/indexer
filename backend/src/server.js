@@ -170,6 +170,7 @@ const server = http.createServer(async (req, res) => {
         service: "x-bookmarks-backend",
         timestamp: new Date().toISOString(),
         user_id: userId || null,
+        bookmarks_table: config.bookmarksTable,
         total_bookmarks: total
       });
       return;

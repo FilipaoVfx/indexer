@@ -349,13 +349,15 @@ export class BookmarkStore {
     }
     this.supabase = createClient(config.supabaseUrl, config.supabaseKey);
     this.config = config;
+    this.bookmarksTable = config.bookmarksTable || "bookmarks";
+    this.enableBookmarkSideEffects = config.enableBookmarkSideEffects !== false;
     this.isReady = false;
     this.capabilities = {
       bookmarksFirstCommentLinks: true,
-      bookmarkContextLinks: true,
-      goalRefreshRpc: true,
-      githubReadmes: true,
-      repoClassifier: true
+      bookmarkContextLinks: this.enableBookmarkSideEffects,
+      goalRefreshRpc: this.enableBookmarkSideEffects,
+      githubReadmes: this.enableBookmarkSideEffects,
+      repoClassifier: this.enableBookmarkSideEffects
     };
     this.repoClassifierWarning = null;
   }
@@ -363,6 +365,12 @@ export class BookmarkStore {
   async init() {
     if (this.isReady) {
       return;
+    }
+    console.log(`[store] Using bookmarks table "${this.bookmarksTable}".`);
+    if (!this.enableBookmarkSideEffects) {
+      console.warn(
+        "[store] Bookmark side effects are disabled. Context links, GitHub README pivots, and goal-search refreshes will be skipped."
+      );
     }
     // No explicit initialization needed for Supabase client
     this.isReady = true;
@@ -504,7 +512,7 @@ export class BookmarkStore {
     const warnings = [];
 
     let { data, error } = await this.supabase
-      .from("bookmarks")
+      .from(this.bookmarksTable)
       .upsert(effectiveBookmarks, { onConflict: "id" })
       .select("id");
 
@@ -520,7 +528,7 @@ export class BookmarkStore {
 
       effectiveBookmarks = stripFirstCommentLinks(bookmarksToUpsert);
       ({ data, error } = await this.supabase
-        .from("bookmarks")
+        .from(this.bookmarksTable)
         .upsert(effectiveBookmarks, { onConflict: "id" })
         .select("id"));
     }
@@ -543,7 +551,7 @@ export class BookmarkStore {
     const warnings = [];
 
     let { data, error } = await this.supabase
-      .from("bookmarks")
+      .from(this.bookmarksTable)
       .upsert(effectiveBookmarks, {
         onConflict: "id",
         ignoreDuplicates: true
@@ -562,7 +570,7 @@ export class BookmarkStore {
 
       effectiveBookmarks = stripFirstCommentLinks(bookmarksToInsert);
       ({ data, error } = await this.supabase
-        .from("bookmarks")
+        .from(this.bookmarksTable)
         .upsert(effectiveBookmarks, {
           onConflict: "id",
           ignoreDuplicates: true
@@ -1112,7 +1120,7 @@ export class BookmarkStore {
     }
 
     const { count: totalStored } = await this.supabase
-      .from("bookmarks")
+      .from(this.bookmarksTable)
       .select("*", { count: "exact", head: true })
       .eq("user_id", userId);
 
@@ -1151,64 +1159,81 @@ export class BookmarkStore {
     const normalizedOffset = clampNumber(offset, 0, 0, 10_000);
     const startedAt = Date.now();
 
-    try {
-      const { data, error } = await this.supabase.rpc("search_bookmarks", {
-        search_query: parsedQuery.searchText || null,
-        user_filter: userId || null,
-        author_filter: parsedQuery.filters.author || null,
-        domain_filter: parsedQuery.filters.domain || null,
-        from_date: parsedQuery.filters.from || null,
-        to_date: parsedQuery.filters.to || null,
-        limit_count: normalizedLimit,
-        offset_count: normalizedOffset
-      });
+    if (this.bookmarksTable === "bookmarks") {
+      try {
+        const { data, error } = await this.supabase.rpc("search_bookmarks", {
+          search_query: parsedQuery.searchText || null,
+          user_filter: userId || null,
+          author_filter: parsedQuery.filters.author || null,
+          domain_filter: parsedQuery.filters.domain || null,
+          from_date: parsedQuery.filters.from || null,
+          to_date: parsedQuery.filters.to || null,
+          limit_count: normalizedLimit,
+          offset_count: normalizedOffset
+        });
 
-      if (error) {
-        throw error;
+        if (error) {
+          throw error;
+        }
+
+        const items = await this.attachGithubReadmes((data || []).map((row) =>
+          this.mapBookmarkRow(row, {
+            highlight: row.highlight || null,
+            score: Number(row.score || 0),
+            score_breakdown: {
+              lexical: Number(row.text_rank || 0),
+              author: Number(row.author_boost || 0),
+              freshness: Number(row.freshness_boost || 0)
+            }
+          })
+        ));
+
+        return {
+          total: Number(data?.[0]?.total_count || 0),
+          items,
+          parsed_query: parsedQuery,
+          strategy: "fts_trgm_v2",
+          latency_ms: Date.now() - startedAt,
+          warning: null
+        };
+      } catch (_rpcError) {
+        const fallback = await this.searchFallback({
+          userId,
+          parsedQuery,
+          limit: normalizedLimit,
+          offset: normalizedOffset
+        });
+
+        return {
+          ...fallback,
+          strategy: "ilike_fallback",
+          latency_ms: Date.now() - startedAt,
+          warning:
+            "Ranked search function not available yet. Apply backend/sql/004_search_bookmarks_scalable.sql to enable the scalable hybrid search."
+        };
       }
-
-      const items = await this.attachGithubReadmes((data || []).map((row) =>
-        this.mapBookmarkRow(row, {
-          highlight: row.highlight || null,
-          score: Number(row.score || 0),
-          score_breakdown: {
-            lexical: Number(row.text_rank || 0),
-            author: Number(row.author_boost || 0),
-            freshness: Number(row.freshness_boost || 0)
-          }
-        })
-      ));
-
-      return {
-        total: Number(data?.[0]?.total_count || 0),
-        items,
-        parsed_query: parsedQuery,
-        strategy: "fts_trgm_v2",
-        latency_ms: Date.now() - startedAt,
-        warning: null
-      };
-    } catch (_rpcError) {
-      const fallback = await this.searchFallback({
-        userId,
-        parsedQuery,
-        limit: normalizedLimit,
-        offset: normalizedOffset
-      });
-
-      return {
-        ...fallback,
-        strategy: "ilike_fallback",
-        latency_ms: Date.now() - startedAt,
-        warning:
-          "Ranked search function not available yet. Apply backend/sql/004_search_bookmarks_scalable.sql to enable the scalable hybrid search."
-      };
     }
+
+    const fallback = await this.searchFallback({
+      userId,
+      parsedQuery,
+      limit: normalizedLimit,
+      offset: normalizedOffset
+    });
+
+    return {
+      ...fallback,
+      strategy: "ilike_table_fallback",
+      latency_ms: Date.now() - startedAt,
+      warning:
+        `Ranked search RPC skipped because BOOKMARKS_TABLE=${this.bookmarksTable}; search_bookmarks reads the default bookmarks table.`
+    };
   }
 
   async count({ userId } = {}) {
     await this.init();
     let queryBuilder = this.supabase
-      .from("bookmarks")
+      .from(this.bookmarksTable)
       .select("*", { count: "exact", head: true });
 
     if (userId) {
@@ -1236,7 +1261,7 @@ export class BookmarkStore {
     while (ids.length < normalizedHardLimit) {
       const limit = Math.min(normalizedBatchSize, normalizedHardLimit - ids.length);
       let queryBuilder = this.supabase
-        .from("bookmarks")
+        .from(this.bookmarksTable)
         .select("tweet_id,updated_at,inserted_at")
         .order("inserted_at", { ascending: true })
         .range(offset, offset + limit - 1);
@@ -1298,7 +1323,7 @@ export class BookmarkStore {
     for (let index = 0; index < uniqueTweetIds.length; index += chunkSize) {
       const chunk = uniqueTweetIds.slice(index, index + chunkSize);
       let queryBuilder = this.supabase
-        .from("bookmarks")
+        .from(this.bookmarksTable)
         .select("tweet_id")
         .in("tweet_id", chunk);
 
@@ -1334,7 +1359,7 @@ export class BookmarkStore {
     while (offset < total && offset < hardLimit) {
       const limit = Math.min(batchSize, hardLimit - offset);
       const { data, count, error } = await this.supabase
-        .from("bookmarks")
+        .from(this.bookmarksTable)
         .select("user_id", { count: "exact" })
         .range(offset, offset + limit - 1);
 
@@ -1444,6 +1469,52 @@ export class BookmarkStore {
     const normalizedLimit = clampNumber(limit, 20, 1, 100);
     const normalizedOffset = clampNumber(offset, 0, 0, 10_000);
     const startedAt = Date.now();
+
+    if (this.bookmarksTable !== "bookmarks") {
+      const fallback = await this.searchFallback({
+        userId,
+        parsedQuery,
+        limit: normalizedLimit,
+        offset: normalizedOffset
+      });
+      const tokens = parsedQuery.searchText
+        ? parsedQuery.searchText.split(/\s+/).filter(Boolean).slice(0, 12)
+        : [];
+      const items = (fallback.items || []).map((item) => ({
+        ...item,
+        asset_type: "bookmark",
+        title:
+          String(item.text_content || item.source_url || item.tweet_id || item.id || "")
+            .trim()
+            .slice(0, 120),
+        summary: item.text_content || "",
+        topics: [],
+        subtopics: [],
+        intent_tags: [],
+        required_components: [],
+        difficulty: null,
+        why_this_result: []
+      }));
+
+      return {
+        total: fallback.total,
+        items,
+        grouped_results: groupGoalResults(items),
+        goal_parse: {
+          intent: "explore",
+          topics: tokens,
+          required_components: [],
+          tokens,
+          parsed_query: parsedQuery
+        },
+        steps: [],
+        next_steps: [],
+        strategy: "bookmark_table_ilike_fallback",
+        latency_ms: Date.now() - startedAt,
+        warning:
+          `Goal-search RPC skipped because BOOKMARKS_TABLE=${this.bookmarksTable}; goal SQL functions read the default bookmarks table.`
+      };
+    }
 
     // Fast path: unified v3 RPC (parse + search + readme in one round-trip).
     // Falls back to the v2 two-call path when the migration has not been
@@ -1683,7 +1754,7 @@ export class BookmarkStore {
 
   async searchFallback({ userId, parsedQuery, limit, offset }) {
     let queryBuilder = this.supabase
-      .from("bookmarks")
+      .from(this.bookmarksTable)
       .select("*", { count: "exact" });
 
     if (userId) {
@@ -2046,7 +2117,7 @@ export class BookmarkStore {
     await this.init();
 
     let queryBuilder = this.supabase
-      .from("bookmarks")
+      .from(this.bookmarksTable)
       .select("*", { count: "exact" });
 
     if (userId) {
@@ -2134,7 +2205,7 @@ export class BookmarkStore {
     if (!id) return null;
 
     let queryBuilder = this.supabase
-      .from("bookmarks")
+      .from(this.bookmarksTable)
       .select("*")
       .eq("id", id)
       .limit(1);
