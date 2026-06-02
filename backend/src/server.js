@@ -171,6 +171,7 @@ const server = http.createServer(async (req, res) => {
         timestamp: new Date().toISOString(),
         user_id: userId || null,
         bookmarks_table: config.bookmarksTable,
+        bookmark_dedupe_scope: config.bookmarkDedupeScope,
         total_bookmarks: total
       });
       return;
@@ -321,10 +322,10 @@ const server = http.createServer(async (req, res) => {
         source,
         received: body.items.length,
         inserted: summary.inserted || 0,
-        duplicates: [...new Set(duplicates)].length,
+        duplicates: [...new Set([...duplicates, ...(summary.duplicate_ids || [])])].length,
         failed: invalid.length + (summary.ignored_invalid || 0),
-        duplicate_ids: [...new Set(duplicates)],
-        imported_ids: newItems.map((item) => item.tweet_id),
+        duplicate_ids: [...new Set([...duplicates, ...(summary.duplicate_ids || [])])],
+        imported_ids: summary.inserted_ids || [],
         invalid,
         total_stored: summary.total_stored ?? null,
         warnings: summary.warnings || []

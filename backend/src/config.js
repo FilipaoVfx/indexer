@@ -52,7 +52,27 @@ function parseTableName(value, fallback) {
   return tableName;
 }
 
+function parseBookmarkDedupeScope(value, fallback) {
+  const normalized = String(value || fallback || "").trim().toLowerCase();
+
+  if (["global", "tweet", "tweet_id"].includes(normalized)) {
+    return "global";
+  }
+
+  if (["per_user", "user", "user_id"].includes(normalized)) {
+    return "per_user";
+  }
+
+  throw new Error(
+    `Invalid BOOKMARK_DEDUPE_SCOPE "${normalized}". Use "global" or "per_user".`
+  );
+}
+
 const bookmarksTable = parseTableName(process.env.BOOKMARKS_TABLE, "bookmarks");
+const bookmarkDedupeScope = parseBookmarkDedupeScope(
+  process.env.BOOKMARK_DEDUPE_SCOPE,
+  bookmarksTable === "bookmarks" ? "per_user" : "global"
+);
 const enableBookmarkSideEffects = parseBoolean(
   process.env.BOOKMARKS_ENABLE_SIDE_EFFECTS,
   bookmarksTable === "bookmarks"
@@ -73,6 +93,7 @@ export const config = {
   // The backend should prefer the service role key so DB-side RLS can stay enabled.
   supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY,
   bookmarksTable,
+  bookmarkDedupeScope,
   enableBookmarkSideEffects
 };
 

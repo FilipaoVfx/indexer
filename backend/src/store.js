@@ -350,6 +350,9 @@ export class BookmarkStore {
     this.supabase = createClient(config.supabaseUrl, config.supabaseKey);
     this.config = config;
     this.bookmarksTable = config.bookmarksTable || "bookmarks";
+    this.bookmarkDedupeScope = config.bookmarkDedupeScope || "per_user";
+    this.bookmarkConflictTarget =
+      this.bookmarkDedupeScope === "global" ? "tweet_id" : "id";
     this.enableBookmarkSideEffects = config.enableBookmarkSideEffects !== false;
     this.isReady = false;
     this.capabilities = {
@@ -366,7 +369,9 @@ export class BookmarkStore {
     if (this.isReady) {
       return;
     }
-    console.log(`[store] Using bookmarks table "${this.bookmarksTable}".`);
+    console.log(
+      `[store] Using bookmarks table "${this.bookmarksTable}" with ${this.bookmarkDedupeScope} dedupe.`
+    );
     if (!this.enableBookmarkSideEffects) {
       console.warn(
         "[store] Bookmark side effects are disabled. Context links, GitHub README pivots, and goal-search refreshes will be skipped."
@@ -374,6 +379,10 @@ export class BookmarkStore {
     }
     // No explicit initialization needed for Supabase client
     this.isReady = true;
+  }
+
+  usesGlobalBookmarkDedupe() {
+    return this.bookmarkDedupeScope === "global";
   }
 
   async expandShortenerLinks(bookmarks) {
@@ -514,7 +523,7 @@ export class BookmarkStore {
     let { data, error } = await this.supabase
       .from(this.bookmarksTable)
       .upsert(effectiveBookmarks, { onConflict: "id" })
-      .select("id");
+      .select("id,tweet_id");
 
     if (error && this.capabilities.bookmarksFirstCommentLinks && isMissingFirstCommentLinksColumnError(error)) {
       this.capabilities.bookmarksFirstCommentLinks = false;
@@ -530,7 +539,7 @@ export class BookmarkStore {
       ({ data, error } = await this.supabase
         .from(this.bookmarksTable)
         .upsert(effectiveBookmarks, { onConflict: "id" })
-        .select("id"));
+        .select("id,tweet_id"));
     }
 
     if (error) {
@@ -553,10 +562,10 @@ export class BookmarkStore {
     let { data, error } = await this.supabase
       .from(this.bookmarksTable)
       .upsert(effectiveBookmarks, {
-        onConflict: "id",
+        onConflict: this.bookmarkConflictTarget,
         ignoreDuplicates: true
       })
-      .select("id");
+      .select("id,tweet_id");
 
     if (error && this.capabilities.bookmarksFirstCommentLinks && isMissingFirstCommentLinksColumnError(error)) {
       this.capabilities.bookmarksFirstCommentLinks = false;
@@ -572,10 +581,10 @@ export class BookmarkStore {
       ({ data, error } = await this.supabase
         .from(this.bookmarksTable)
         .upsert(effectiveBookmarks, {
-          onConflict: "id",
+          onConflict: this.bookmarkConflictTarget,
           ignoreDuplicates: true
         })
-        .select("id"));
+        .select("id,tweet_id"));
     }
 
     if (error) {
@@ -1047,9 +1056,12 @@ export class BookmarkStore {
     let ignoredInvalid = 0;
     let githubReadmesFetched = 0;
     let githubReadmesSkipped = 0;
+    let insertedIds = [];
     const warnings = [];
 
     const bookmarksToUpsert = [];
+    const duplicateIds = [];
+    const seenBatchKeys = new Set();
 
     const preparedBookmarks = await this.expandShortenerLinks(bookmarks);
 
@@ -1066,6 +1078,13 @@ export class BookmarkStore {
       }
 
       const bookmark = normalized.bookmark;
+      const batchKey = this.usesGlobalBookmarkDedupe() ? bookmark.tweet_id : bookmark.id;
+      if (seenBatchKeys.has(batchKey)) {
+        duplicateIds.push(bookmark.tweet_id);
+        continue;
+      }
+      seenBatchKeys.add(batchKey);
+
       bookmarksToUpsert.push({
         ...bookmark,
         inserted_at: receivedAt,
@@ -1073,27 +1092,67 @@ export class BookmarkStore {
       });
     }
 
-    if (bookmarksToUpsert.length > 0) {
+    let bookmarksToStore = bookmarksToUpsert;
+    if (this.usesGlobalBookmarkDedupe() && bookmarksToUpsert.length > 0) {
+      const existingTweetIds = await this.getExistingTweetIds({
+        tweetIds: bookmarksToUpsert.map((bookmark) => bookmark.tweet_id)
+      });
+
+      bookmarksToStore = bookmarksToUpsert.filter((bookmark) => {
+        if (existingTweetIds.has(bookmark.tweet_id)) {
+          duplicateIds.push(bookmark.tweet_id);
+          return false;
+        }
+        return true;
+      });
+    }
+
+    if (bookmarksToStore.length > 0) {
+      const shouldInsertOnly = insertOnly || this.usesGlobalBookmarkDedupe();
       const {
         data,
         warnings: upsertWarnings
-      } = insertOnly
-        ? await this.insertBookmarksWithFallback(bookmarksToUpsert)
-        : await this.upsertBookmarksWithFallback(bookmarksToUpsert);
+      } = shouldInsertOnly
+        ? await this.insertBookmarksWithFallback(bookmarksToStore)
+        : await this.upsertBookmarksWithFallback(bookmarksToStore);
       warnings.push(...upsertWarnings);
 
       // Supabase returns the upserted records. 
       // We can distinguish between inserted and updated if we query before, 
       // but for simplicity in a batch we'll count total successes.
       inserted = data.length;
+      insertedIds = (Array.isArray(data) ? data : [])
+        .map((row) => String(row?.tweet_id || "").trim())
+        .filter(Boolean);
       const storedBookmarkIds = new Set(
         (Array.isArray(data) ? data : [])
           .map((row) => String(row?.id || "").trim())
           .filter(Boolean)
       );
-      const storedBookmarks = insertOnly
-        ? bookmarksToUpsert.filter((bookmark) => storedBookmarkIds.has(String(bookmark.id || "")))
-        : bookmarksToUpsert;
+      const storedTweetIds = new Set(
+        (Array.isArray(data) ? data : [])
+          .map((row) => String(row?.tweet_id || "").trim())
+          .filter(Boolean)
+      );
+
+      if (shouldInsertOnly) {
+        for (const bookmark of bookmarksToStore) {
+          const wasStored = this.usesGlobalBookmarkDedupe()
+            ? storedTweetIds.has(String(bookmark.tweet_id || ""))
+            : storedBookmarkIds.has(String(bookmark.id || ""));
+          if (!wasStored) {
+            duplicateIds.push(bookmark.tweet_id);
+          }
+        }
+      }
+
+      const storedBookmarks = shouldInsertOnly
+        ? bookmarksToStore.filter((bookmark) =>
+            this.usesGlobalBookmarkDedupe()
+              ? storedTweetIds.has(String(bookmark.tweet_id || ""))
+              : storedBookmarkIds.has(String(bookmark.id || ""))
+          )
+        : bookmarksToStore;
 
       if (storedBookmarks.length > 0) {
         const contextWarning = await this.syncBookmarkContextLinks({
@@ -1119,16 +1178,25 @@ export class BookmarkStore {
       }
     }
 
-    const { count: totalStored } = await this.supabase
+    let totalStoredQuery = this.supabase
       .from(this.bookmarksTable)
-      .select("*", { count: "exact", head: true })
-      .eq("user_id", userId);
+      .select("*", { count: "exact", head: true });
+
+    if (userId && !this.usesGlobalBookmarkDedupe()) {
+      totalStoredQuery = totalStoredQuery.eq("user_id", userId);
+    }
+
+    const { count: totalStored } = await totalStoredQuery;
+    const uniqueDuplicateIds = [...new Set(duplicateIds)];
 
     return {
       received: bookmarks.length,
       inserted,
       updated, // In Supabase upsert, we don't easily distinguish without extra checks
       ignored_invalid: ignoredInvalid,
+      duplicates: uniqueDuplicateIds.length,
+      duplicate_ids: uniqueDuplicateIds,
+      inserted_ids: insertedIds,
       github_readmes_fetched: githubReadmesFetched,
       github_readmes_skipped: githubReadmesSkipped,
       total_stored: totalStored,
@@ -1236,7 +1304,7 @@ export class BookmarkStore {
       .from(this.bookmarksTable)
       .select("*", { count: "exact", head: true });
 
-    if (userId) {
+    if (userId && !this.usesGlobalBookmarkDedupe()) {
       queryBuilder = queryBuilder.eq("user_id", userId);
     }
 
@@ -1266,7 +1334,7 @@ export class BookmarkStore {
         .order("inserted_at", { ascending: true })
         .range(offset, offset + limit - 1);
 
-      if (userId) {
+      if (userId && !this.usesGlobalBookmarkDedupe()) {
         queryBuilder = queryBuilder.eq("user_id", userId);
       }
 
@@ -1327,7 +1395,7 @@ export class BookmarkStore {
         .select("tweet_id")
         .in("tweet_id", chunk);
 
-      if (userId) {
+      if (userId && !this.usesGlobalBookmarkDedupe()) {
         queryBuilder = queryBuilder.eq("user_id", userId);
       }
 
