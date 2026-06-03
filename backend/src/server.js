@@ -58,6 +58,14 @@ function clampNumber(value, fallback, minimum, maximum) {
   return Math.min(Math.max(parsed, minimum), maximum);
 }
 
+function sanitizeDashboardFilter(value, maxLength = 160) {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  return value.trim().slice(0, maxLength);
+}
+
 function decodePathParam(value) {
   try {
     return decodeURIComponent(value || "");
@@ -173,6 +181,71 @@ const server = http.createServer(async (req, res) => {
         bookmarks_table: config.bookmarksTable,
         bookmark_dedupe_scope: config.bookmarkDedupeScope,
         total_bookmarks: total
+      });
+      return;
+    }
+
+    if (req.method === "GET" && routePath === "/api/dashboard/overview") {
+      const overview = await store.getDashboardOverview();
+
+      sendJson(res, 200, {
+        ok: true,
+        ...overview
+      });
+      return;
+    }
+
+    if (
+      req.method === "GET" &&
+      (routePath === "/api/dashboard/datos-x" || routePath === "/api/dashboard/crypto")
+    ) {
+      const result = await store.getDatosXDashboard({
+        q: sanitizeDashboardFilter(requestUrl.searchParams.get("q") || ""),
+        author: sanitizeDashboardFilter(requestUrl.searchParams.get("author") || ""),
+        domain: sanitizeDashboardFilter(requestUrl.searchParams.get("domain") || ""),
+        from: sanitizeDashboardFilter(requestUrl.searchParams.get("from") || "", 40),
+        to: sanitizeDashboardFilter(requestUrl.searchParams.get("to") || "", 40),
+        limit: clampNumber(requestUrl.searchParams.get("limit"), 50, 1, 100),
+        offset: clampNumber(requestUrl.searchParams.get("offset"), 0, 0, 50_000),
+        statsLimit: clampNumber(
+          requestUrl.searchParams.get("stats_limit"),
+          2000,
+          100,
+          5000
+        )
+      });
+
+      sendJson(res, 200, {
+        ok: true,
+        ...result
+      });
+      return;
+    }
+
+    if (req.method === "GET" && routePath === "/api/dashboard/electoral") {
+      const result = await store.getElectoralDashboard({
+        q: sanitizeDashboardFilter(requestUrl.searchParams.get("q") || ""),
+        cluster: sanitizeDashboardFilter(requestUrl.searchParams.get("cluster") || ""),
+        candidate: sanitizeDashboardFilter(requestUrl.searchParams.get("candidate") || ""),
+        segment: sanitizeDashboardFilter(requestUrl.searchParams.get("segment") || ""),
+        sentiment: sanitizeDashboardFilter(requestUrl.searchParams.get("sentiment") || ""),
+        topic: sanitizeDashboardFilter(requestUrl.searchParams.get("topic") || ""),
+        valid: sanitizeDashboardFilter(requestUrl.searchParams.get("valid") || "", 12),
+        from: sanitizeDashboardFilter(requestUrl.searchParams.get("from") || "", 40),
+        to: sanitizeDashboardFilter(requestUrl.searchParams.get("to") || "", 40),
+        limit: clampNumber(requestUrl.searchParams.get("limit"), 50, 1, 100),
+        offset: clampNumber(requestUrl.searchParams.get("offset"), 0, 0, 50_000),
+        statsLimit: clampNumber(
+          requestUrl.searchParams.get("stats_limit"),
+          2000,
+          100,
+          5000
+        )
+      });
+
+      sendJson(res, 200, {
+        ok: true,
+        ...result
       });
       return;
     }

@@ -1,0 +1,592 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>IndexBook Data Console</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            ink: "#18181b",
+            paper: "#fafaf9",
+            line: "#d6d3d1",
+            moss: "#116149",
+            gold: "#a16207",
+            clay: "#9f1239"
+          },
+          boxShadow: {
+            soft: "0 14px 35px rgba(24, 24, 27, 0.08)"
+          }
+        }
+      }
+    };
+  </script>
+</head>
+<body class="min-h-screen bg-stone-100 text-ink antialiased">
+  <main class="mx-auto flex min-h-screen max-w-[1500px] flex-col gap-4 px-3 py-3 sm:px-5">
+    <header class="sticky top-0 z-20 rounded-lg border border-line bg-paper/95 px-4 py-3 shadow-soft backdrop-blur">
+      <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <h1 class="text-xl font-semibold tracking-normal sm:text-2xl">IndexBook Data Console</h1>
+          <p class="mt-1 text-sm text-zinc-600">Datos X + electoral_youtube</p>
+        </div>
+        <div class="grid gap-2 sm:grid-cols-[minmax(260px,420px)_auto_auto] sm:items-center">
+          <label class="grid gap-1 text-xs font-medium uppercase tracking-wide text-zinc-500">
+            API base
+            <input data-ref="apiBase" class="h-10 rounded-md border border-line bg-white px-3 text-sm font-normal normal-case text-ink outline-none focus:border-moss focus:ring-2 focus:ring-emerald-100" value="http://localhost:8787" />
+          </label>
+          <button data-action="refresh" class="h-10 rounded-md bg-moss px-4 text-sm font-semibold text-white hover:bg-emerald-800">Actualizar</button>
+          <button data-action="reset" class="h-10 rounded-md border border-line bg-white px-4 text-sm font-semibold hover:border-zinc-400">Limpiar</button>
+        </div>
+      </div>
+    </header>
+
+    <section class="grid gap-3 sm:grid-cols-2 lg:grid-cols-6" data-ref="overview"></section>
+
+    <section class="grid flex-1 gap-4 lg:grid-cols-[330px_minmax(0,1fr)]">
+      <aside class="rounded-lg border border-line bg-paper p-3 shadow-soft">
+        <div class="grid grid-cols-2 gap-2">
+          <button data-tab="datos-x" class="rounded-md bg-ink px-3 py-2 text-sm font-semibold text-white">Datos X</button>
+          <button data-tab="electoral" class="rounded-md border border-line bg-white px-3 py-2 text-sm font-semibold text-zinc-700 hover:border-zinc-400">Electoral</button>
+        </div>
+
+        <form data-ref="filters" class="mt-4 grid gap-3">
+          <label class="grid gap-1 text-xs font-medium uppercase tracking-wide text-zinc-500">
+            Busqueda
+            <input name="q" class="h-10 rounded-md border border-line bg-white px-3 text-sm font-normal normal-case text-ink outline-none focus:border-moss focus:ring-2 focus:ring-emerald-100" placeholder="texto, autor, tema" />
+          </label>
+
+          <div data-filter-group="datos-x" class="grid gap-3">
+            <label class="grid gap-1 text-xs font-medium uppercase tracking-wide text-zinc-500">
+              Autor
+              <input name="author" class="h-10 rounded-md border border-line bg-white px-3 text-sm font-normal normal-case text-ink outline-none focus:border-moss focus:ring-2 focus:ring-emerald-100" placeholder="handle o nombre" />
+            </label>
+            <label class="grid gap-1 text-xs font-medium uppercase tracking-wide text-zinc-500">
+              Dominio
+              <input name="domain" class="h-10 rounded-md border border-line bg-white px-3 text-sm font-normal normal-case text-ink outline-none focus:border-moss focus:ring-2 focus:ring-emerald-100" placeholder="x.com, github.com" />
+            </label>
+          </div>
+
+          <div data-filter-group="electoral" class="hidden grid gap-3">
+            <label class="grid gap-1 text-xs font-medium uppercase tracking-wide text-zinc-500">
+              Cluster
+              <input name="cluster" class="h-10 rounded-md border border-line bg-white px-3 text-sm font-normal normal-case text-ink outline-none focus:border-moss focus:ring-2 focus:ring-emerald-100" placeholder="centro, derecha, izquierda" />
+            </label>
+            <label class="grid gap-1 text-xs font-medium uppercase tracking-wide text-zinc-500">
+              Candidato
+              <input name="candidate" class="h-10 rounded-md border border-line bg-white px-3 text-sm font-normal normal-case text-ink outline-none focus:border-moss focus:ring-2 focus:ring-emerald-100" placeholder="referencia" />
+            </label>
+            <label class="grid gap-1 text-xs font-medium uppercase tracking-wide text-zinc-500">
+              Segmento
+              <select name="segment" class="h-10 rounded-md border border-line bg-white px-3 text-sm font-normal normal-case text-ink outline-none focus:border-moss focus:ring-2 focus:ring-emerald-100">
+                <option value="">Todos</option>
+                <option>centro</option>
+                <option>indeciso</option>
+                <option>abstencionista</option>
+                <option>voto_blanco</option>
+                <option>anti_extremos</option>
+                <option>pro_candidato_a</option>
+                <option>pro_candidato_b</option>
+                <option>anti_candidato_a</option>
+                <option>anti_candidato_b</option>
+                <option>militante_duro</option>
+                <option>no_clasificable</option>
+              </select>
+            </label>
+            <label class="grid gap-1 text-xs font-medium uppercase tracking-wide text-zinc-500">
+              Sentimiento
+              <select name="sentiment" class="h-10 rounded-md border border-line bg-white px-3 text-sm font-normal normal-case text-ink outline-none focus:border-moss focus:ring-2 focus:ring-emerald-100">
+                <option value="">Todos</option>
+                <option>positivo</option>
+                <option>negativo</option>
+                <option>neutral</option>
+                <option>mixto</option>
+              </select>
+            </label>
+            <label class="grid gap-1 text-xs font-medium uppercase tracking-wide text-zinc-500">
+              Tema
+              <select name="topic" class="h-10 rounded-md border border-line bg-white px-3 text-sm font-normal normal-case text-ink outline-none focus:border-moss focus:ring-2 focus:ring-emerald-100">
+                <option value="">Todos</option>
+                <option>seguridad</option>
+                <option>economia</option>
+                <option>corrupcion</option>
+                <option>salud</option>
+                <option>educacion</option>
+                <option>instituciones</option>
+                <option>polarizacion</option>
+                <option>centro_politico</option>
+                <option>abstencion</option>
+                <option>voto_en_blanco</option>
+                <option>rechazo_candidato</option>
+                <option>segunda_vuelta</option>
+                <option>otro</option>
+              </select>
+            </label>
+            <label class="grid gap-1 text-xs font-medium uppercase tracking-wide text-zinc-500">
+              Calidad
+              <select name="valid" class="h-10 rounded-md border border-line bg-white px-3 text-sm font-normal normal-case text-ink outline-none focus:border-moss focus:ring-2 focus:ring-emerald-100">
+                <option value="">Todas</option>
+                <option value="true">Valida</option>
+                <option value="false">No valida</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="grid grid-cols-2 gap-2">
+            <label class="grid gap-1 text-xs font-medium uppercase tracking-wide text-zinc-500">
+              Desde
+              <input name="from" type="date" class="h-10 rounded-md border border-line bg-white px-3 text-sm font-normal normal-case text-ink outline-none focus:border-moss focus:ring-2 focus:ring-emerald-100" />
+            </label>
+            <label class="grid gap-1 text-xs font-medium uppercase tracking-wide text-zinc-500">
+              Hasta
+              <input name="to" type="date" class="h-10 rounded-md border border-line bg-white px-3 text-sm font-normal normal-case text-ink outline-none focus:border-moss focus:ring-2 focus:ring-emerald-100" />
+            </label>
+          </div>
+
+          <label class="grid gap-1 text-xs font-medium uppercase tracking-wide text-zinc-500">
+            Filas
+            <input name="limit" type="number" min="10" max="100" value="40" class="h-10 rounded-md border border-line bg-white px-3 text-sm font-normal normal-case text-ink outline-none focus:border-moss focus:ring-2 focus:ring-emerald-100" />
+          </label>
+        </form>
+      </aside>
+
+      <section class="grid min-w-0 gap-4">
+        <div class="rounded-lg border border-line bg-paper p-4 shadow-soft">
+          <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <h2 data-ref="title" class="text-lg font-semibold">Datos X</h2>
+              <p data-ref="summary" class="mt-1 text-sm text-zinc-600">Cargando...</p>
+            </div>
+            <div class="flex flex-wrap gap-2 text-xs font-medium">
+              <span data-ref="latency" class="rounded-full border border-line bg-white px-3 py-1 text-zinc-600">--</span>
+              <span data-ref="contract" class="rounded-full border border-line bg-white px-3 py-1 text-zinc-600">--</span>
+            </div>
+          </div>
+          <div data-ref="warning" class="mt-3 hidden rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900"></div>
+          <div data-ref="error" class="mt-3 hidden rounded-md border border-rose-300 bg-rose-50 px-3 py-2 text-sm text-rose-900"></div>
+        </div>
+
+        <section class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" data-ref="metrics"></section>
+
+        <section class="grid gap-4 xl:grid-cols-3">
+          <div class="rounded-lg border border-line bg-paper p-4 shadow-soft">
+            <h3 data-ref="facetOneTitle" class="text-sm font-semibold text-zinc-700">Autores</h3>
+            <div data-ref="facetOne" class="mt-3 grid gap-2"></div>
+          </div>
+          <div class="rounded-lg border border-line bg-paper p-4 shadow-soft">
+            <h3 data-ref="facetTwoTitle" class="text-sm font-semibold text-zinc-700">Dominios</h3>
+            <div data-ref="facetTwo" class="mt-3 grid gap-2"></div>
+          </div>
+          <div class="rounded-lg border border-line bg-paper p-4 shadow-soft">
+            <h3 class="text-sm font-semibold text-zinc-700">Actividad</h3>
+            <div data-ref="activity" class="mt-3 flex h-36 items-end gap-1"></div>
+          </div>
+        </section>
+
+        <section class="rounded-lg border border-line bg-paper p-4 shadow-soft">
+          <div class="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <h3 class="text-sm font-semibold text-zinc-700">Resultados</h3>
+            <div class="flex items-center gap-2">
+              <button data-action="prev" class="h-9 rounded-md border border-line bg-white px-3 text-sm font-semibold hover:border-zinc-400 disabled:cursor-not-allowed disabled:opacity-40">Anterior</button>
+              <span data-ref="page" class="min-w-28 text-center text-sm text-zinc-600">--</span>
+              <button data-action="next" class="h-9 rounded-md border border-line bg-white px-3 text-sm font-semibold hover:border-zinc-400 disabled:cursor-not-allowed disabled:opacity-40">Siguiente</button>
+            </div>
+          </div>
+          <div data-ref="results" class="grid gap-3"></div>
+        </section>
+      </section>
+    </section>
+  </main>
+
+  <script>
+    const refs = Object.fromEntries(
+      [...document.querySelectorAll("[data-ref]")].map((node) => [node.dataset.ref, node])
+    );
+    const actions = Object.fromEntries(
+      [...document.querySelectorAll("[data-action]")].map((node) => [node.dataset.action, node])
+    );
+    const tabs = [...document.querySelectorAll("[data-tab]")];
+    const groups = [...document.querySelectorAll("[data-filter-group]")];
+
+    const state = {
+      active: "datos-x",
+      offsets: { "datos-x": 0, electoral: 0 },
+      aborter: null,
+      timer: null,
+      lastTotal: 0
+    };
+
+    const blockedDataKeys = new Set(["id", "user_id", "tweet_id", "video_id", "comment_id", "raw_comment_id", "processed_comment_id", "analysis_result_id"]);
+    const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" }[char]));
+    const fmt = new Intl.NumberFormat("es-CO");
+    const pct = new Intl.NumberFormat("es-CO", { maximumFractionDigits: 1 });
+
+    function stripDataIdentifiers(value) {
+      if (Array.isArray(value)) {
+        return value.map(stripDataIdentifiers);
+      }
+      if (!value || typeof value !== "object") {
+        return value;
+      }
+
+      const clean = {};
+      for (const [key, entry] of Object.entries(value)) {
+        const normalized = key.toLowerCase();
+        if (blockedDataKeys.has(normalized) || normalized.endsWith("_id")) {
+          continue;
+        }
+        clean[key] = stripDataIdentifiers(entry);
+      }
+      return clean;
+    }
+
+    function apiUrl(path, params = {}) {
+      const base = (refs.apiBase.value || "http://localhost:8787").trim().replace(/\/+$/, "");
+      const url = new URL(path, `${base}/`);
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== "" && value !== null && value !== undefined) {
+          url.searchParams.set(key, String(value));
+        }
+      });
+      return url;
+    }
+
+    function formValues() {
+      const form = new FormData(refs.filters);
+      const values = Object.fromEntries(form.entries());
+      const limit = Math.min(Math.max(Number(values.limit || 40), 10), 100);
+      return { ...values, limit };
+    }
+
+    function setHidden(node, hidden) {
+      node.classList.toggle("hidden", hidden);
+    }
+
+    function dateLabel(value) {
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return "--";
+      return date.toLocaleDateString("es-CO", { year: "numeric", month: "short", day: "2-digit" });
+    }
+
+    function domainFromUrl(value) {
+      try {
+        return new URL(value).hostname.replace(/^www\./, "");
+      } catch {
+        return "";
+      }
+    }
+
+    function metricCard(label, value, tone = "zinc") {
+      const tones = {
+        zinc: "border-zinc-200 bg-white text-ink",
+        green: "border-emerald-200 bg-emerald-50 text-emerald-950",
+        amber: "border-amber-200 bg-amber-50 text-amber-950",
+        rose: "border-rose-200 bg-rose-50 text-rose-950"
+      };
+      return `<article class="rounded-lg border ${tones[tone] || tones.zinc} p-4">
+        <span class="block text-xs font-medium uppercase tracking-wide text-zinc-500">${esc(label)}</span>
+        <strong class="mt-2 block text-2xl font-semibold tracking-normal">${esc(value)}</strong>
+      </article>`;
+    }
+
+    function renderOverview(payload) {
+      const data = payload?.datasets || {};
+      const datosX = data.datos_x || {};
+      const electoral = data.electoral_youtube || {};
+      refs.overview.innerHTML = [
+        metricCard("Datos X", fmt.format(datosX.total_bookmarks || 0), "green"),
+        metricCard("Raw comments", fmt.format(electoral.raw_comments || 0), "zinc"),
+        metricCard("Processed", fmt.format(electoral.processed_comments || 0), "zinc"),
+        metricCard("Analyzed", fmt.format(electoral.analyzed_comments || 0), "amber"),
+        metricCard("ETL runs", fmt.format(electoral.etl_runs || 0), "zinc"),
+        metricCard("ETL errors", fmt.format(electoral.etl_errors || 0), electoral.etl_errors ? "rose" : "zinc")
+      ].join("");
+    }
+
+    function renderFacet(node, rows, onPick) {
+      const total = Math.max(...(rows || []).map((row) => row.count || 0), 1);
+      node.innerHTML = "";
+      if (!rows?.length) {
+        node.innerHTML = `<p class="text-sm text-zinc-500">Sin datos</p>`;
+        return;
+      }
+      for (const row of rows) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "grid gap-1 rounded-md border border-line bg-white px-3 py-2 text-left hover:border-zinc-400";
+        button.innerHTML = `<span class="flex items-center justify-between gap-2 text-sm"><strong class="truncate font-medium">${esc(row.label)}</strong><span class="text-zinc-500">${fmt.format(row.count)}</span></span><span class="h-1.5 overflow-hidden rounded-full bg-stone-200"><span class="block h-full rounded-full bg-moss" style="width:${Math.max(6, (row.count / total) * 100)}%"></span></span>`;
+        button.addEventListener("click", () => onPick(row.label));
+        node.appendChild(button);
+      }
+    }
+
+    function renderActivity(rows = []) {
+      const total = Math.max(...rows.map((row) => row.count || 0), 1);
+      refs.activity.innerHTML = "";
+      if (!rows.length) {
+        refs.activity.innerHTML = `<p class="self-center text-sm text-zinc-500">Sin datos</p>`;
+        return;
+      }
+      for (const row of rows) {
+        const height = Math.max(8, (row.count / total) * 100);
+        const bar = document.createElement("div");
+        bar.className = "group relative flex flex-1 items-end justify-center";
+        bar.innerHTML = `<span class="w-full rounded-t-md bg-moss" style="height:${height}%"></span><span class="pointer-events-none absolute bottom-full mb-2 hidden rounded bg-ink px-2 py-1 text-xs text-white group-hover:block">${esc(row.date)}: ${fmt.format(row.count)}</span>`;
+        refs.activity.appendChild(bar);
+      }
+    }
+
+    function renderMetrics(payload) {
+      if (state.active === "datos-x") {
+        const m = payload.metrics || {};
+        refs.metrics.innerHTML = [
+          metricCard("Filtrados", fmt.format(payload.total || 0), "green"),
+          metricCard("Autores", fmt.format(m.unique_authors || 0), "zinc"),
+          metricCard("Dominios", fmt.format(m.unique_domains || 0), "zinc"),
+          metricCard("Con media", fmt.format(m.items_with_media || 0), "amber")
+        ].join("");
+        return;
+      }
+
+      const m = payload.metrics || {};
+      refs.metrics.innerHTML = [
+        metricCard("Filtrados", fmt.format(payload.total || 0), "green"),
+        metricCard("Validos", fmt.format(m.valid_for_analysis || 0), "zinc"),
+        metricCard("Movilidad avg", pct.format(m.avg_mobility || 0), "amber"),
+        metricCard("Alta movilidad", fmt.format(m.high_mobility_comments || 0), "rose")
+      ].join("");
+    }
+
+    function renderDatosXItem(item) {
+      const author = item.author?.name || item.author?.username || "Sin autor";
+      const handle = item.author?.username ? `@${item.author.username}` : "";
+      const source = item.source_domain || domainFromUrl(item.source_url) || "sin dominio";
+      const links = [...(item.links || []), ...(item.context_links || [])].slice(0, 5);
+      const media = (item.media || []).slice(0, 3);
+      return `<article class="rounded-lg border border-line bg-white p-4">
+        <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <div class="min-w-0">
+            <h4 class="truncate text-sm font-semibold">${esc(author)}</h4>
+            <p class="text-xs text-zinc-500">${esc(handle)} ${handle ? "·" : ""} ${esc(dateLabel(item.published_at))}</p>
+          </div>
+          <span class="w-fit rounded-full border border-line px-2.5 py-1 text-xs text-zinc-600">${esc(source)}</span>
+        </div>
+        <p class="mt-3 whitespace-pre-wrap text-sm leading-6 text-zinc-800">${esc(item.text || "Sin texto")}</p>
+        ${media.length ? `<div class="mt-3 grid grid-cols-3 gap-2">${media.map((url) => `<img class="aspect-video w-full rounded-md border border-line object-cover" src="${esc(url)}" loading="lazy" alt="media" />`).join("")}</div>` : ""}
+        <div class="mt-3 flex flex-wrap gap-2">
+          ${item.source_url ? `<a class="rounded-full border border-line px-2.5 py-1 text-xs font-medium text-moss hover:border-moss" href="${esc(item.source_url)}" target="_blank" rel="noreferrer">Fuente</a>` : ""}
+          ${links.map((url) => `<a class="rounded-full border border-line px-2.5 py-1 text-xs text-zinc-600 hover:border-zinc-400" href="${esc(url)}" target="_blank" rel="noreferrer">${esc(domainFromUrl(url) || "link")}</a>`).join("")}
+        </div>
+      </article>`;
+    }
+
+    function renderElectoralItem(item) {
+      const analysis = item.analysis || {};
+      const engagement = item.engagement || {};
+      return `<article class="rounded-lg border border-line bg-white p-4">
+        <div class="flex flex-col gap-2 xl:flex-row xl:items-start xl:justify-between">
+          <div class="min-w-0">
+            <h4 class="line-clamp-2 text-sm font-semibold">${esc(item.video_title || "Video sin titulo")}</h4>
+            <p class="mt-1 text-xs text-zinc-500">${esc(item.author_name || "Autor no disponible")} · ${esc(dateLabel(item.published_at))}</p>
+          </div>
+          <div class="flex flex-wrap gap-1.5">
+            <span class="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-900">${esc(analysis.political_segment || "sin segmento")}</span>
+            <span class="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-900">${esc(analysis.main_topic || "sin tema")}</span>
+            <span class="rounded-full bg-rose-50 px-2.5 py-1 text-xs font-medium text-rose-900">mov ${esc(analysis.mobility_score ?? 0)}</span>
+          </div>
+        </div>
+        <p class="mt-3 whitespace-pre-wrap text-sm leading-6 text-zinc-800">${esc(item.comment_text || "Sin comentario procesado")}</p>
+        <div class="mt-3 grid gap-2 text-xs text-zinc-600 sm:grid-cols-2 xl:grid-cols-4">
+          <span>Cluster: <strong class="font-medium text-zinc-800">${esc(item.political_cluster || "--")}</strong></span>
+          <span>Candidato: <strong class="font-medium text-zinc-800">${esc(item.candidate_reference || "--")}</strong></span>
+          <span>Sentimiento: <strong class="font-medium text-zinc-800">${esc(analysis.sentiment || "--")}</strong></span>
+          <span>Likes / replies: <strong class="font-medium text-zinc-800">${fmt.format(engagement.likes || 0)} / ${fmt.format(engagement.replies || 0)}</strong></span>
+        </div>
+        <div class="mt-3 flex flex-wrap gap-2">
+          ${item.source_url ? `<a class="rounded-full border border-line px-2.5 py-1 text-xs font-medium text-moss hover:border-moss" href="${esc(item.source_url)}" target="_blank" rel="noreferrer">Fuente</a>` : ""}
+          <span class="rounded-full border border-line px-2.5 py-1 text-xs text-zinc-600">${esc(item.collection_batch || "sin lote")}</span>
+          <span class="rounded-full border border-line px-2.5 py-1 text-xs text-zinc-600">${item.processing?.valid_for_analysis ? "valido" : "no valido"}</span>
+        </div>
+      </article>`;
+    }
+
+    function renderResults(payload) {
+      const items = payload.items || [];
+      if (!items.length) {
+        refs.results.innerHTML = `<div class="rounded-lg border border-dashed border-line bg-stone-50 p-6 text-center text-sm text-zinc-500">Sin resultados para los filtros actuales.</div>`;
+      } else {
+        refs.results.innerHTML = items.map((item) => state.active === "datos-x" ? renderDatosXItem(item) : renderElectoralItem(item)).join("");
+      }
+
+      const values = formValues();
+      const offset = state.offsets[state.active];
+      const shownTo = Math.min(offset + Number(values.limit || 40), payload.total || 0);
+      refs.page.textContent = `${fmt.format(offset + (items.length ? 1 : 0))}-${fmt.format(shownTo)} de ${fmt.format(payload.total || 0)}`;
+      actions.prev.disabled = offset <= 0;
+      actions.next.disabled = shownTo >= (payload.total || 0);
+    }
+
+    function renderDataset(payload, elapsedMs) {
+      refs.title.textContent = state.active === "datos-x" ? "Datos X" : "electoral_youtube";
+      refs.summary.textContent = `${fmt.format(payload.total || 0)} filas filtradas; mostrando ${fmt.format((payload.items || []).length)}.`;
+      refs.latency.textContent = `${Math.round(elapsedMs)} ms`;
+      refs.contract.textContent = payload.source_contract || "--";
+      refs.warning.textContent = payload.warning || "";
+      setHidden(refs.warning, !payload.warning);
+      setHidden(refs.error, true);
+
+      renderMetrics(payload);
+      if (state.active === "datos-x") {
+        refs.facetOneTitle.textContent = "Autores";
+        refs.facetTwoTitle.textContent = "Dominios";
+        renderFacet(refs.facetOne, payload.facets?.authors || [], (label) => {
+          refs.filters.elements.author.value = label.replace(/^@/, "");
+          state.offsets["datos-x"] = 0;
+          scheduleLoad();
+        });
+        renderFacet(refs.facetTwo, payload.facets?.domains || [], (label) => {
+          refs.filters.elements.domain.value = label;
+          state.offsets["datos-x"] = 0;
+          scheduleLoad();
+        });
+      } else {
+        refs.facetOneTitle.textContent = "Segmentos";
+        refs.facetTwoTitle.textContent = "Temas";
+        renderFacet(refs.facetOne, payload.facets?.segments || [], (label) => {
+          refs.filters.elements.segment.value = label;
+          state.offsets.electoral = 0;
+          scheduleLoad();
+        });
+        renderFacet(refs.facetTwo, payload.facets?.topics || [], (label) => {
+          refs.filters.elements.topic.value = label;
+          state.offsets.electoral = 0;
+          scheduleLoad();
+        });
+      }
+      renderActivity(payload.facets?.activity || []);
+      renderResults(payload);
+    }
+
+    function buildParams() {
+      const values = formValues();
+      const shared = {
+        q: values.q || "",
+        from: values.from || "",
+        to: values.to || "",
+        limit: values.limit,
+        offset: state.offsets[state.active],
+        stats_limit: 2000
+      };
+
+      if (state.active === "datos-x") {
+        return {
+          ...shared,
+          author: values.author || "",
+          domain: values.domain || ""
+        };
+      }
+
+      return {
+        ...shared,
+        cluster: values.cluster || "",
+        candidate: values.candidate || "",
+        segment: values.segment || "",
+        sentiment: values.sentiment || "",
+        topic: values.topic || "",
+        valid: values.valid || ""
+      };
+    }
+
+    async function fetchJson(path, params = {}) {
+      const response = await fetch(apiUrl(path, params), {
+        cache: "no-store",
+        signal: state.aborter?.signal,
+        headers: { Accept: "application/json" }
+      });
+      const json = stripDataIdentifiers(await response.json().catch(() => ({})));
+      if (!response.ok || !json.ok) {
+        throw new Error(json.error?.message || `Request failed (${response.status})`);
+      }
+      return json;
+    }
+
+    async function load() {
+      if (state.aborter) state.aborter.abort();
+      state.aborter = new AbortController();
+      const started = performance.now();
+      actions.refresh.disabled = true;
+
+      try {
+        const path = state.active === "datos-x" ? "/api/dashboard/datos-x" : "/api/dashboard/electoral";
+        const [overview, dataset] = await Promise.all([
+          fetchJson("/api/dashboard/overview"),
+          fetchJson(path, buildParams())
+        ]);
+        renderOverview(overview);
+        renderDataset(dataset, performance.now() - started);
+      } catch (error) {
+        if (error.name === "AbortError") return;
+        refs.error.textContent = error.message || "Error cargando datos";
+        setHidden(refs.error, false);
+      } finally {
+        actions.refresh.disabled = false;
+      }
+    }
+
+    function scheduleLoad() {
+      clearTimeout(state.timer);
+      state.timer = setTimeout(load, 220);
+    }
+
+    function setTab(tab) {
+      state.active = tab;
+      tabs.forEach((button) => {
+        const active = button.dataset.tab === tab;
+        button.className = active
+          ? "rounded-md bg-ink px-3 py-2 text-sm font-semibold text-white"
+          : "rounded-md border border-line bg-white px-3 py-2 text-sm font-semibold text-zinc-700 hover:border-zinc-400";
+      });
+      groups.forEach((group) => group.classList.toggle("hidden", group.dataset.filterGroup !== tab));
+      scheduleLoad();
+    }
+
+    refs.filters.addEventListener("input", () => {
+      state.offsets[state.active] = 0;
+      scheduleLoad();
+    });
+    refs.filters.addEventListener("change", () => {
+      state.offsets[state.active] = 0;
+      scheduleLoad();
+    });
+    refs.apiBase.addEventListener("change", () => {
+      localStorage.setItem("indexbook_dashboard_api_base", refs.apiBase.value.trim());
+      scheduleLoad();
+    });
+    actions.refresh.addEventListener("click", load);
+    actions.reset.addEventListener("click", () => {
+      refs.filters.reset();
+      refs.filters.elements.limit.value = "40";
+      state.offsets = { "datos-x": 0, electoral: 0 };
+      scheduleLoad();
+    });
+    actions.prev.addEventListener("click", () => {
+      const limit = Number(formValues().limit || 40);
+      state.offsets[state.active] = Math.max(0, state.offsets[state.active] - limit);
+      scheduleLoad();
+    });
+    actions.next.addEventListener("click", () => {
+      const limit = Number(formValues().limit || 40);
+      state.offsets[state.active] += limit;
+      scheduleLoad();
+    });
+    tabs.forEach((button) => button.addEventListener("click", () => setTab(button.dataset.tab)));
+
+    const persistedBase = localStorage.getItem("indexbook_dashboard_api_base");
+    if (persistedBase) refs.apiBase.value = persistedBase;
+    setTab("datos-x");
+  </script>
+</body>
+</html>

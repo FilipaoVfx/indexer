@@ -74,6 +74,142 @@ function extractDomainFromUrl(value) {
   }
 }
 
+const DATOS_X_DASHBOARD_SAFE_SOURCE = "bookmarks_crypto_public_feed";
+const DATOS_X_DASHBOARD_FALLBACK_SOURCE = "bookmarks_crypto";
+const DATOS_X_DASHBOARD_COLUMNS = [
+  "text_content",
+  "author_username",
+  "author_name",
+  "created_at",
+  "links",
+  "first_comment_links",
+  "media",
+  "source_url",
+  "ingested_at",
+  "updated_at",
+  "inserted_at"
+].join(",");
+
+const ELECTORAL_DASHBOARD_SAFE_SOURCE = "electoral_youtube_public_fact_comments";
+const ELECTORAL_DASHBOARD_FALLBACK_SOURCE = "electoral_youtube_fact_comments";
+const ELECTORAL_DASHBOARD_COLUMNS = [
+  "source",
+  "video_title",
+  "source_url",
+  "political_cluster",
+  "candidate_reference",
+  "collection_batch",
+  "author_display_name",
+  "published_at",
+  "like_count",
+  "reply_count",
+  "text_clean",
+  "word_count",
+  "is_valid_for_analysis",
+  "quality_reason",
+  "political_segment",
+  "sentiment",
+  "sentiment_intensity",
+  "primary_emotion",
+  "emotion_intensity",
+  "main_topic",
+  "secondary_topic",
+  "mobility_score",
+  "transfer_signal",
+  "model_name",
+  "analyzed_at"
+].join(",");
+
+function normalizeDashboardText(value, maxLength = 900) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (text.length <= maxLength) {
+    return text;
+  }
+  return `${text.slice(0, maxLength - 1).trim()}...`;
+}
+
+function normalizeDashboardArray(value, limit = 8) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((entry) => String(entry || "").trim())
+    .filter(Boolean)
+    .slice(0, limit);
+}
+
+function normalizeDashboardDate(value) {
+  const timestamp = Date.parse(value || "");
+  if (!Number.isFinite(timestamp)) {
+    return null;
+  }
+  return new Date(timestamp).toISOString();
+}
+
+function buildFacet(rows, pickValue, limit = 8) {
+  const counts = new Map();
+
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const label = String(pickValue(row) || "").trim();
+    if (!label) continue;
+    counts.set(label, (counts.get(label) || 0) + 1);
+  }
+
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, limit)
+    .map(([label, count]) => ({ label, count }));
+}
+
+function buildActivityFacet(rows, pickDate, limit = 14) {
+  const counts = new Map();
+
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const timestamp = Date.parse(pickDate(row) || "");
+    if (!Number.isFinite(timestamp)) continue;
+    const key = new Date(timestamp).toISOString().slice(0, 10);
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+
+  return [...counts.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .slice(-limit)
+    .map(([date, count]) => ({ date, count }));
+}
+
+function averageNumber(rows, pickValue) {
+  let total = 0;
+  let count = 0;
+
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const value = Number(pickValue(row));
+    if (!Number.isFinite(value)) continue;
+    total += value;
+    count += 1;
+  }
+
+  return count > 0 ? Math.round((total / count) * 100) / 100 : 0;
+}
+
+function isMissingDashboardSourceError(error, sourceName) {
+  const message = extractDbErrorMessage(error).toLowerCase();
+  const source = String(sourceName || "").toLowerCase();
+
+  return (
+    source &&
+    message.includes(source) &&
+    (
+      message.includes("schema cache") ||
+      message.includes("relation") ||
+      message.includes("table") ||
+      message.includes("view") ||
+      message.includes("does not exist") ||
+      message.includes("could not find")
+    )
+  );
+}
+
 const GITHUB_RESERVED_SEGMENTS = new Set([
   "orgs", "sponsors", "features", "settings", "notifications", "pulls",
   "issues", "topics", "collections", "marketplace", "explore", "trending",
@@ -1452,6 +1588,438 @@ export class BookmarkStore {
     return [...counts.entries()]
       .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
       .map(([user_id, count]) => ({ user_id, count }));
+  }
+
+  async selectDashboardRows({
+    safeSource,
+    fallbackSource,
+    columns,
+    count = false,
+    configure,
+    errorLabel = "Failed to load dashboard rows"
+  }) {
+    const run = async (sourceName) => {
+      const options = count ? { count: "exact" } : undefined;
+      let queryBuilder = options
+        ? this.supabase.from(sourceName).select(columns, options)
+        : this.supabase.from(sourceName).select(columns);
+
+      if (typeof configure === "function") {
+        queryBuilder = configure(queryBuilder);
+      }
+
+      const { data, count: total, error } = await queryBuilder;
+      return { data, count: total, error, sourceName };
+    };
+
+    let result = await run(safeSource);
+    if (
+      result.error &&
+      fallbackSource &&
+      isMissingDashboardSourceError(result.error, safeSource)
+    ) {
+      result = await run(fallbackSource);
+    }
+
+    if (result.error) {
+      throw new Error(`${errorLabel}: ${extractDbErrorMessage(result.error)}`);
+    }
+
+    return {
+      source: result.sourceName,
+      total: typeof result.count === "number" ? result.count : null,
+      rows: Array.isArray(result.data) ? result.data : []
+    };
+  }
+
+  applyDatosXDashboardFilters(queryBuilder, filters = {}) {
+    const searchText = escapeForOrLike(filters.q).slice(0, 160);
+    const author = escapeForOrLike(filters.author).slice(0, 120);
+    const domain = escapeForOrLike(filters.domain).slice(0, 120);
+
+    if (searchText) {
+      queryBuilder = queryBuilder.or(
+        `text_content.ilike.%${searchText}%,author_username.ilike.%${searchText}%,author_name.ilike.%${searchText}%,source_url.ilike.%${searchText}%`
+      );
+    }
+
+    if (author) {
+      queryBuilder = queryBuilder.or(
+        `author_username.ilike.%${author}%,author_name.ilike.%${author}%`
+      );
+    }
+
+    if (domain) {
+      queryBuilder = queryBuilder.ilike("source_url", `%${domain}%`);
+    }
+
+    if (filters.from) {
+      queryBuilder = queryBuilder.gte("created_at", filters.from);
+    }
+
+    if (filters.to) {
+      queryBuilder = queryBuilder.lte("created_at", filters.to);
+    }
+
+    return queryBuilder;
+  }
+
+  mapDatosXDashboardRow(row) {
+    const links = normalizeDashboardArray(row.links, 8);
+    const contextLinks = normalizeDashboardArray(row.first_comment_links, 6);
+    const media = normalizeDashboardArray(row.media, 4);
+    const sourceUrl = String(row.source_url || "").trim();
+
+    return {
+      text: normalizeDashboardText(row.text_content),
+      author: {
+        username: String(row.author_username || "").trim(),
+        name: String(row.author_name || "").trim()
+      },
+      published_at: normalizeDashboardDate(row.created_at),
+      source_url: sourceUrl,
+      source_domain: extractDomainFromUrl(sourceUrl),
+      links,
+      context_links: contextLinks,
+      media,
+      link_count: links.length + contextLinks.length,
+      media_count: media.length,
+      ingested_at: normalizeDashboardDate(row.ingested_at),
+      updated_at: normalizeDashboardDate(row.updated_at),
+      inserted_at: normalizeDashboardDate(row.inserted_at)
+    };
+  }
+
+  async getDatosXDashboard({
+    q = "",
+    author = "",
+    domain = "",
+    from = "",
+    to = "",
+    limit = 50,
+    offset = 0,
+    statsLimit = 2000
+  } = {}) {
+    await this.init();
+
+    const normalizedLimit = clampNumber(limit, 50, 1, 100);
+    const normalizedOffset = clampNumber(offset, 0, 0, 50_000);
+    const normalizedStatsLimit = clampNumber(statsLimit, 2000, 100, 5000);
+    const filters = { q, author, domain, from, to };
+
+    const page = await this.selectDashboardRows({
+      safeSource: DATOS_X_DASHBOARD_SAFE_SOURCE,
+      fallbackSource: DATOS_X_DASHBOARD_FALLBACK_SOURCE,
+      columns: DATOS_X_DASHBOARD_COLUMNS,
+      count: true,
+      configure: (queryBuilder) =>
+        this.applyDatosXDashboardFilters(queryBuilder, filters)
+          .order("created_at", { ascending: false })
+          .range(normalizedOffset, normalizedOffset + normalizedLimit - 1),
+      errorLabel: "Failed to load Datos X dashboard"
+    });
+
+    const stats = await this.selectDashboardRows({
+      safeSource: page.source,
+      fallbackSource: null,
+      columns: DATOS_X_DASHBOARD_COLUMNS,
+      count: false,
+      configure: (queryBuilder) =>
+        this.applyDatosXDashboardFilters(queryBuilder, filters)
+          .order("created_at", { ascending: false })
+          .range(0, normalizedStatsLimit - 1),
+      errorLabel: "Failed to load Datos X facets"
+    });
+
+    const items = page.rows.map((row) => this.mapDatosXDashboardRow(row));
+    const statItems = stats.rows.map((row) => this.mapDatosXDashboardRow(row));
+    const safeViewActive = page.source === DATOS_X_DASHBOARD_SAFE_SOURCE;
+    const uniqueAuthors = new Set(
+      statItems
+        .map((item) => item.author.username || item.author.name)
+        .filter(Boolean)
+    );
+    const uniqueDomains = new Set(
+      statItems.map((item) => item.source_domain).filter(Boolean)
+    );
+
+    return {
+      dataset: "datos_x",
+      source_contract: safeViewActive ? "safe_view" : "safe_table_projection",
+      total: page.total || 0,
+      limit: normalizedLimit,
+      offset: normalizedOffset,
+      items,
+      metrics: {
+        sampled_rows: statItems.length,
+        unique_authors: uniqueAuthors.size,
+        unique_domains: uniqueDomains.size,
+        items_with_media: statItems.filter((item) => item.media_count > 0).length,
+        items_with_links: statItems.filter((item) => item.link_count > 0).length
+      },
+      facets: {
+        authors: buildFacet(
+          statItems,
+          (item) => item.author.username || item.author.name
+        ),
+        domains: buildFacet(statItems, (item) => item.source_domain),
+        activity: buildActivityFacet(statItems, (item) => item.published_at)
+      },
+      warning: safeViewActive
+        ? null
+        : `Safe view ${DATOS_X_DASHBOARD_SAFE_SOURCE} is not available yet; using an explicit no-identifier column projection from Datos X.`
+    };
+  }
+
+  applyElectoralDashboardFilters(queryBuilder, filters = {}) {
+    const searchText = escapeForOrLike(filters.q).slice(0, 160);
+    const cluster = escapeForOrLike(filters.cluster).slice(0, 120);
+    const candidate = escapeForOrLike(filters.candidate).slice(0, 120);
+    const segment = escapeForOrLike(filters.segment).slice(0, 120);
+    const sentiment = escapeForOrLike(filters.sentiment).slice(0, 120);
+    const topic = escapeForOrLike(filters.topic).slice(0, 120);
+    const valid = String(filters.valid || "").trim().toLowerCase();
+
+    if (searchText) {
+      queryBuilder = queryBuilder.or(
+        `text_clean.ilike.%${searchText}%,video_title.ilike.%${searchText}%,author_display_name.ilike.%${searchText}%,political_cluster.ilike.%${searchText}%,candidate_reference.ilike.%${searchText}%`
+      );
+    }
+
+    if (cluster) {
+      queryBuilder = queryBuilder.ilike("political_cluster", `%${cluster}%`);
+    }
+
+    if (candidate) {
+      queryBuilder = queryBuilder.ilike("candidate_reference", `%${candidate}%`);
+    }
+
+    if (segment) {
+      queryBuilder = queryBuilder.eq("political_segment", segment);
+    }
+
+    if (sentiment) {
+      queryBuilder = queryBuilder.eq("sentiment", sentiment);
+    }
+
+    if (topic) {
+      queryBuilder = queryBuilder.eq("main_topic", topic);
+    }
+
+    if (valid === "true" || valid === "false") {
+      queryBuilder = queryBuilder.eq("is_valid_for_analysis", valid === "true");
+    }
+
+    if (filters.from) {
+      queryBuilder = queryBuilder.gte("published_at", filters.from);
+    }
+
+    if (filters.to) {
+      queryBuilder = queryBuilder.lte("published_at", filters.to);
+    }
+
+    return queryBuilder;
+  }
+
+  mapElectoralDashboardRow(row) {
+    return {
+      source: String(row.source || "youtube").trim(),
+      video_title: normalizeDashboardText(row.video_title, 240),
+      source_url: String(row.source_url || "").trim(),
+      political_cluster: String(row.political_cluster || "").trim(),
+      candidate_reference: String(row.candidate_reference || "").trim(),
+      collection_batch: String(row.collection_batch || "").trim(),
+      author_name: String(row.author_display_name || "").trim(),
+      published_at: normalizeDashboardDate(row.published_at),
+      engagement: {
+        likes: Number(row.like_count || 0),
+        replies: Number(row.reply_count || 0)
+      },
+      comment_text: normalizeDashboardText(row.text_clean, 900),
+      processing: {
+        word_count: Number(row.word_count || 0),
+        valid_for_analysis: row.is_valid_for_analysis === true,
+        quality_reason: String(row.quality_reason || "").trim()
+      },
+      analysis: {
+        political_segment: String(row.political_segment || "no_clasificable").trim(),
+        sentiment: String(row.sentiment || "neutral").trim(),
+        sentiment_intensity: Number(row.sentiment_intensity || 0),
+        primary_emotion: String(row.primary_emotion || "no_clasificable").trim(),
+        emotion_intensity: Number(row.emotion_intensity || 0),
+        main_topic: String(row.main_topic || "otro").trim(),
+        secondary_topic: String(row.secondary_topic || "otro").trim(),
+        mobility_score: Number(row.mobility_score || 0),
+        transfer_signal: String(row.transfer_signal || "no_aplica").trim(),
+        model_name: String(row.model_name || "").trim(),
+        analyzed_at: normalizeDashboardDate(row.analyzed_at)
+      }
+    };
+  }
+
+  async getElectoralDashboard({
+    q = "",
+    cluster = "",
+    candidate = "",
+    segment = "",
+    sentiment = "",
+    topic = "",
+    valid = "",
+    from = "",
+    to = "",
+    limit = 50,
+    offset = 0,
+    statsLimit = 2000
+  } = {}) {
+    await this.init();
+
+    const normalizedLimit = clampNumber(limit, 50, 1, 100);
+    const normalizedOffset = clampNumber(offset, 0, 0, 50_000);
+    const normalizedStatsLimit = clampNumber(statsLimit, 2000, 100, 5000);
+    const filters = {
+      q,
+      cluster,
+      candidate,
+      segment,
+      sentiment,
+      topic,
+      valid,
+      from,
+      to
+    };
+
+    const page = await this.selectDashboardRows({
+      safeSource: ELECTORAL_DASHBOARD_SAFE_SOURCE,
+      fallbackSource: ELECTORAL_DASHBOARD_FALLBACK_SOURCE,
+      columns: ELECTORAL_DASHBOARD_COLUMNS,
+      count: true,
+      configure: (queryBuilder) =>
+        this.applyElectoralDashboardFilters(queryBuilder, filters)
+          .order("published_at", { ascending: false })
+          .range(normalizedOffset, normalizedOffset + normalizedLimit - 1),
+      errorLabel: "Failed to load electoral dashboard"
+    });
+
+    const stats = await this.selectDashboardRows({
+      safeSource: page.source,
+      fallbackSource: null,
+      columns: ELECTORAL_DASHBOARD_COLUMNS,
+      count: false,
+      configure: (queryBuilder) =>
+        this.applyElectoralDashboardFilters(queryBuilder, filters)
+          .order("published_at", { ascending: false })
+          .range(0, normalizedStatsLimit - 1),
+      errorLabel: "Failed to load electoral facets"
+    });
+
+    const items = page.rows.map((row) => this.mapElectoralDashboardRow(row));
+    const statItems = stats.rows.map((row) => this.mapElectoralDashboardRow(row));
+    const safeViewActive = page.source === ELECTORAL_DASHBOARD_SAFE_SOURCE;
+    const highMobility = statItems.filter(
+      (item) => item.analysis.mobility_score >= 70
+    ).length;
+
+    return {
+      dataset: "electoral_youtube",
+      source_contract: safeViewActive ? "safe_view" : "safe_fact_projection",
+      total: page.total || 0,
+      limit: normalizedLimit,
+      offset: normalizedOffset,
+      items,
+      metrics: {
+        sampled_rows: statItems.length,
+        valid_for_analysis: statItems.filter(
+          (item) => item.processing.valid_for_analysis
+        ).length,
+        avg_mobility: averageNumber(
+          statItems,
+          (item) => item.analysis.mobility_score
+        ),
+        high_mobility_comments: highMobility,
+        avg_sentiment_intensity: averageNumber(
+          statItems,
+          (item) => item.analysis.sentiment_intensity
+        )
+      },
+      facets: {
+        segments: buildFacet(
+          statItems,
+          (item) => item.analysis.political_segment
+        ),
+        sentiment: buildFacet(statItems, (item) => item.analysis.sentiment),
+        emotions: buildFacet(statItems, (item) => item.analysis.primary_emotion),
+        topics: buildFacet(statItems, (item) => item.analysis.main_topic),
+        clusters: buildFacet(statItems, (item) => item.political_cluster),
+        candidates: buildFacet(statItems, (item) => item.candidate_reference),
+        activity: buildActivityFacet(statItems, (item) => item.published_at)
+      },
+      warning: safeViewActive
+        ? null
+        : `Safe view ${ELECTORAL_DASHBOARD_SAFE_SOURCE} is not available yet; using an explicit no-identifier column projection from the fact view.`
+    };
+  }
+
+  async countDashboardSource(sourceName) {
+    const { count, error } = await this.supabase
+      .from(sourceName)
+      .select("*", { count: "exact", head: true });
+
+    if (error) {
+      return {
+        count: 0,
+        warning: `Could not count ${sourceName}: ${extractDbErrorMessage(error)}`
+      };
+    }
+
+    return { count: count || 0, warning: null };
+  }
+
+  async getDashboardOverview() {
+    await this.init();
+
+    const [
+      datosXBookmarks,
+      electoralRaw,
+      electoralProcessed,
+      electoralAnalyzed,
+      electoralRuns,
+      electoralErrors
+    ] = await Promise.all([
+      this.countDashboardSource("bookmarks_crypto"),
+      this.countDashboardSource("electoral_youtube_raw_comments"),
+      this.countDashboardSource("electoral_youtube_processed_comments"),
+      this.countDashboardSource("electoral_youtube_analysis_results"),
+      this.countDashboardSource("electoral_youtube_etl_runs"),
+      this.countDashboardSource("electoral_youtube_etl_errors")
+    ]);
+
+    const warnings = [
+      datosXBookmarks,
+      electoralRaw,
+      electoralProcessed,
+      electoralAnalyzed,
+      electoralRuns,
+      electoralErrors
+    ]
+      .map((entry) => entry.warning)
+      .filter(Boolean);
+
+    return {
+      generated_at: new Date().toISOString(),
+      datasets: {
+        datos_x: {
+          total_bookmarks: datosXBookmarks.count
+        },
+        electoral_youtube: {
+          raw_comments: electoralRaw.count,
+          processed_comments: electoralProcessed.count,
+          analyzed_comments: electoralAnalyzed.count,
+          etl_runs: electoralRuns.count,
+          etl_errors: electoralErrors.count
+        }
+      },
+      warnings
+    };
   }
 
   mapGoalSearchRow(row) {
