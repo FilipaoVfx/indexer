@@ -225,10 +225,15 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && routePath === "/api/dashboard/electoral") {
       const result = await store.getElectoralDashboard({
         q: sanitizeDashboardFilter(requestUrl.searchParams.get("q") || ""),
+        video: sanitizeDashboardFilter(requestUrl.searchParams.get("video") || ""),
+        source: sanitizeDashboardFilter(requestUrl.searchParams.get("source") || ""),
         cluster: sanitizeDashboardFilter(requestUrl.searchParams.get("cluster") || ""),
         candidate: sanitizeDashboardFilter(requestUrl.searchParams.get("candidate") || ""),
         segment: sanitizeDashboardFilter(requestUrl.searchParams.get("segment") || ""),
         sentiment: sanitizeDashboardFilter(requestUrl.searchParams.get("sentiment") || ""),
+        primaryEmotion: sanitizeDashboardFilter(
+          requestUrl.searchParams.get("primary_emotion") || ""
+        ),
         topic: sanitizeDashboardFilter(requestUrl.searchParams.get("topic") || ""),
         valid: sanitizeDashboardFilter(requestUrl.searchParams.get("valid") || "", 12),
         from: sanitizeDashboardFilter(requestUrl.searchParams.get("from") || "", 40),

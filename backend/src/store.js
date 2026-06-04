@@ -74,6 +74,36 @@ function extractDomainFromUrl(value) {
   }
 }
 
+function extractYoutubeThumbnailUrl(value) {
+  if (typeof value !== "string" || !value.trim()) {
+    return "";
+  }
+
+  try {
+    const url = new URL(value);
+    const host = url.hostname.replace(/^www\./, "").toLowerCase();
+    let videoKey = "";
+
+    if (host === "youtu.be") {
+      videoKey = url.pathname.split("/").filter(Boolean)[0] || "";
+    } else if (host.endsWith("youtube.com")) {
+      if (url.pathname === "/watch") {
+        videoKey = url.searchParams.get("v") || "";
+      } else if (url.pathname.startsWith("/shorts/") || url.pathname.startsWith("/embed/")) {
+        videoKey = url.pathname.split("/").filter(Boolean)[1] || "";
+      }
+    }
+
+    if (!/^[A-Za-z0-9_-]{6,20}$/.test(videoKey)) {
+      return "";
+    }
+
+    return `https://i.ytimg.com/vi/${videoKey}/hqdefault.jpg`;
+  } catch (_error) {
+    return "";
+  }
+}
+
 const DATOS_X_DASHBOARD_SAFE_SOURCE = "bookmarks_crypto_public_feed";
 const DATOS_X_DASHBOARD_FALLBACK_SOURCE = "bookmarks_crypto";
 const DATOS_X_DASHBOARD_COLUMNS = [
@@ -190,6 +220,32 @@ function averageNumber(rows, pickValue) {
   }
 
   return count > 0 ? Math.round((total / count) * 100) / 100 : 0;
+}
+
+function buildVideoFacet(rows, limit = 8) {
+  const counts = new Map();
+
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const title = String(row.video_title || "").trim();
+    const sourceUrl = String(row.source_url || "").trim();
+    const source = String(row.source || "").trim();
+    const key = sourceUrl || title;
+    if (!key) continue;
+
+    const entry = counts.get(key) || {
+      label: title || sourceUrl,
+      source,
+      source_url: sourceUrl,
+      thumbnail_url: row.thumbnail_url || extractYoutubeThumbnailUrl(sourceUrl),
+      count: 0
+    };
+    entry.count += 1;
+    counts.set(key, entry);
+  }
+
+  return [...counts.values()]
+    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label))
+    .slice(0, limit);
 }
 
 function isMissingDashboardSourceError(error, sourceName) {
@@ -1773,16 +1829,31 @@ export class BookmarkStore {
 
   applyElectoralDashboardFilters(queryBuilder, filters = {}) {
     const searchText = escapeForOrLike(filters.q).slice(0, 160);
+    const video = escapeForOrLike(filters.video).slice(0, 160);
+    const source = escapeForOrLike(filters.source).slice(0, 120);
     const cluster = escapeForOrLike(filters.cluster).slice(0, 120);
     const candidate = escapeForOrLike(filters.candidate).slice(0, 120);
     const segment = escapeForOrLike(filters.segment).slice(0, 120);
     const sentiment = escapeForOrLike(filters.sentiment).slice(0, 120);
+    const primaryEmotion = escapeForOrLike(filters.primaryEmotion).slice(0, 120);
     const topic = escapeForOrLike(filters.topic).slice(0, 120);
     const valid = String(filters.valid || "").trim().toLowerCase();
 
     if (searchText) {
       queryBuilder = queryBuilder.or(
         `text_clean.ilike.%${searchText}%,video_title.ilike.%${searchText}%,author_display_name.ilike.%${searchText}%,political_cluster.ilike.%${searchText}%,candidate_reference.ilike.%${searchText}%`
+      );
+    }
+
+    if (video) {
+      queryBuilder = queryBuilder.or(
+        `video_title.ilike.%${video}%,source.ilike.%${video}%,source_url.ilike.%${video}%`
+      );
+    }
+
+    if (source) {
+      queryBuilder = queryBuilder.or(
+        `source.ilike.%${source}%,source_url.ilike.%${source}%`
       );
     }
 
@@ -1800,6 +1871,10 @@ export class BookmarkStore {
 
     if (sentiment) {
       queryBuilder = queryBuilder.eq("sentiment", sentiment);
+    }
+
+    if (primaryEmotion) {
+      queryBuilder = queryBuilder.eq("primary_emotion", primaryEmotion);
     }
 
     if (topic) {
@@ -1826,6 +1901,7 @@ export class BookmarkStore {
       source: String(row.source || "youtube").trim(),
       video_title: normalizeDashboardText(row.video_title, 240),
       source_url: String(row.source_url || "").trim(),
+      thumbnail_url: extractYoutubeThumbnailUrl(row.source_url),
       political_cluster: String(row.political_cluster || "").trim(),
       candidate_reference: String(row.candidate_reference || "").trim(),
       collection_batch: String(row.collection_batch || "").trim(),
@@ -1859,10 +1935,13 @@ export class BookmarkStore {
 
   async getElectoralDashboard({
     q = "",
+    video = "",
+    source = "",
     cluster = "",
     candidate = "",
     segment = "",
     sentiment = "",
+    primaryEmotion = "",
     topic = "",
     valid = "",
     from = "",
@@ -1878,10 +1957,13 @@ export class BookmarkStore {
     const normalizedStatsLimit = clampNumber(statsLimit, 2000, 100, 5000);
     const filters = {
       q,
+      video,
+      source,
       cluster,
       candidate,
       segment,
       sentiment,
+      primaryEmotion,
       topic,
       valid,
       from,
@@ -1951,6 +2033,7 @@ export class BookmarkStore {
         topics: buildFacet(statItems, (item) => item.analysis.main_topic),
         clusters: buildFacet(statItems, (item) => item.political_cluster),
         candidates: buildFacet(statItems, (item) => item.candidate_reference),
+        videos: buildVideoFacet(statItems),
         activity: buildActivityFacet(statItems, (item) => item.published_at)
       },
       warning: safeViewActive

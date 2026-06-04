@@ -31,7 +31,7 @@
       <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <h1 class="text-xl font-semibold tracking-normal sm:text-2xl">IndexBook Data Console</h1>
-          <p class="mt-1 text-sm text-zinc-600">Datos X + electoral_youtube</p>
+          <p class="mt-1 text-sm text-zinc-600">Datos X + Datos_youtube</p>
         </div>
         <div class="grid gap-2 sm:grid-cols-[minmax(260px,420px)_auto_auto] sm:items-center">
           <label class="grid gap-1 text-xs font-medium uppercase tracking-wide text-zinc-500">
@@ -50,7 +50,7 @@
       <aside class="rounded-lg border border-line bg-paper p-3 shadow-soft">
         <div class="grid grid-cols-2 gap-2">
           <button data-tab="datos-x" class="rounded-md bg-ink px-3 py-2 text-sm font-semibold text-white">Datos X</button>
-          <button data-tab="electoral" class="rounded-md border border-line bg-white px-3 py-2 text-sm font-semibold text-zinc-700 hover:border-zinc-400">Electoral</button>
+          <button data-tab="electoral" class="rounded-md border border-line bg-white px-3 py-2 text-sm font-semibold text-zinc-700 hover:border-zinc-400">Youtube</button>
         </div>
 
         <form data-ref="filters" class="mt-4 grid gap-3">
@@ -71,6 +71,14 @@
           </div>
 
           <div data-filter-group="electoral" class="hidden grid gap-3">
+            <label class="grid gap-1 text-xs font-medium uppercase tracking-wide text-zinc-500">
+              Video
+              <input name="video" class="h-10 rounded-md border border-line bg-white px-3 text-sm font-normal normal-case text-ink outline-none focus:border-moss focus:ring-2 focus:ring-emerald-100" placeholder="titulo, fuente o URL" />
+            </label>
+            <label class="grid gap-1 text-xs font-medium uppercase tracking-wide text-zinc-500">
+              Fuente
+              <input name="source" class="h-10 rounded-md border border-line bg-white px-3 text-sm font-normal normal-case text-ink outline-none focus:border-moss focus:ring-2 focus:ring-emerald-100" placeholder="youtube, canal o URL" />
+            </label>
             <label class="grid gap-1 text-xs font-medium uppercase tracking-wide text-zinc-500">
               Cluster
               <input name="cluster" class="h-10 rounded-md border border-line bg-white px-3 text-sm font-normal normal-case text-ink outline-none focus:border-moss focus:ring-2 focus:ring-emerald-100" placeholder="centro, derecha, izquierda" />
@@ -104,6 +112,20 @@
                 <option>negativo</option>
                 <option>neutral</option>
                 <option>mixto</option>
+              </select>
+            </label>
+            <label class="grid gap-1 text-xs font-medium uppercase tracking-wide text-zinc-500">
+              Emocion
+              <select name="primary_emotion" class="h-10 rounded-md border border-line bg-white px-3 text-sm font-normal normal-case text-ink outline-none focus:border-moss focus:ring-2 focus:ring-emerald-100">
+                <option value="">Todas</option>
+                <option>miedo</option>
+                <option>esperanza</option>
+                <option>rabia</option>
+                <option>frustracion</option>
+                <option>confianza</option>
+                <option>incertidumbre</option>
+                <option>indiferencia</option>
+                <option>no_clasificable</option>
               </select>
             </label>
             <label class="grid gap-1 text-xs font-medium uppercase tracking-wide text-zinc-500">
@@ -336,6 +358,30 @@
         bar.className = "group relative flex flex-1 items-end justify-center";
         bar.innerHTML = `<span class="w-full rounded-t-md bg-moss" style="height:${height}%"></span><span class="pointer-events-none absolute bottom-full mb-2 hidden rounded bg-ink px-2 py-1 text-xs text-white group-hover:block">${esc(row.date)}: ${fmt.format(row.count)}</span>`;
         refs.activity.appendChild(bar);
+      }
+    }
+
+    function renderVideoFacet(node, rows = [], onPick) {
+      node.innerHTML = "";
+      if (!rows.length) {
+        node.innerHTML = `<p class="text-sm text-zinc-500">Sin videos</p>`;
+        return;
+      }
+
+      for (const row of rows) {
+        const button = document.createElement("button");
+        const thumb = row.thumbnail_url || "";
+        button.type = "button";
+        button.className = "grid grid-cols-[82px_minmax(0,1fr)] gap-3 rounded-md border border-line bg-white p-2 text-left hover:border-zinc-400";
+        button.innerHTML = `<span class="block overflow-hidden rounded bg-zinc-200">
+          ${thumb ? `<img class="aspect-video h-full w-full object-cover" src="${esc(thumb)}" loading="lazy" alt="" />` : `<span class="flex aspect-video items-center justify-center text-xs text-zinc-500">Sin miniatura</span>`}
+        </span>
+        <span class="min-w-0">
+          <strong class="line-clamp-2 text-xs font-semibold leading-4 text-zinc-800">${esc(row.label || "Video sin titulo")}</strong>
+          <span class="mt-1 block text-xs text-zinc-500">${fmt.format(row.count || 0)} comentarios</span>
+        </span>`;
+        button.addEventListener("click", () => onPick(row.label || row.source_url || ""));
+        node.appendChild(button);
       }
     }
 
