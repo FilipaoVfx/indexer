@@ -1,6 +1,7 @@
 image: node:20
 
 stages:
+  - install
   - validate
   - build
   - deploy
@@ -18,22 +19,31 @@ default:
 cache:
   key:
     files:
-      - backend/package-lock.json
-      - web-astro/package-lock.json
+      - package-lock.json
   paths:
     - .npm/
   policy: pull-push
 
+install:
+  stage: install
+  script:
+    - npm ci
+  artifacts:
+    expire_in: 1 hour
+    paths:
+      - node_modules/
+      - backend/node_modules/
+      - web-astro/node_modules/
+
 validate_backend:
   stage: validate
+  needs: [install]
   script:
-    - cd backend
-    - npm ci
-    - npm run --if-present lint
-    - npm run --if-present typecheck
-    - npm run --if-present test
+    - npm run --if-present lint --workspace=x-bookmarks-backend
+    - npm run --if-present typecheck --workspace=x-bookmarks-backend
+    - npm run --if-present test --workspace=x-bookmarks-backend
     - |
-      for file in src/*.js; do
+      for file in backend/src/*.js; do
         node --check "$file"
       done
     - |
@@ -41,7 +51,7 @@ validate_backend:
       import fs from 'node:fs';
       import path from 'node:path';
 
-      const sqlDir = path.join(process.cwd(), 'sql');
+      const sqlDir = path.join(process.cwd(), 'backend', 'sql');
       const migrations = fs
         .readdirSync(sqlDir)
         .filter((file) => file.endsWith('.sql'))
@@ -67,6 +77,7 @@ validate_backend:
 
 validate_extension:
   stage: validate
+  needs: []
   script:
     - |
       for file in extension/*.js; do
@@ -118,12 +129,11 @@ validate_extension:
 
 build_web:
   stage: build
+  needs: [install]
   script:
-    - cd web-astro
-    - npm ci
-    - npm run --if-present lint
-    - npm run --if-present typecheck
-    - npm run build
+    - npm run --if-present lint --workspace=indexbook-web
+    - npm run --if-present typecheck --workspace=indexbook-web
+    - npm run build --workspace=indexbook-web
   artifacts:
     expire_in: 1 week
     paths:
@@ -131,6 +141,7 @@ build_web:
 
 package_extension:
   stage: build
+  needs: []
   image: mcr.microsoft.com/powershell:7.4-debian-12
   before_script:
     - pwsh --version
