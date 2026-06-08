@@ -1,0 +1,8 @@
+# Force LF for CI/shell files — prevents Windows CRLF from breaking GitLab CI YAML parser
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.sh   text eol=lf
+*.js   text eol=lf
+*.ts   text eol=lf
+*.mjs  text eol=lf
+*.json text eol=lf
