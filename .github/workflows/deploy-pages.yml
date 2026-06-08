@@ -32,6 +32,9 @@ jobs:
 
       - name: Build Astro
         run: npm run build
+        env:
+          PUBLIC_SITE_URL: https://filipaovfx.github.io
+          PUBLIC_BASE_PATH: /indexer
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
