@@ -3,7 +3,7 @@ import react from "@astrojs/react";
 
 export default defineConfig({
   output: "static",
-  site: "https://utp-group6573524.gitlab.io",
-  base: "/indexer",
+  site: "https://indexer-369a72.gitlab.io",
+  base: "/",
   integrations: [react()],
 });
