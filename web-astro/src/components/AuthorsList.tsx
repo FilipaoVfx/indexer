@@ -1,6 +1,6 @@
 /**
  * AuthorsList — dedicated view listing all authors across the corpus.
- * Aligns with featureGoal.md §12.1 (entity-based exploration).
+ * Aligns with docs/requirements-and-design/featureGoal.md §12.1 (entity-based exploration).
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import {

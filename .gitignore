@@ -1,6 +1,9 @@
 # Dependencies
+node_modules/
 backend/node_modules/
 web/node_modules/
+web-astro/node_modules/
+scripts/demo-video/node_modules/
 
 # Local data
 backend/data/
@@ -27,11 +30,20 @@ dist/
 *.log
 *.sqlite
 *.db
+*.pid
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Claude Code
+.claude/
 
 # Next.js build output
 web/.next/
 
 # Astro
-web-astro/node_modules/
 web-astro/dist/
 web-astro/.astro/

@@ -1,6 +1,6 @@
 /**
  * ReposList — dedicated view for every GitHub repo referenced in the corpus.
- * Aligns with featureGoal.md §7 (knowledge_assets of type=repo) and §11 (graph).
+ * Aligns with docs/requirements-and-design/featureGoal.md §7 (knowledge_assets of type=repo) and §11 (graph).
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import {

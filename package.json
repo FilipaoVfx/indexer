@@ -1,0 +1,21 @@
+{
+  "name": "x-bookmarks-indexer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Monorepo for X Bookmarks Indexer (Extension, Backend, Astro Frontend and Video Generator)",
+  "workspaces": [
+    "backend",
+    "web-astro",
+    "scripts/demo-video"
+  ],
+  "scripts": {
+    "install:all": "npm install",
+    "dev:backend": "npm run dev --workspace=x-bookmarks-backend",
+    "dev:web": "npm run dev --workspace=indexbook-web",
+    "build:web": "npm run build --workspace=indexbook-web",
+    "start:backend": "npm run start --workspace=x-bookmarks-backend",
+    "record:demo": "npm run record --workspace=indexbook-demo-video",
+    "narrate:demo": "npm run narrate --workspace=indexbook-demo-video",
+    "compose:demo": "npm run compose --workspace=indexbook-demo-video"
+  }
+}

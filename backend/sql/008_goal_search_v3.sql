@@ -22,7 +22,7 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm;
 -- 1. Step dictionary (token → pipeline step)
 -- ---------------------------------------------------------------------------
 --
--- The step generator described in goalImprove.md maps goal tokens to canonical
+-- The step generator described in docs/requirements-and-design/goalImprove.md maps goal tokens to canonical
 -- pipeline steps. We model it as a small seed table so it is hot-reloadable
 -- from SQL without redeploying code.
 --
