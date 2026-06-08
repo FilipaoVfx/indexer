@@ -3,6 +3,7 @@ image: node:20
 stages:
   - validate
   - build
+  - deploy
 
 variables:
   NPM_CONFIG_CACHE: "$CI_PROJECT_DIR/.npm"
@@ -139,3 +140,14 @@ package_extension:
     expire_in: 1 week
     paths:
       - dist/x-bookmarks-extension.zip
+
+pages:
+  stage: deploy
+  needs: [build_web]
+  script:
+    - mv web-astro/dist public
+  artifacts:
+    paths:
+      - public
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
