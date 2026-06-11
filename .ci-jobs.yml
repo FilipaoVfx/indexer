@@ -1,8 +1,9 @@
+# CD STAGE, DEPLOY APP
 image: node:20
 
 stages:
-  - install # Etapa CI
-  - validate # Etapa CI
+  - install
+  - validate
 
 install:
   stage: install

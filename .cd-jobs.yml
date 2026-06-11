@@ -1,7 +1,8 @@
+#CD STAGE, BUILDING APP
 image: node:20
 stages:
-  - build # Etapa CD
-  - deploy # Etapa CD
+  - build
+  - deploy
 
 build_web:
   stage: build
