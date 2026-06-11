@@ -25,5 +25,5 @@ stages:
 
 # Ejecución de pipelines CI/CD
 include:
-  - local: '/.gitlab-ci.yml'
-  - local: '/.gitlab-cd.yml'
+  - local: '/.ci-jobs.yml'
+  - local: '/.cd-jobs.yml'
