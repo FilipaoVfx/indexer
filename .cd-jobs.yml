@@ -1,9 +1,7 @@
-image: node:20
 stages:
-  - build # Etapa CD
+  - build
   - build_and_push_cr
-  - deploy # Etapa CD
-
+  - deploy
 
 build_web:
   stage: build
@@ -16,28 +14,27 @@ build_web:
     expire_in: 1 week
     paths:
       - web-astro/dist/
-
+# Buildear imagen Docker en Container Registry GitLab
 build_and_push_cr:
-  stage: build
+  stage: build_and_push_cr
   image: docker:24.0.7
   services:
     - docker:24.0.7-dind
   variables:
     DOCKER_HOST: tcp://docker:2375
     DOCKER_TLS_CERTDIR: ""
+  before_script: [] 
   script:
-    # Uso del Container Registry por defecto con GitLab
     - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
     - docker build -t $CI_REGISTRY_IMAGE:latest .
     - docker push $CI_REGISTRY_IMAGE:latest
-  
 
 package_extension:
   stage: build
   needs: []
   image: mcr.microsoft.com/powershell:7.4-debian-12
   before_script:
-    - pwsh --version
+    - pwsh --version 
   script:
     - pwsh -NoProfile -File scripts/package-extension.ps1 -OutputDir dist -OutputName x-bookmarks-extension.zip
   artifacts:
