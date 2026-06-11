@@ -1,4 +1,4 @@
-# CD STAGE, DEPLOY APP
+# CI STAGE - APP INTEGRATION
 image: node:20
 
 stages:
