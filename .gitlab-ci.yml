@@ -21,6 +21,7 @@ stages:
   - install # Etapa CI
   - validate # Etapa CI
   - build # Etapa CD
+  - build_and_push_cr
   - deploy # Etapa CD
 
 # Ejecución de pipelines CI/CD
