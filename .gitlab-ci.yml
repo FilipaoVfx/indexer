@@ -23,7 +23,7 @@ stages:
   - build # Etapa CD
   - build_and_push_cr
   - deploy # Etapa CD
-
+##
 # Ejecución de pipelines CI/CD
 include:
   - local: '/.ci-jobs.yml'

@@ -58,7 +58,7 @@ validate_backend:
 
 validate_extension:
   stage: validate
-  needs: []
+  needs: [] ##
   script:
     - |
       for file in extension/*.js; do
