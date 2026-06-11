@@ -1,29 +1,5 @@
 image: node:20
 
-stages:
-  - install
-  - validate
-  - build
-  - deploy
-
-variables:
-  NPM_CONFIG_CACHE: "$CI_PROJECT_DIR/.npm"
-  NPM_CONFIG_PREFER_OFFLINE: "true"
-
-default:
-  interruptible: true
-  before_script:
-    - node --version
-    - npm --version
-
-cache:
-  key:
-    files:
-      - package-lock.json
-  paths:
-    - .npm/
-  policy: pull-push
-
 install:
   stage: install
   script:
@@ -126,39 +102,3 @@ validate_extension:
         }
       }
       NODE
-
-build_web:
-  stage: build
-  needs: [install]
-  script:
-    - npm run --if-present lint --workspace=indexbook-web
-    - npm run --if-present typecheck --workspace=indexbook-web
-    - npm run build --workspace=indexbook-web
-  artifacts:
-    expire_in: 1 week
-    paths:
-      - web-astro/dist/
-
-package_extension:
-  stage: build
-  needs: []
-  image: mcr.microsoft.com/powershell:7.4-debian-12
-  before_script:
-    - pwsh --version
-  script:
-    - pwsh -NoProfile -File scripts/package-extension.ps1 -OutputDir dist -OutputName x-bookmarks-extension.zip
-  artifacts:
-    expire_in: 1 week
-    paths:
-      - dist/x-bookmarks-extension.zip
-
-pages:
-  stage: deploy
-  needs: [build_web]
-  script:
-    - mv web-astro/dist public
-  artifacts:
-    paths:
-      - public
-  rules:
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
