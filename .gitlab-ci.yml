@@ -1,5 +1,9 @@
 image: node:20
 
+stages:
+  - install # Etapa CI
+  - validate # Etapa CI
+
 install:
   stage: install
   script:
