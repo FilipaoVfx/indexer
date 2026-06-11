@@ -1,4 +1,4 @@
-# CI STAGE - APP INTEGRATION
+# CI STAGE - APP INTEGRATION.
 image: node:20
 
 stages:

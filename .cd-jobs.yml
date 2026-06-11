@@ -1,4 +1,4 @@
-# CD STAGE -  DEPLOY APP
+# CD STAGE -  DEPLOY APP.
 image: node:20
 stages:
   - build # Etapa CD
