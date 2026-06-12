@@ -107,3 +107,67 @@ validate_extension:
         }
       }
       NODE
+
+# --- Analisis estatico: elige UNA de las dos variantes segun donde corra SonarQube ---
+#
+# Variante A (self-hosted / SonarQube en tu servidor o Docker accesible en red).
+# Define en GitLab (Settings > CI/CD > Variables, protegidas/enmascaradas):
+#   - SONAR_HOST_URL : URL del servidor (ej. https://sonar.midominio.com)
+#   - SONAR_TOKEN    : token de analisis generado en SonarQube
+# Se omite si SONAR_HOST_URL no esta definido.
+sonarqube-check:
+  stage: validate
+  needs: []
+  image:
+    name: sonarsource/sonar-scanner-cli:latest
+    entrypoint: [""]
+  variables:
+    SONAR_USER_HOME: "${CI_PROJECT_DIR}/.sonar" # ubicacion del cache del scanner
+    GIT_DEPTH: "0" # historico completo: necesario para deteccion de codigo nuevo
+  cache:
+    key: "${CI_JOB_NAME}"
+    paths:
+      - .sonar/cache
+  before_script: [] # la imagen del scanner no trae node/npm
+  script:
+    - sonar-scanner
+  allow_failure: true
+  rules:
+    - if: '$SONAR_HOST_URL == null || $SONAR_HOST_URL == ""'
+      when: never
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+
+# Variante B (SonarCloud, https://sonarcloud.io).
+# Define en GitLab (Settings > CI/CD > Variables, protegidas/enmascaradas):
+#   - SONAR_ORGANIZATION : clave de tu organizacion en SonarCloud
+#   - SONAR_TOKEN        : token generado en SonarCloud (My Account > Security)
+#   - SONAR_PROJECT_KEY  : (opcional) clave que SonarCloud asigna al proyecto,
+#                          normalmente "<org>_<repo>". Por defecto usa la del
+#                          sonar-project.properties.
+# Se omite si SONAR_ORGANIZATION no esta definido.
+sonarcloud-check:
+  stage: validate
+  needs: []
+  image:
+    name: sonarsource/sonar-scanner-cli:latest
+    entrypoint: [""]
+  variables:
+    SONAR_USER_HOME: "${CI_PROJECT_DIR}/.sonar"
+    GIT_DEPTH: "0"
+  cache:
+    key: "${CI_JOB_NAME}"
+    paths:
+      - .sonar/cache
+  before_script: []
+  script:
+    - sonar-scanner
+        -Dsonar.host.url=https://sonarcloud.io
+        -Dsonar.organization="$SONAR_ORGANIZATION"
+        -Dsonar.projectKey="${SONAR_PROJECT_KEY:-x-bookmarks-indexer}"
+  allow_failure: true
+  rules:
+    - if: '$SONAR_ORGANIZATION == null || $SONAR_ORGANIZATION == ""'
+      when: never
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'

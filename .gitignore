@@ -41,6 +41,9 @@ Thumbs.db
 # Claude Code
 .claude/
 
+# SonarQube scanner work dir
+.scannerwork/
+
 # Next.js build output
 web/.next/
 

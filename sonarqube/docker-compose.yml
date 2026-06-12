@@ -1,0 +1,77 @@
+# SonarQube Community + PostgreSQL para analizar el monorepo x-bookmarks-indexer.
+#
+# Uso rapido:
+#   1) Levantar el servidor:   docker compose up -d sonarqube
+#   2) Abrir http://localhost:9000  (admin / admin, te pide cambiar la clave)
+#   3) Crear un token en: My Account > Security > Generate Token
+#   4) Analizar:  $env:SONAR_TOKEN="<token>"; docker compose --profile scan run --rm scanner
+#
+# El servicio "scanner" monta la raiz del repo (..) y lee ../sonar-project.properties
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: sonarqube-db
+    environment:
+      POSTGRES_USER: sonar
+      POSTGRES_PASSWORD: sonar
+      POSTGRES_DB: sonar
+    volumes:
+      - postgresql_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sonar"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - sonarnet
+    restart: unless-stopped
+
+  sonarqube:
+    image: sonarqube:lts-community
+    container_name: sonarqube
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      SONAR_JDBC_URL: jdbc:postgresql://db:5432/sonar
+      SONAR_JDBC_USERNAME: sonar
+      SONAR_JDBC_PASSWORD: sonar
+    ports:
+      - "9000:9000"
+    volumes:
+      - sonarqube_data:/opt/sonarqube/data
+      - sonarqube_extensions:/opt/sonarqube/extensions
+      - sonarqube_logs:/opt/sonarqube/logs
+    networks:
+      - sonarnet
+    # Elasticsearch (embebido) necesita estos limites
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    restart: unless-stopped
+
+  # Scanner bajo profile "scan": no arranca con `up`, solo bajo demanda.
+  scanner:
+    image: sonarsource/sonar-scanner-cli
+    profiles: ["scan"]
+    depends_on:
+      - sonarqube
+    environment:
+      SONAR_HOST_URL: "http://sonarqube:9000"
+      SONAR_TOKEN: "${SONAR_TOKEN}"
+    volumes:
+      - ../:/usr/src
+    networks:
+      - sonarnet
+
+volumes:
+  sonarqube_data:
+  sonarqube_extensions:
+  sonarqube_logs:
+  postgresql_data:
+
+networks:
+  sonarnet:
+    name: sonarnet
