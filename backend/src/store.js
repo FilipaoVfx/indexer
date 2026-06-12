@@ -17,6 +17,7 @@ import {
   mapRepoClassificationRow,
   REPO_CLASSIFIER_VERSION
 } from "./repo-classifier.js";
+import { mapReadmeStatusToRepo } from "./github-repos-metadata.js";
 
 function clampNumber(value, fallback, minimum, maximum) {
   const parsed = Number(value);
@@ -230,6 +231,20 @@ function isMissingGithubReadmesFeatureError(error) {
   );
 }
 
+function isMissingGithubRepositoriesFeatureError(error) {
+  const message = extractDbErrorMessage(error).toLowerCase();
+  return (
+    message.includes("github_repositories") &&
+    (
+      message.includes("schema cache") ||
+      message.includes("relation") ||
+      message.includes("table") ||
+      message.includes("does not exist") ||
+      message.includes("could not find")
+    )
+  );
+}
+
 function isMissingRepoClassifierFeatureError(error) {
   const message = extractDbErrorMessage(error).toLowerCase();
   return (
@@ -377,9 +392,11 @@ export class BookmarkStore {
       bookmarkContextLinks: true,
       goalRefreshRpc: true,
       githubReadmes: true,
+      githubRepositories: true,
       repoClassifier: true
     };
     this.repoClassifierWarning = null;
+    this.githubRepositoriesWarning = null;
   }
 
   async init() {
@@ -648,6 +665,18 @@ export class BookmarkStore {
     return warning;
   }
 
+  missingGithubRepositoriesWarning(error) {
+    this.capabilities.githubRepositories = false;
+    const warning =
+      "Skipping GitHub repository metadata cache because the Supabase schema is not available. " +
+      "Apply backend/sql/014_github_repositories.sql to enable the metadata-first index.";
+    this.githubRepositoriesWarning = warning;
+    console.warn("[store]", warning, {
+      details: extractDbErrorMessage(error)
+    });
+    return warning;
+  }
+
   missingRepoClassifierWarning(error) {
     this.capabilities.repoClassifier = false;
     const warning =
@@ -686,6 +715,206 @@ export class BookmarkStore {
     }
 
     return null;
+  }
+
+  // Capa 1: siembra/actualiza filas livianas en github_repositories sin llamar
+  // a GitHub. Solo escribe identidad (slug/owner/repo/url); stars/topics/priority
+  // se enriquecen aparte (backfill). El upsert no incluye esas columnas, así que
+  // nunca pisa la metadata enriquecida ni el readme_status de filas existentes.
+  async ensureRepositoryRows(repoSlugs, { receivedAt } = {}) {
+    if (!this.capabilities.githubRepositories) {
+      return this.githubRepositoriesWarning;
+    }
+
+    const now = receivedAt || new Date().toISOString();
+    const rows = [...new Set(repoSlugs)]
+      .map((repoSlug) => splitGithubRepoSlug(repoSlug))
+      .filter(Boolean)
+      .map((repo) => ({
+        repo_slug: repo.repo_slug,
+        owner: repo.owner,
+        repo: repo.repo,
+        url: repo.repo_url,
+        updated_at: now
+      }));
+
+    if (rows.length === 0) {
+      return null;
+    }
+
+    const { error } = await this.supabase
+      .from("github_repositories")
+      .upsert(rows, { onConflict: "repo_slug" });
+
+    if (error) {
+      if (isMissingGithubRepositoriesFeatureError(error)) {
+        return this.missingGithubRepositoriesWarning(error);
+      }
+      throw new Error(`Failed to ensure GitHub repository rows: ${extractDbErrorMessage(error)}`);
+    }
+
+    return null;
+  }
+
+  // Usado por el backfill: escribe la fila completa con metadata + priority.
+  async upsertRepositoryMetadata(rows) {
+    if (!this.capabilities.githubRepositories) {
+      return { upserted: 0, warning: this.githubRepositoriesWarning };
+    }
+
+    const payload = (Array.isArray(rows) ? rows : []).filter((row) => row?.repo_slug);
+    if (payload.length === 0) {
+      return { upserted: 0, warning: null };
+    }
+
+    const { error } = await this.supabase
+      .from("github_repositories")
+      .upsert(payload, { onConflict: "repo_slug" });
+
+    if (error) {
+      if (isMissingGithubRepositoriesFeatureError(error)) {
+        return { upserted: 0, warning: this.missingGithubRepositoriesWarning(error) };
+      }
+      throw new Error(`Failed to upsert GitHub repository metadata: ${extractDbErrorMessage(error)}`);
+    }
+
+    return { upserted: payload.length, warning: null };
+  }
+
+  // Lista la metadata liviana ordenada por prioridad (lo más valioso primero).
+  async listRepositories({ limit = 50, offset = 0, source = "" } = {}) {
+    await this.init();
+    if (!this.capabilities.githubRepositories) {
+      return { total: 0, items: [], warning: this.githubRepositoriesWarning };
+    }
+
+    const normalizedLimit = clampNumber(limit, 50, 1, 100);
+    const normalizedOffset = clampNumber(offset, 0, 0, 10_000);
+
+    let queryBuilder = this.supabase
+      .from("github_repositories")
+      .select(
+        "repo_slug,owner,repo,url,description,language,topics,stars,forks,pushed_at,source,priority,readme_status,metadata_fetched_at,updated_at",
+        { count: "exact" }
+      )
+      .order("priority", { ascending: false })
+      .order("stars", { ascending: false })
+      .range(normalizedOffset, normalizedOffset + normalizedLimit - 1);
+
+    if (source) {
+      queryBuilder = queryBuilder.eq("source", source);
+    }
+
+    const { data, error, count } = await queryBuilder;
+    if (error) {
+      if (isMissingGithubRepositoriesFeatureError(error)) {
+        return { total: 0, items: [], warning: this.missingGithubRepositoriesWarning(error) };
+      }
+      throw new Error(`Failed to list GitHub repositories: ${extractDbErrorMessage(error)}`);
+    }
+
+    return { total: count || 0, items: data || [], warning: null };
+  }
+
+  // Lazy fetch en tiempo de lectura: cuando alguien ve los README, descarga los
+  // que siguen 'pending'/'error' (acotado por githubReadmeMaxPerBatch). Reemplaza
+  // el fetch eager que antes corría en la ingesta. Tolera fallos sin romper la
+  // lectura. Si se pasa repoSlug, solo refresca ese repo.
+  async refreshPendingReadmes({ userId = null, repoSlug = "" } = {}) {
+    if (!this.capabilities.githubReadmes) {
+      return { fetched: 0, warning: null };
+    }
+
+    try {
+      let candidateSlugs = [];
+
+      if (repoSlug) {
+        const normalized = splitGithubRepoSlug(repoSlug)?.repo_slug;
+        candidateSlugs = normalized ? [normalized] : [];
+      } else {
+        const cap = Math.max(1, Number(this.config.githubReadmeMaxPerBatch) || 8);
+        const { data, error } = await this.supabase
+          .from("github_repo_readmes")
+          .select("repo_slug,status")
+          .in("status", ["pending", "error"])
+          .order("last_requested_at", { ascending: false })
+          .limit(cap * 4);
+
+        if (error) {
+          if (isMissingGithubReadmesFeatureError(error)) {
+            return { fetched: 0, warning: this.missingGithubReadmesWarning(error) };
+          }
+          throw error;
+        }
+
+        let pendingSlugs = (data || []).map((row) => row.repo_slug);
+
+        if (userId && pendingSlugs.length > 0) {
+          const { data: scoped, error: scopedError } = await this.supabase
+            .from("bookmark_github_repos")
+            .select("repo_slug")
+            .eq("user_id", userId)
+            .in("repo_slug", pendingSlugs);
+          if (!scopedError) {
+            const allowed = new Set((scoped || []).map((row) => row.repo_slug));
+            pendingSlugs = pendingSlugs.filter((slug) => allowed.has(slug));
+          }
+        }
+
+        candidateSlugs = pendingSlugs;
+      }
+
+      if (candidateSlugs.length === 0) {
+        return { fetched: 0, warning: null };
+      }
+
+      // fetchGithubReadmesForSlugs filtra por TTL y limita a maxPerBatch.
+      const result = await this.fetchGithubReadmesForSlugs(candidateSlugs);
+      await this.syncRepositoryReadmeStatus(candidateSlugs);
+      return { fetched: result.fetched, warning: result.warning };
+    } catch (error) {
+      const warning = `Lazy README refresh failed: ${extractDbErrorMessage(error)}`;
+      console.warn("[store]", warning);
+      return { fetched: 0, warning };
+    }
+  }
+
+  // Propaga github_repo_readmes.status → github_repositories.readme_status para
+  // los slugs dados, manteniendo el índice liviano consistente tras un fetch.
+  async syncRepositoryReadmeStatus(repoSlugs) {
+    if (!this.capabilities.githubRepositories) return;
+    const slugs = [...new Set(repoSlugs)].filter(Boolean);
+    if (slugs.length === 0) return;
+
+    const { data, error } = await this.supabase
+      .from("github_repo_readmes")
+      .select("repo_slug,status")
+      .in("repo_slug", slugs);
+    if (error) {
+      if (isMissingGithubReadmesFeatureError(error)) return;
+      throw new Error(`Failed to read README status for sync: ${extractDbErrorMessage(error)}`);
+    }
+
+    // Agrupa por estado destino para hacer un UPDATE por grupo (máx 4) en vez
+    // de uno por repo.
+    const slugsByStatus = new Map();
+    for (const row of data || []) {
+      const readmeStatus = mapReadmeStatusToRepo(row.status);
+      if (!slugsByStatus.has(readmeStatus)) slugsByStatus.set(readmeStatus, []);
+      slugsByStatus.get(readmeStatus).push(row.repo_slug);
+    }
+
+    const now = new Date().toISOString();
+    for (const [readmeStatus, statusSlugs] of slugsByStatus) {
+      const { error: updateError } = await this.supabase
+        .from("github_repositories")
+        .update({ readme_status: readmeStatus, updated_at: now })
+        .in("repo_slug", statusSlugs);
+      if (updateError && isMissingGithubRepositoriesFeatureError(updateError)) {
+        this.missingGithubRepositoriesWarning(updateError);
+        return;
+      }
+    }
   }
 
   async syncBookmarkGithubRepos({ bookmarks, receivedAt }) {
@@ -1036,8 +1265,21 @@ export class BookmarkStore {
         return { fetched: 0, skipped: 0, warnings };
       }
 
+      // Capa 1: deja una fila liviana de metadata por repo (enriquecida luego
+      // por el backfill). No llama a GitHub.
+      const repoWarning = await this.ensureRepositoryRows(syncResult.repoSlugs, { receivedAt });
+      if (repoWarning) warnings.push(repoWarning);
+
+      // Lazy por defecto: la ingesta solo marca 'pending'. El README se descarga
+      // cuando el repo es relevante (al verlo) o vía backfill. Para restaurar el
+      // fetch en el request path: GITHUB_README_EAGER_FETCH=true.
+      if (!this.config.githubReadmeEagerFetch) {
+        return { fetched: 0, skipped: syncResult.repoSlugs.length, warnings };
+      }
+
       const fetchResult = await this.fetchGithubReadmesForSlugs(syncResult.repoSlugs);
       if (fetchResult.warning) warnings.push(fetchResult.warning);
+      await this.syncRepositoryReadmeStatus(syncResult.repoSlugs);
 
       return {
         fetched: fetchResult.fetched,

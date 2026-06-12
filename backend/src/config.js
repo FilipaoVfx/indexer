@@ -24,12 +24,22 @@ function parseNumber(value, fallback) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function parseBool(value, fallback) {
+  if (value === undefined || value === null || String(value).trim() === "") {
+    return fallback;
+  }
+  return ["1", "true", "yes", "on"].includes(String(value).trim().toLowerCase());
+}
+
 export const config = {
   port: parseNumber(process.env.PORT, 8787),
   maxBatchSize: parseNumber(process.env.MAX_BATCH_SIZE, 50),
   githubReadmeMaxChars: parseNumber(process.env.GITHUB_README_MAX_CHARS, 300000),
   githubReadmeMaxPerBatch: parseNumber(process.env.GITHUB_README_MAX_PER_BATCH, 8),
   githubReadmeTtlHours: parseNumber(process.env.GITHUB_README_TTL_HOURS, 168),
+  // Lazy por defecto: la ingesta marca repos como 'pending' y el README se
+  // descarga al verlo o vía backfill. true restaura el fetch en el request path.
+  githubReadmeEagerFetch: parseBool(process.env.GITHUB_README_EAGER_FETCH, false),
   githubToken: process.env.GITHUB_TOKEN || process.env.GH_TOKEN || "",
   dataFile:
     process.env.DATA_FILE ||

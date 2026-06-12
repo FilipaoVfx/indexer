@@ -197,6 +197,9 @@ const server = http.createServer(async (req, res) => {
       const includeContent =
         requestUrl.searchParams.get("include_content") !== "false";
 
+      // Lazy fetch: descarga al verlos los README que sigan pendientes.
+      await store.refreshPendingReadmes({ userId: userId || null, repoSlug: repo });
+
       const result = await store.listGithubReadmes({
         userId: userId || null,
         q: query,
@@ -216,9 +219,14 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && /^\/api\/github-readmes\/[^/]+\/[^/]+$/.test(routePath)) {
       const [, , , owner, repo] = routePath.split("/");
       const userId = sanitizeUserId(requestUrl.searchParams.get("user_id") || "");
+      const repoSlug = `${decodePathParam(owner)}/${decodePathParam(repo)}`;
+
+      // Lazy fetch: "ver repo" es señal de relevancia → descarga su README.
+      await store.refreshPendingReadmes({ userId: userId || null, repoSlug });
+
       const result = await store.listGithubReadmes({
         userId: userId || null,
-        repoSlug: `${decodePathParam(owner)}/${decodePathParam(repo)}`,
+        repoSlug,
         limit: 1,
         offset: 0,
         includeContent: true
@@ -232,6 +240,20 @@ const server = http.createServer(async (req, res) => {
         ok: true,
         item: result.items[0],
         warning: result.warning
+      });
+      return;
+    }
+
+    if (req.method === "GET" && routePath === "/api/github/repositories") {
+      const limit = clampNumber(requestUrl.searchParams.get("limit"), 50, 1, 100);
+      const offset = clampNumber(requestUrl.searchParams.get("offset"), 0, 0, 10_000);
+      const source = requestUrl.searchParams.get("source") || "";
+
+      const result = await store.listRepositories({ limit, offset, source });
+
+      sendJson(res, 200, {
+        ok: true,
+        ...result
       });
       return;
     }

@@ -9,6 +9,7 @@
     "migrate:data": "node src/migrate.js",
     "readmes:github": "node src/fetch-github-readmes.js",
     "readmes:backfill": "node src/backfill-github-readmes.js",
+    "repos:backfill": "node src/backfill-github-repositories.js",
     "classify:repos": "node src/classify-repo-readmes.js"
   },
   "dependencies": {
