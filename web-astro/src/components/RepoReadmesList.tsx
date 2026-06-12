@@ -84,10 +84,10 @@ function ClassifierTagGroup({
 
   return (
     <div>
-      <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.22em] text-on-surface-variant">
+      <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.22em] text-on-surface-variant">
         {label}
       </p>
-      <div className="flex flex-wrap gap-1.5">
+      <div className="flex flex-wrap gap-1">
         {items.map((value) => (
           <span
             key={`${label}-${value}`}
@@ -104,9 +104,22 @@ function ClassifierTagGroup({
 function ClassificationSummary({ classification }: { classification?: RepoClassification | null }) {
   if (!classification) return null;
 
+  const detailGroups = [
+    classification.secondary_categories,
+    classification.capabilities,
+    classification.integration_types,
+    classification.input_types,
+    classification.output_types,
+    classification.tech_stack,
+    classification.deployment_modes,
+    classification.constraints,
+    classification.target_domains,
+  ];
+  const hasDetail = detailGroups.some((group) => (group || []).filter(Boolean).length > 0);
+
   return (
-    <section className="space-y-4 border-b-2 border-outline-variant bg-surface-container-low p-5">
-      <div className="flex flex-wrap items-center gap-2">
+    <details className="group border-b-2 border-outline-variant bg-surface-container-low">
+      <summary className="flex cursor-pointer list-none flex-wrap items-center gap-2 p-4 [&::-webkit-details-marker]:hidden">
         {classification.primary_category && (
           <span className="border-2 border-primary bg-primary/10 px-2 py-1 text-[11px] font-bold uppercase tracking-[0.18em] text-primary">
             {formatClassifierLabel(classification.primary_category)}
@@ -127,53 +140,50 @@ function ClassificationSummary({ classification }: { classification?: RepoClassi
             confianza {(classification.confidence * 100).toFixed(0)}%
           </span>
         )}
-      </div>
+        {hasDetail && (
+          <span className="ml-auto inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-secondary">
+            <span className="material-symbols-outlined text-base transition-transform group-open:rotate-180">
+              expand_more
+            </span>
+            detalles
+          </span>
+        )}
+      </summary>
 
-      <ClassifierTagGroup
-        label="Categorias secundarias"
-        values={classification.secondary_categories}
-        tone="secondary"
-      />
-      <ClassifierTagGroup
-        label="Capacidades"
-        values={classification.capabilities}
-      />
-      <ClassifierTagGroup
-        label="Interfaces"
-        values={classification.integration_types}
-        tone="secondary"
-      />
-      <ClassifierTagGroup
-        label="Entradas"
-        values={classification.input_types}
-        tone="neutral"
-      />
-      <ClassifierTagGroup
-        label="Salidas"
-        values={classification.output_types}
-        tone="neutral"
-      />
-      <ClassifierTagGroup
-        label="Stack"
-        values={classification.tech_stack}
-        tone="secondary"
-      />
-      <ClassifierTagGroup
-        label="Despliegue"
-        values={classification.deployment_modes}
-        tone="neutral"
-      />
-      <ClassifierTagGroup
-        label="Restricciones"
-        values={classification.constraints}
-        tone="neutral"
-      />
-      <ClassifierTagGroup
-        label="Dominio"
-        values={classification.target_domains}
-        tone="secondary"
-      />
-    </section>
+      {hasDetail && (
+        <div className="grid gap-x-6 gap-y-3 px-4 pb-4 sm:grid-cols-2">
+          <ClassifierTagGroup
+            label="Categorias secundarias"
+            values={classification.secondary_categories}
+            tone="secondary"
+          />
+          <ClassifierTagGroup label="Capacidades" values={classification.capabilities} />
+          <ClassifierTagGroup
+            label="Interfaces"
+            values={classification.integration_types}
+            tone="secondary"
+          />
+          <ClassifierTagGroup label="Entradas" values={classification.input_types} tone="neutral" />
+          <ClassifierTagGroup label="Salidas" values={classification.output_types} tone="neutral" />
+          <ClassifierTagGroup label="Stack" values={classification.tech_stack} tone="secondary" />
+          <ClassifierTagGroup
+            label="Despliegue"
+            values={classification.deployment_modes}
+            tone="neutral"
+          />
+          <ClassifierTagGroup
+            label="Restricciones"
+            values={classification.constraints}
+            tone="neutral"
+          />
+          <ClassifierTagGroup
+            label="Dominio"
+            values={classification.target_domains}
+            tone="secondary"
+          />
+        </div>
+      )}
+    </details>
   );
 }
 
@@ -202,17 +212,23 @@ export default function RepoReadmesList() {
     };
   }, []);
 
+  // Keep the URL in sync with the full view (including the selected repo)
+  // without refetching — selection is a client-side concern.
+  useEffect(() => {
+    writeState(view);
+  }, [view]);
+
+  // The repo list only depends on the user/text filters. The selected repo is
+  // resolved client-side so picking one never collapses or refetches the list.
   useEffect(() => {
     let mounted = true;
     setLoading(true);
     setError(null);
     setWarning(null);
-    writeState(view);
 
     fetchGithubReadmes({
       user_id: view.user || undefined,
       q: view.q || undefined,
-      repo: view.repo || undefined,
       include_content: true,
       limit: 100,
     })
@@ -236,7 +252,7 @@ export default function RepoReadmesList() {
     return () => {
       mounted = false;
     };
-  }, [view]);
+  }, [view.user, view.q]);
 
   const selected = useMemo(() => {
     if (view.repo) {
@@ -251,6 +267,26 @@ export default function RepoReadmesList() {
       ...patch,
     }));
   }
+
+  // On narrow screens the list and the reader swap (master-detail) instead of
+  // stacking, so jump to the top when entering/leaving the reader.
+  function scrollToTopOnMobile() {
+    if (typeof window !== "undefined" && window.innerWidth < 1024) {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  }
+
+  function selectRepo(slug: string) {
+    updateView({ repo: slug });
+    scrollToTopOnMobile();
+  }
+
+  function clearRepo() {
+    updateView({ repo: "" });
+    scrollToTopOnMobile();
+  }
+
+  const hasSelection = Boolean(view.repo);
 
   return (
     <section className="px-4 md:px-8 py-10 pb-24 md:pb-10">
@@ -310,8 +346,12 @@ export default function RepoReadmesList() {
           {loading && <p>Cargando cache...</p>}
         </div>
 
-        <div className="grid gap-4 lg:grid-cols-[360px_minmax(0,1fr)]">
-          <aside className="space-y-3 lg:max-h-[calc(100vh-220px)] lg:overflow-y-auto pr-1">
+        <div className="grid gap-4 lg:grid-cols-[340px_minmax(0,1fr)]">
+          <aside
+            className={`space-y-2 lg:max-h-[calc(100vh-220px)] lg:overflow-y-auto pr-1 ${
+              hasSelection ? "hidden lg:block" : "block"
+            }`}
+          >
             {!loading && items.length === 0 && (
               <div className="border-2 border-outline-variant bg-surface-container-low p-5 text-sm text-on-surface-variant">
                 Todavia no hay README cacheados. Se crean cuando entra un bookmark con repo GitHub.
@@ -323,8 +363,8 @@ export default function RepoReadmesList() {
                 <button
                   key={item.repo_slug}
                   type="button"
-                  onClick={() => updateView({ repo: item.repo_slug })}
-                  className={`block w-full border-2 p-4 text-left transition-colors ${
+                  onClick={() => selectRepo(item.repo_slug)}
+                  className={`block w-full border-2 p-3 text-left transition-colors ${
                     active
                       ? "border-primary bg-primary text-on-primary"
                       : "border-outline-variant bg-surface-container-low hover:border-secondary"
@@ -332,27 +372,42 @@ export default function RepoReadmesList() {
                 >
                   <span className="block truncate text-sm font-bold">{item.repo_slug}</span>
                   <span
-                    className={`mt-2 inline-block text-[10px] font-bold uppercase tracking-wider ${
-                      active ? "text-on-primary" : "text-secondary"
+                    className={`mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] ${
+                      active ? "text-on-primary/90" : "text-on-surface-variant"
                     }`}
                   >
-                    {statusLabel(item)}
-                  </span>
-                  {item.classification?.primary_category && (
-                    <span className="mt-2 block text-[11px] opacity-85">
-                      {formatClassifierLabel(item.classification.primary_category)}
+                    <span
+                      className={`font-bold uppercase tracking-wider ${
+                        active ? "text-on-primary" : "text-secondary"
+                      }`}
+                    >
+                      {statusLabel(item)}
                     </span>
-                  )}
-                  <span className="mt-2 block text-xs opacity-80">
-                    {item.bookmark_count || 0} bookmark(s)
-                    {item.fetched_at ? ` | ${formatDate(item.fetched_at)}` : ""}
+                    {item.classification?.primary_category && (
+                      <>
+                        <span className="opacity-50">·</span>
+                        <span>{formatClassifierLabel(item.classification.primary_category)}</span>
+                      </>
+                    )}
+                    <span className="opacity-50">·</span>
+                    <span>{item.bookmark_count || 0} bm</span>
+                    {item.fetched_at && (
+                      <>
+                        <span className="opacity-50">·</span>
+                        <span>{formatDate(item.fetched_at)}</span>
+                      </>
+                    )}
                   </span>
                 </button>
               );
             })}
           </aside>
 
-          <main className="min-w-0 border-2 border-primary bg-surface-container-lowest">
+          <main
+            className={`min-w-0 border-2 border-primary bg-surface-container-lowest ${
+              hasSelection ? "block" : "hidden lg:block"
+            }`}
+          >
             {!selected ? (
               <div className="p-8 text-sm text-on-surface-variant">
                 Selecciona un README para leerlo.
@@ -360,6 +415,14 @@ export default function RepoReadmesList() {
             ) : (
               <article>
                 <header className="border-b-2 border-primary bg-background p-5">
+                  <button
+                    type="button"
+                    onClick={clearRepo}
+                    className="mb-3 inline-flex items-center gap-1 text-xs font-bold uppercase tracking-wider text-secondary hover:text-primary lg:hidden"
+                  >
+                    <span className="material-symbols-outlined text-base">arrow_back</span>
+                    Volver a la lista
+                  </button>
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0">
                       <h3 className="truncate text-xl font-bold text-on-surface">
