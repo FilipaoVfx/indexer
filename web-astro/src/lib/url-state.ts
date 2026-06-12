@@ -105,10 +105,11 @@ export function hasRemoteSearchInput(f: Filters): boolean {
 
 /** Absolute path builder that respects Astro base. */
 export function withBase(path: string): string {
-  const base =
-    (typeof window !== "undefined" &&
-      (document.querySelector('meta[name="astro-base"]') as HTMLMetaElement)?.content) ||
-    "/indexer";
+  // Vite/Astro inyecta BASE_URL en build (SSR) y en cliente, así que el mismo
+  // valor (`/` en GitLab Pages, `/indexer/` en GitHub Pages) se aplica de forma
+  // isomórfica. NO usar un fallback hardcodeado: durante el build estático no hay
+  // `window`/`document` y eso generaba rutas `/indexer/...` rotas en el dominio raíz.
+  const base = import.meta.env.BASE_URL || "/";
   const clean = path.startsWith("/") ? path : `/${path}`;
   return (base.replace(/\/$/, "") + clean).replace(/\/$/, "") || "/";
 }
