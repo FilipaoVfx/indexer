@@ -1,9 +1,9 @@
 # CI STAGE - APP INTEGRATION.
 image: node:20
 
-stages:
-  - install
-  - validate
+# stages:
+#   - install
+#   - validate
 
 install:
   stage: install
