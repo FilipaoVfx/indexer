@@ -1,12 +1,6 @@
-# CD STAGE -  DEPLOY APP.
-image: node:20
-
-# stages:
-#   - build # Etapa CD
-#   - deploy # Etapa CD
-
 build_web:
   stage: build
+  image: node:20
   needs: [install]
   script:
     - npm run --if-present lint --workspace=indexbook-web
@@ -17,7 +11,26 @@ build_web:
     paths:
       - web-astro/dist/
 
-build_and_push_cr:
+build_backend_cr:
+  stage: build_and_push_cr
+  image: docker:24.0.7
+  services:
+    - docker:24.0.7-dind
+  needs: []
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+  before_script: []
+  script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - docker build
+        -t $CI_REGISTRY_IMAGE/backend:latest
+        -t $CI_REGISTRY_IMAGE/backend:$CI_COMMIT_SHORT_SHA
+        ./backend
+    - docker push $CI_REGISTRY_IMAGE/backend:latest
+    - docker push $CI_REGISTRY_IMAGE/backend:$CI_COMMIT_SHORT_SHA
+
+build_frontend_cr:
   stage: build_and_push_cr
   image: docker:24.0.7
   services:
@@ -31,19 +44,19 @@ build_and_push_cr:
   script:
     - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
     - docker build
-        -t $CI_REGISTRY_IMAGE:latest
-        -t $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA
-        .
-    - docker push $CI_REGISTRY_IMAGE:latest
-    - docker push $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA
+        -t $CI_REGISTRY_IMAGE/frontend:latest
+        -t $CI_REGISTRY_IMAGE/frontend:$CI_COMMIT_SHORT_SHA
+        ./web-astro
+    - docker push $CI_REGISTRY_IMAGE/frontend:latest
+    - docker push $CI_REGISTRY_IMAGE/frontend:$CI_COMMIT_SHORT_SHA
 
 package_extension:
   stage: build
   needs: []
   image: mcr.microsoft.com/powershell:7.4-debian-12
-  before_script:
-    - pwsh --version
+  before_script: []
   script:
+    - pwsh --version
     - pwsh -NoProfile -File scripts/package-extension.ps1 -OutputDir dist -OutputName x-bookmarks-extension.zip
   artifacts:
     expire_in: 1 week
@@ -52,6 +65,7 @@ package_extension:
 
 pages:
   stage: deploy
+  image: node:20
   needs: [build_web]
   script:
     - mv web-astro/dist public
