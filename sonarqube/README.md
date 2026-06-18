@@ -79,42 +79,31 @@ Edita `sonar-project.properties` en la raíz. Actualmente se analiza todo el rep
 excluyendo `node_modules`, `dist`, `.astro`, lock files, etc. Cuando agregues tests
 con cobertura, descomenta las líneas `sonar.tests` y `sonar.javascript.lcov.reportPaths`.
 
-## Integración CI (GitLab)
+## Integración CI (GitLab → SonarCloud)
 
-En `.ci-jobs.yml` (etapa `validate`) hay **dos jobs** ya listos. Elige uno según dónde
-corra SonarQube definiendo la variable que lo activa en
-**Settings → CI/CD → Variables** (protegidas y enmascaradas). El otro job se omite solo.
+El CI usa **SonarCloud** mediante el job `sonarcloud-check` en `.ci-jobs.yml`
+(etapa `validate`). Los identificadores **públicos** ya están fijos en
+`sonar-project.properties`:
 
-### Variante A — SonarQube self-hosted (`sonarqube-check`)
+- `sonar.organization=indexerdevops`
+- `sonar.projectKey=indexerdevops_indexerdevops`
 
-Para un servidor SonarQube propio accesible desde los runners.
+Lo **único** que defines en GitLab (**Settings → CI/CD → Variables**) es el secreto:
 
-| Variable | Valor |
-| --- | --- |
-| `SONAR_HOST_URL` | URL del servidor (ej. `https://sonar.tudominio.com`) |
-| `SONAR_TOKEN` | token de análisis de SonarQube |
+| Variable | Valor | Flags |
+| --- | --- | --- |
+| `SONAR_TOKEN` | token generado en SonarCloud (*My Account → Security*) | **Masked** + **Protected** |
 
-> El SonarQube local en Docker (`http://localhost:9000`) **no** es accesible desde
-> los runners de GitLab.com; necesitas exponerlo en red.
+El job se **omite** si `SONAR_TOKEN` no está definido (no rompe el pipeline).
 
-### Variante B — SonarCloud (`sonarcloud-check`)
+### Antes de la primera corrida
 
-[SonarCloud](https://sonarcloud.io) es el SaaS de SonarSource (gratis para repos
-públicos). No hostea nada tú.
-
-| Variable | Valor |
-| --- | --- |
-| `SONAR_ORGANIZATION` | clave de tu organización en SonarCloud |
-| `SONAR_TOKEN` | token generado en SonarCloud (*My Account → Security*) |
-| `SONAR_PROJECT_KEY` | *(opcional)* clave del proyecto en SonarCloud, normalmente `<org>_<repo>` |
-
-Pasos:
-1. Crea cuenta en https://sonarcloud.io e importa el repo (o crea la organización + proyecto).
-2. Copia la **Organization Key** y la **Project Key** que te muestra SonarCloud.
-3. Genera un token y define las variables de arriba en GitLab.
-
-El job pasa `-Dsonar.host.url=https://sonarcloud.io` y `-Dsonar.organization` por línea
-de comandos, así que **no** necesitas tocar `sonar-project.properties` para el CI.
+1. En SonarCloud, en el proyecto `indexerdevops_indexerdevops`:
+   **Administration → Analysis Method → desactiva "Automatic Analysis"**
+   (si no, rechaza el análisis del CI con *"you are running CI analysis while
+   Automatic Analysis is enabled"*).
+2. Genera el `SONAR_TOKEN` y guárdalo como variable en GitLab.
+3. Lanza el pipeline: **CI/CD → Pipelines → Run pipeline** (rama `main`).
 
 ### Correr SonarCloud en local
 
@@ -123,6 +112,8 @@ docker run --rm `
   -e SONAR_TOKEN="tu_token" `
   -v "${PWD}:/usr/src" `
   sonarsource/sonar-scanner-cli `
-  -Dsonar.host.url=https://sonarcloud.io `
-  -Dsonar.organization=tu-organizacion
+  -Dsonar.host.url=https://sonarcloud.io
 ```
+
+> La `organization` y la `projectKey` salen del `sonar-project.properties`, así que
+> no hace falta pasarlas por línea de comandos.
