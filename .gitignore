@@ -50,3 +50,7 @@ web/.next/
 # Astro
 web-astro/dist/
 web-astro/.astro/
+
+# Observability — real Prometheus scrape secrets (tokens, service role keys)
+observability/secrets/*
+!observability/secrets/README.md

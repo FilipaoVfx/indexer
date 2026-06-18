@@ -1,0 +1,13 @@
+apiVersion: 1
+
+providers:
+  - name: indexer
+    orgId: 1
+    folder: Indexer
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: false

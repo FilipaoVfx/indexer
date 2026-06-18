@@ -1,0 +1,80 @@
+# Reference observability stack for the Indexer project.
+#
+# Run this on the VPS to bring up Prometheus + Grafana + node_exporter.
+# If you already run Prometheus/Grafana, you do NOT need this file — just copy
+# the scrape blocks from prometheus/prometheus.yml and import the dashboards
+# under grafana/provisioning/dashboards/.
+#
+# Usage:
+#   1. cp .env.example .env            # set GRAFANA_ADMIN_PASSWORD
+#   2. fill secrets/ (see secrets/README.md)
+#   3. edit prometheus/prometheus.yml targets (backend host, supabase ref)
+#   4. docker compose up -d
+#
+# Grafana:    http://<vps>:3000   (admin / $GRAFANA_ADMIN_PASSWORD)
+# Prometheus: http://<vps>:9090
+
+name: indexer-observability
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: indexer-prometheus
+    restart: unless-stopped
+    user: "nobody"
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
+      - "--web.enable-lifecycle"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
+      - ./secrets:/etc/prometheus/secrets:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: indexer-grafana
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-http://localhost:3000}
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    container_name: indexer-node-exporter
+    restart: unless-stopped
+    command:
+      - "--path.rootfs=/host"
+    pid: host
+    volumes:
+      - /:/host:ro,rslave
+    ports:
+      - "9100:9100"
+
+  blackbox-exporter:
+    image: prom/blackbox-exporter:v0.25.0
+    container_name: indexer-blackbox-exporter
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/blackbox_exporter/config.yml"
+    volumes:
+      - ./blackbox/blackbox.yml:/etc/blackbox_exporter/config.yml:ro
+    ports:
+      - "9115:9115"
+
+volumes:
+  prometheus-data:
+  grafana-data:

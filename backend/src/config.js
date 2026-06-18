@@ -31,6 +31,16 @@ function parseBool(value, fallback) {
   return ["1", "true", "yes", "on"].includes(String(value).trim().toLowerCase());
 }
 
+function parseMetricsPath(value, fallback) {
+  const metricsPath = String(value || fallback || "/metrics").trim();
+  if (!metricsPath.startsWith("/")) {
+    throw new Error(
+      `Invalid METRICS_PATH "${metricsPath}". It must start with "/" (e.g. /metrics).`
+    );
+  }
+  return metricsPath;
+}
+
 export const config = {
   port: parseNumber(process.env.PORT, 8787),
   maxBatchSize: parseNumber(process.env.MAX_BATCH_SIZE, 50),
@@ -47,7 +57,14 @@ export const config = {
   allowedOrigins: parseOrigins(process.env.ALLOWED_ORIGINS || "*"),
   supabaseUrl: process.env.SUPABASE_URL,
   // The backend should prefer the service role key so DB-side RLS can stay enabled.
-  supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY
+  supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY,
+  // Observability: Prometheus metrics endpoint.
+  metricsEnabled: parseBool(process.env.METRICS_ENABLED, true),
+  metricsPath: parseMetricsPath(process.env.METRICS_PATH, "/metrics"),
+  // When set, GET <metricsPath> requires `Authorization: Bearer <token>`.
+  // Strongly recommended when the backend runs on a host separate from
+  // Prometheus and /metrics is reachable over the public internet.
+  metricsToken: (process.env.METRICS_TOKEN || "").trim()
 };
 
 export function validateConfig() {

@@ -1,0 +1,104 @@
+# Prometheus configuration for the Indexer project.
+#
+# Topology assumed (confirmed with the team):
+#   - Prometheus + Grafana run on the VPS.
+#   - The Node.js backend runs on a SEPARATE host and is scraped over the
+#     public internet, so /metrics is protected with a Bearer token.
+#   - Supabase is the managed Postgres; its native privileged metrics endpoint
+#     is scraped directly (no exporter to install).
+#
+# If you already run Prometheus on the VPS, copy the blocks under
+# `scrape_configs:` and `rule_files:` into your existing prometheus.yml.
+
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  evaluation_interval: 15s
+  external_labels:
+    project: indexer
+    env: production
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+# Uncomment if you run Alertmanager for notifications.
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  # --- Prometheus self-monitoring -------------------------------------------
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # --- VPS host metrics (node_exporter) -------------------------------------
+  # Provided by the node-exporter service in docker-compose.yml.
+  - job_name: node
+    static_configs:
+      - targets: ["node-exporter:9100"]
+        labels:
+          host: vps-1
+
+  # --- Indexer backend (Node.js API on a separate host) ---------------------
+  # The token in secrets/indexer_metrics_token MUST equal METRICS_TOKEN in the
+  # backend's environment. Generate with: openssl rand -hex 32
+  - job_name: indexer-backend
+    scheme: https
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/indexer_metrics_token
+    static_configs:
+      - targets: ["your-backend.example.com"] # host or host:port (443 implied for https)
+        labels:
+          service: indexer-backend
+    # If the backend is served over plain HTTP on a custom port behind a
+    # firewall (same private network), use instead:
+    #   scheme: http
+    #   targets: ["10.0.0.10:8787"]
+
+  # --- Frontend uptime (blackbox_exporter, external HTTP probes) ------------
+  # Probes the static frontend (GitHub Pages) from outside: availability,
+  # latency, HTTP status and TLS certificate expiry. The blackbox-exporter
+  # service does the actual request; Prometheus only tells it what to probe.
+  - job_name: blackbox-http
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+          # Replace with your real GitHub Pages URLs (one per page you care about).
+          - https://your-user.github.io/your-repo/
+          - https://your-user.github.io/your-repo/authors
+          - https://your-user.github.io/your-repo/repos
+          - https://your-user.github.io/your-repo/readmes
+        labels:
+          service: indexer-frontend
+    relabel_configs:
+      # The probed URL travels as the __param_target / instance label, while the
+      # scrape itself is sent to the blackbox-exporter address.
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+  # --- Supabase managed Postgres (native privileged metrics) ----------------
+  # Endpoint: https://<PROJECT_REF>.supabase.co/customer/v1/privileged/metrics
+  # Auth: HTTP Basic, username "service_role", password = SERVICE ROLE KEY (JWT).
+  # Put the service role key (only the JWT, no newline) in:
+  #   secrets/supabase_service_role
+  - job_name: supabase
+    scheme: https
+    metrics_path: /customer/v1/privileged/metrics
+    scrape_interval: 60s # Supabase recommends >= 60s to avoid rate limits.
+    basic_auth:
+      username: service_role
+      password_file: /etc/prometheus/secrets/supabase_service_role
+    static_configs:
+      - targets: ["YOUR_PROJECT_REF.supabase.co"]
+        labels:
+          service: supabase
