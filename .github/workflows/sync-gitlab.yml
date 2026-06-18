@@ -33,7 +33,7 @@ jobs:
 
       - name: Push current ref to GitLab
         env:
-          GITLAB_REPOSITORY: gitlab.com/juanku2003/indexer.git
+          GITLAB_REPOSITORY: gitlab.com/indexerdevops/indexerdevops.git
           GITLAB_REPOSITORY_URL: ${{ secrets.GITLAB_REPOSITORY_URL }}
           GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
           GITLAB_USERNAME: ${{ secrets.GITLAB_USERNAME }}
