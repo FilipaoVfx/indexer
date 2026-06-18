@@ -16,6 +16,7 @@ import {
   setCorsHeaders
 } from "./http.js";
 import { BookmarkStore } from "./store.js";
+import { metrics, instrumentRequest, normalizeRoute } from "./metrics.js";
 
 validateConfig();
 
@@ -158,6 +159,10 @@ function mergeTargetIntoCorpus(target, corpusItems) {
 }
 
 const server = http.createServer(async (req, res) => {
+  if (config.metricsEnabled) {
+    instrumentRequest(req, res, { skipPath: config.metricsPath });
+  }
+
   try {
     setCorsHeaders(req, res, config.allowedOrigins);
 
@@ -169,6 +174,28 @@ const server = http.createServer(async (req, res) => {
 
     const requestUrl = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
     const routePath = requestUrl.pathname;
+
+    if (config.metricsEnabled && req.method === "GET" && routePath === config.metricsPath) {
+      if (config.metricsToken) {
+        const authHeader = req.headers.authorization || "";
+        const provided = authHeader.startsWith("Bearer ")
+          ? authHeader.slice("Bearer ".length).trim()
+          : "";
+        if (provided !== config.metricsToken) {
+          res.writeHead(401, { "Content-Type": "text/plain; charset=utf-8" });
+          res.end("Unauthorized");
+          return;
+        }
+      }
+
+      const body = metrics.render();
+      res.writeHead(200, {
+        "Content-Type": metrics.contentType,
+        "Content-Length": Buffer.byteLength(body)
+      });
+      res.end(body);
+      return;
+    }
 
     if (req.method === "GET" && routePath === "/health") {
       const userId = sanitizeUserId(requestUrl.searchParams.get("user_id") || "");
@@ -393,6 +420,9 @@ const server = http.createServer(async (req, res) => {
             warnings: []
           };
 
+      metrics.bookmarksIngestedTotal.inc({ source }, summary.inserted || 0);
+      metrics.ingestBatchesTotal.inc({ endpoint: "import_batch", status: "ok" });
+
       sendJson(res, 200, {
         ok: true,
         trace_id: traceId,
@@ -444,6 +474,12 @@ const server = http.createServer(async (req, res) => {
         receivedAt
       });
 
+      metrics.bookmarksIngestedTotal.inc(
+        { source: syncId || "api_batch" },
+        summary.inserted || 0
+      );
+      metrics.ingestBatchesTotal.inc({ endpoint: "batch", status: "ok" });
+
       sendJson(res, 200, {
         ok: true,
         trace_id: traceId,
@@ -474,6 +510,15 @@ const server = http.createServer(async (req, res) => {
         limit,
         offset
       });
+
+      metrics.searchRequestsTotal.inc({
+        type: "search",
+        strategy: result.strategy || "unknown"
+      });
+      metrics.searchDuration.observe(
+        { type: "search", strategy: result.strategy || "unknown" },
+        (result.latency_ms || 0) / 1000
+      );
 
       sendJson(res, 200, {
         ok: true,
@@ -507,6 +552,15 @@ const server = http.createServer(async (req, res) => {
         limit,
         offset
       });
+
+      metrics.searchRequestsTotal.inc({
+        type: "search",
+        strategy: result.strategy || "unknown"
+      });
+      metrics.searchDuration.observe(
+        { type: "search", strategy: result.strategy || "unknown" },
+        (result.latency_ms || 0) / 1000
+      );
 
       sendJson(res, 200, {
         ok: true,
@@ -543,6 +597,8 @@ const server = http.createServer(async (req, res) => {
         to,
         hardLimit: corpusLimit
       });
+
+      metrics.searchRequestsTotal.inc({ type: "semantic", strategy: "semantic" });
 
       sendJson(
         res,
@@ -583,6 +639,15 @@ const server = http.createServer(async (req, res) => {
         limit,
         offset
       });
+
+      metrics.searchRequestsTotal.inc({
+        type: "goal",
+        strategy: result.strategy || "unknown"
+      });
+      metrics.searchDuration.observe(
+        { type: "goal", strategy: result.strategy || "unknown" },
+        (result.latency_ms || 0) / 1000
+      );
 
       sendJson(res, 200, {
         ok: true,
@@ -701,6 +766,19 @@ const server = http.createServer(async (req, res) => {
       statusCode >= 500 && error?.message && error.message !== message
         ? error.message
         : null;
+
+    if (config.metricsEnabled) {
+      let pathname = "/";
+      try {
+        pathname = new URL(req.url || "/", "http://internal").pathname;
+      } catch {
+        pathname = "/";
+      }
+      metrics.httpRequestErrorsTotal.inc({
+        route: normalizeRoute(req.method, pathname),
+        code
+      });
+    }
 
     console.error("[backend] request_failed", {
       trace_id: traceId,

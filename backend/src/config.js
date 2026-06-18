@@ -68,6 +68,16 @@ function parseBookmarkDedupeScope(value, fallback) {
   );
 }
 
+function parseMetricsPath(value, fallback) {
+  const metricsPath = String(value || fallback || "/metrics").trim();
+  if (!metricsPath.startsWith("/")) {
+    throw new Error(
+      `Invalid METRICS_PATH "${metricsPath}". It must start with "/" (e.g. /metrics).`
+    );
+  }
+  return metricsPath;
+}
+
 const bookmarksTable = parseTableName(process.env.BOOKMARKS_TABLE, "bookmarks");
 const bookmarkDedupeScope = parseBookmarkDedupeScope(
   process.env.BOOKMARK_DEDUPE_SCOPE,
@@ -94,7 +104,14 @@ export const config = {
   supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY,
   bookmarksTable,
   bookmarkDedupeScope,
-  enableBookmarkSideEffects
+  enableBookmarkSideEffects,
+  // Observability: Prometheus metrics endpoint.
+  metricsEnabled: parseBoolean(process.env.METRICS_ENABLED, true),
+  metricsPath: parseMetricsPath(process.env.METRICS_PATH, "/metrics"),
+  // When set, GET <metricsPath> requires `Authorization: Bearer <token>`.
+  // Strongly recommended when the backend runs on a host separate from
+  // Prometheus and /metrics is reachable over the public internet.
+  metricsToken: (process.env.METRICS_TOKEN || "").trim()
 };
 
 export function validateConfig() {
