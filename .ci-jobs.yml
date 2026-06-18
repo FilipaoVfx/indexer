@@ -110,10 +110,7 @@ validate_extension:
 
 # --- Analisis estatico con SonarCloud (https://sonarcloud.io) ---
 # sonar.organization y sonar.projectKey ya estan en sonar-project.properties
-# (son identificadores publicos, no secretos). Lo unico que debes definir en
-# GitLab (Settings > CI/CD > Variables) es:
-#   - SONAR_TOKEN : token de SonarCloud (My Account > Security), MASKED + PROTECTED.
-# El job se omite si SONAR_TOKEN no esta definido (no rompe el pipeline).
+
 sonarcloud-check:
   stage: validate
   needs: []
@@ -121,18 +118,18 @@ sonarcloud-check:
     name: sonarsource/sonar-scanner-cli:latest
     entrypoint: [""]
   variables:
-    SONAR_USER_HOME: "${CI_PROJECT_DIR}/.sonar" # cache del scanner
-    GIT_DEPTH: "0" # historico completo: necesario para deteccion de codigo nuevo
+    SONAR_USER_HOME: "${CI_PROJECT_DIR}/.sonar"
+    GIT_DEPTH: "0"
   cache:
     key: "${CI_JOB_NAME}"
     paths:
       - .sonar/cache
-  before_script: [] # la imagen del scanner no trae node/npm
+  before_script: []
   script:
     - sonar-scanner -Dsonar.host.url=https://sonarcloud.io
   allow_failure: true
   rules:
     - if: '$SONAR_TOKEN == null || $SONAR_TOKEN == ""'
       when: never
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: "$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH"
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'

@@ -1,4 +1,3 @@
-# Orquestador de pipelines CI/CD
 variables:
   NPM_CONFIG_CACHE: "$CI_PROJECT_DIR/.npm"
   NPM_CONFIG_PREFER_OFFLINE: "true"
@@ -18,13 +17,12 @@ cache:
   policy: pull-push
 
 stages:
-  - install # Etapa CI
-  - validate # Etapa CI
-  - build # Etapa CD
+  - install
+  - validate
+  - build
   - build_and_push_cr
-  - deploy # Etapa CD
-##
-# Ejecución de pipelines CI/CD
+  - deploy
+
 include:
   - local: '/.ci-jobs.yml'
   - local: '/.cd-jobs.yml'
