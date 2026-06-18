@@ -21,8 +21,12 @@ Indexer es una plataforma de indexación semántica de bookmarks de X (Twitter) 
 - [architecture.md](architecture.md) — Arquitectura general del sistema
 - [tools-and-justification.md](tools-and-justification.md) — Justificación de herramientas
 - [devops-flow.md](devops-flow.md) — Flujo DevOps completo
+- [observability.md](observability.md) — Observabilidad real (Prometheus + Grafana + Supabase)
 - [references.md](references.md) — Referencias académicas (APA 7)
 - [diagrams/](diagrams/) — Diagramas de arquitectura en Mermaid
+
+> La configuración operativa del stack de observabilidad (Prometheus, Grafana,
+> node_exporter, dashboards y alertas) vive en [`observability/`](../../observability/).
 
 ## Beneficios de la Arquitectura DevOps
 
