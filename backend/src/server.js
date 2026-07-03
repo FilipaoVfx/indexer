@@ -285,6 +285,37 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // Resumen de repos desde tablas reales (bookmark_github_repos + readmes).
+    if (req.method === "GET" && routePath === "/api/github/repos-summary") {
+      const limit = clampNumber(requestUrl.searchParams.get("limit"), 500, 1, 1000);
+      const offset = clampNumber(requestUrl.searchParams.get("offset"), 0, 0, 10_000);
+      const user = sanitizeUserId(
+        requestUrl.searchParams.get("user") || requestUrl.searchParams.get("user_id") || ""
+      );
+      const sort = requestUrl.searchParams.get("sort") || "count";
+
+      const result = await store.listRepoSummary({ limit, offset, user, sort });
+
+      sendJson(res, 200, { ok: true, ...result });
+      return;
+    }
+
+    // Bookmarks que mencionan un repo (para el modal de menciones).
+    if (req.method === "GET" && routePath === "/api/github/repo-mentions") {
+      const slug = (requestUrl.searchParams.get("slug") || "").trim();
+      if (!slug) {
+        throw createHttpError(400, "slug_required", "Query param slug is required");
+      }
+      const user = sanitizeUserId(
+        requestUrl.searchParams.get("user") || requestUrl.searchParams.get("user_id") || ""
+      );
+
+      const result = await store.listRepoMentions(slug, { user });
+
+      sendJson(res, 200, { ok: true, ...result });
+      return;
+    }
+
     if (req.method === "GET" && isBookmarkIdsRoute(routePath)) {
       const userId = sanitizeUserId(requestUrl.searchParams.get("user_id") || "");
       const hardLimit = clampNumber(

@@ -632,6 +632,51 @@ export async function fetchUsers(limit = 100): Promise<UserSummary[]> {
   return Array.isArray(data?.items) ? data.items : [];
 }
 
+export interface RepoSummary {
+  repo_slug: string;
+  owner: string;
+  repo: string;
+  url: string;
+  count: number;
+  sample_author: string | null;
+  latest_date: string | null;
+  readme_status: string | null;
+}
+
+// Resumen de repos desde las tablas reales del servidor (reemplaza la
+// extracción regex client-side de extractGithubRepos en la vista Repos).
+export async function fetchRepoSummary(
+  userId = "",
+  sort = "count"
+): Promise<{ items: RepoSummary[]; total: number; bookmarks_analyzed: number; warning: string | null }> {
+  const query = new URLSearchParams();
+  if (userId) query.set("user", userId);
+  if (sort) query.set("sort", sort);
+  query.set("limit", "1000");
+  const res = await fetch(`${API_BASE}/api/github/repos-summary?${query.toString()}`, {
+    headers: { Accept: "application/json" },
+  });
+  const data = await parseJsonOrThrow(res);
+  return {
+    items: Array.isArray(data.items) ? data.items : [],
+    total: Number(data.total || 0),
+    bookmarks_analyzed: Number(data.bookmarks_analyzed || 0),
+    warning: data.warning ?? null,
+  };
+}
+
+// Bookmarks que mencionan un repo (para el modal), servidos desde la DB.
+export async function fetchRepoMentions(slug: string, userId = ""): Promise<SearchItem[]> {
+  const query = new URLSearchParams();
+  query.set("slug", slug);
+  if (userId) query.set("user", userId);
+  const res = await fetch(`${API_BASE}/api/github/repo-mentions?${query.toString()}`, {
+    headers: { Accept: "application/json" },
+  });
+  const data = await parseJsonOrThrow(res);
+  return Array.isArray(data.items) ? (data.items as SearchItem[]) : [];
+}
+
 export interface GithubReadmesResponse {
   ok?: boolean;
   items: GithubReadme[];

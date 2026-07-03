@@ -4,9 +4,9 @@
  * + snippet). Purely client-side, reuses the local corpus already loaded
  * by ReposList.
  */
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { SearchItem } from "../lib/api";
-import { formatDate, initials } from "../lib/api";
+import { fetchRepoMentions, formatDate, initials } from "../lib/api";
 import {
   analyzeRepoMentions,
   INTENT_LABELS,
@@ -18,7 +18,7 @@ import {
 
 interface Props {
   slug: string;
-  items: SearchItem[];
+  user: string;
   onClose: () => void;
 }
 
@@ -63,8 +63,28 @@ function summarizeBySentiment(mentions: RepoMention[]) {
   return [...counts.entries()].sort((a, b) => b[1] - a[1]);
 }
 
-export default function RepoMentionsModal({ slug, items, onClose }: Props) {
+export default function RepoMentionsModal({ slug, user, onClose }: Props) {
   const closeRef = useRef<HTMLButtonElement | null>(null);
+  const [items, setItems] = useState<SearchItem[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    fetchRepoMentions(slug, user)
+      .then((res) => {
+        if (active) setItems(res);
+      })
+      .catch(() => {
+        if (active) setItems([]);
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [slug, user]);
 
   const mentions = useMemo(() => {
     const analyzed = analyzeRepoMentions(items, slug);
@@ -170,9 +190,15 @@ export default function RepoMentionsModal({ slug, items, onClose }: Props) {
         )}
 
         <div className="max-h-[70vh] overflow-y-auto px-5 py-4 space-y-3">
-          {mentions.length === 0 && (
+          {loading && (
             <p className="text-sm text-on-surface-variant font-mono text-center py-8">
-              No se encontraron menciones en el corpus cargado.
+              Cargando menciones...
+            </p>
+          )}
+
+          {!loading && mentions.length === 0 && (
+            <p className="text-sm text-on-surface-variant font-mono text-center py-8">
+              No se encontraron menciones para este repo.
             </p>
           )}
 

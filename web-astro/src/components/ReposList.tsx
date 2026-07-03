@@ -4,13 +4,10 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  extractGithubRepos,
-  extractUsers,
+  fetchRepoSummary,
   fetchUsers,
   formatDate,
-  getCorpus,
-  type SearchItem,
-  type RepoEntity,
+  type RepoSummary,
   type UserSummary,
 } from "../lib/api";
 import { withBase } from "../lib/url-state";
@@ -161,8 +158,8 @@ function buildSearchHref(values: Record<string, string>) {
 }
 
 export default function ReposList() {
-  const [items, setItems] = useState<SearchItem[] | null>(null);
-  const [total, setTotal] = useState(0);
+  const [summary, setSummary] = useState<RepoSummary[] | null>(null);
+  const [bookmarksAnalyzed, setBookmarksAnalyzed] = useState(0);
   const [err, setErr] = useState<string | null>(null);
   const [users, setUsers] = useState<UserSummary[]>([]);
   const [view, setView] = useState<ViewState>(() => readViewState());
@@ -172,12 +169,12 @@ export default function ReposList() {
   const { user, q, sort, page, pageSize } = view;
 
   useEffect(() => {
-    setItems(null);
+    setSummary(null);
     setErr(null);
-    getCorpus(false, user)
-      .then((c) => {
-        setItems(c.items);
-        setTotal(c.total);
+    fetchRepoSummary(user)
+      .then((res) => {
+        setSummary(res.items);
+        setBookmarksAnalyzed(res.bookmarks_analyzed);
       })
       .catch((e) => setErr(e?.message || String(e)));
   }, [user]);
@@ -212,19 +209,18 @@ export default function ReposList() {
     });
   }
 
-  const repos = useMemo<RepoEntity[]>(() => {
-    if (!items) return [];
-    const list = [...extractGithubRepos(items).values()];
+  const repos = useMemo<RepoSummary[]>(() => {
+    if (!summary) return [];
     const ql = q.trim().toLowerCase();
     const filtered = ql
-      ? list.filter(
+      ? summary.filter(
           (r) =>
             r.owner.toLowerCase().includes(ql) ||
             r.repo.toLowerCase().includes(ql) ||
             (r.sample_author || "").toLowerCase().includes(ql)
         )
-      : list;
-    const sorters: Record<SortKey, (a: RepoEntity, b: RepoEntity) => number> = {
+      : summary.slice();
+    const sorters: Record<SortKey, (a: RepoSummary, b: RepoSummary) => number> = {
       count: (a, b) => b.count - a.count,
       latest: (a, b) =>
         new Date(b.latest_date || 0).getTime() -
@@ -233,11 +229,8 @@ export default function ReposList() {
       repo: (a, b) => a.repo.localeCompare(b.repo),
     };
     return filtered.sort(sorters[sort]);
-  }, [items, q, sort]);
-  const availableUsers = useMemo(
-    () => (users.length > 0 ? users : extractUsers(items || [])),
-    [items, users]
-  );
+  }, [summary, q, sort]);
+  const availableUsers = users;
 
   const totalPages = Math.max(1, Math.ceil(repos.length / pageSize));
   const currentPage = Math.min(page, totalPages);
@@ -303,12 +296,12 @@ export default function ReposList() {
               <span className="material-symbols-outlined text-primary">hub</span>
               Repositorios de GitHub
               <span className="text-sm font-normal text-on-surface-variant bg-surface-container-high px-2 py-0.5 rounded-full">
-                {repos.length} / {items ? extractGithubRepos(items).size : 0}
+                {repos.length} / {summary ? summary.length : 0}
               </span>
             </h2>
             <p className="text-on-surface-variant text-sm mt-1">
-              {items
-                ? `Se analizaron URLs, enlaces y texto en ${items.length} marcadores (${total} en total).`
+              {summary
+                ? `${summary.length} repos referenciados en ${bookmarksAnalyzed} marcadores.`
                 : "Cargando archivo..."}
             </p>
           </div>
@@ -368,7 +361,7 @@ export default function ReposList() {
           </div>
         )}
 
-        {!items && !err && (
+        {!summary && !err && (
           <div className="text-center py-16 text-on-surface-variant">
             <span className="material-symbols-outlined text-4xl animate-pulse">
               hourglass_top
@@ -377,7 +370,7 @@ export default function ReposList() {
           </div>
         )}
 
-        {items && repos.length === 0 && !err && (
+        {summary && repos.length === 0 && !err && (
           <p className="text-sm text-on-surface-variant text-center py-16">
             Ningun repositorio coincide con "{q}".
           </p>
@@ -462,10 +455,10 @@ export default function ReposList() {
           ))}
         </div>
 
-        {selectedSlug && items && (
+        {selectedSlug && (
           <RepoMentionsModal
             slug={selectedSlug}
-            items={items}
+            user={user}
             onClose={() => setSelectedSlug(null)}
           />
         )}

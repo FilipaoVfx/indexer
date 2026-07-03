@@ -816,6 +816,192 @@ export class BookmarkStore {
     return { total: count || 0, items: data || [], warning: null };
   }
 
+  // Resumen de repos derivado de las tablas REALES (bookmark_github_repos +
+  // github_repo_readmes + bookmarks), no de una extracción regex en el cliente.
+  // Sustituye el contador "fantasma" de la vista Repos del frontend.
+  async listRepoSummary({ limit = 500, offset = 0, user = "", sort = "count" } = {}) {
+    await this.init();
+    if (!this.capabilities.githubReadmes) {
+      return {
+        total: 0,
+        items: [],
+        bookmarks_analyzed: 0,
+        warning: "bookmark_github_repos no disponible; aplica sql/007_github_repo_readmes.sql."
+      };
+    }
+
+    // 1. Todos los enlaces bookmark→repo (fuente autoritativa), paginados.
+    const links = [];
+    const pageSize = 1000;
+    let from = 0;
+    for (;;) {
+      let qb = this.supabase
+        .from("bookmark_github_repos")
+        .select("repo_slug,bookmark_id,user_id")
+        .range(from, from + pageSize - 1);
+      if (user) qb = qb.eq("user_id", user);
+      const { data, error } = await qb;
+      if (error) {
+        if (isMissingGithubReadmesFeatureError(error)) {
+          return { total: 0, items: [], bookmarks_analyzed: 0, warning: this.missingGithubReadmesWarning(error) };
+        }
+        throw new Error(`Failed to read bookmark_github_repos: ${extractDbErrorMessage(error)}`);
+      }
+      const rows = data || [];
+      links.push(...rows);
+      if (rows.length < pageSize) break;
+      from += pageSize;
+    }
+
+    // 2. Agrega por repo_slug (cuenta de bookmarks distintos).
+    const bySlug = new Map();
+    const allBookmarkIds = new Set();
+    for (const link of links) {
+      const slug = String(link.repo_slug || "").trim().toLowerCase();
+      const bid = String(link.bookmark_id || "");
+      if (!slug || !bid) continue;
+      let entry = bySlug.get(slug);
+      if (!entry) {
+        entry = { repo_slug: slug, bookmarkIds: new Set() };
+        bySlug.set(slug, entry);
+      }
+      entry.bookmarkIds.add(bid);
+      allBookmarkIds.add(bid);
+    }
+
+    // 3. Metadata de bookmarks (autor de muestra + fecha más reciente).
+    const bookmarkMeta = new Map();
+    const idList = [...allBookmarkIds];
+    for (let i = 0; i < idList.length; i += 300) {
+      const chunk = idList.slice(i, i + 300);
+      const { data } = await this.supabase
+        .from("bookmarks")
+        .select("id,author_username,author_name,created_at")
+        .in("id", chunk);
+      for (const row of data || []) bookmarkMeta.set(String(row.id), row);
+    }
+
+    // 4. Metadata de repos (owner/repo/url/status del README).
+    const readmeMeta = new Map();
+    const slugList = [...bySlug.keys()];
+    for (let i = 0; i < slugList.length; i += 300) {
+      const chunk = slugList.slice(i, i + 300);
+      const { data } = await this.supabase
+        .from("github_repo_readmes")
+        .select("repo_slug,owner,repo,repo_url,status")
+        .in("repo_slug", chunk);
+      for (const row of data || []) readmeMeta.set(String(row.repo_slug), row);
+    }
+
+    // 5. Ensambla el resumen por repo.
+    const items = [];
+    for (const [slug, entry] of bySlug) {
+      const meta = readmeMeta.get(slug) || splitGithubRepoSlug(slug) || {};
+      let sampleAuthor = null;
+      let latestDate = null;
+      for (const bid of entry.bookmarkIds) {
+        const bm = bookmarkMeta.get(bid);
+        if (!bm) continue;
+        if (!sampleAuthor && (bm.author_username || bm.author_name)) {
+          sampleAuthor = bm.author_username || bm.author_name;
+        }
+        if (bm.created_at && (!latestDate || new Date(bm.created_at) > new Date(latestDate))) {
+          latestDate = bm.created_at;
+        }
+      }
+      const [slugOwner, slugRepo] = slug.split("/");
+      items.push({
+        repo_slug: slug,
+        owner: meta.owner || slugOwner,
+        repo: meta.repo || slugRepo,
+        url: meta.repo_url || `https://github.com/${slug}`,
+        count: entry.bookmarkIds.size,
+        sample_author: sampleAuthor,
+        latest_date: latestDate,
+        readme_status: meta.status || null
+      });
+    }
+
+    // 6. Orden y paginación (client-side sobre el set completo, es pequeño).
+    const sorters = {
+      count: (a, b) => b.count - a.count || a.repo_slug.localeCompare(b.repo_slug),
+      latest: (a, b) => new Date(b.latest_date || 0) - new Date(a.latest_date || 0),
+      owner: (a, b) => a.owner.localeCompare(b.owner),
+      repo: (a, b) => a.repo.localeCompare(b.repo)
+    };
+    items.sort(sorters[sort] || sorters.count);
+
+    const total = items.length;
+    const normalizedOffset = clampNumber(offset, 0, 0, 100_000);
+    const normalizedLimit = clampNumber(limit, 500, 1, 1000);
+    const paged = items.slice(normalizedOffset, normalizedOffset + normalizedLimit);
+
+    return { total, items: paged, bookmarks_analyzed: allBookmarkIds.size, warning: null };
+  }
+
+  // Bookmarks que mencionan un repo dado, desde bookmark_github_repos → bookmarks.
+  // Devuelve el shape SearchItem con repo_slugs:[slug] para que las heurísticas
+  // del modal (itemMentionsRepo) matcheen sin depender del corpus del navegador.
+  async listRepoMentions(repoSlug, { user = "", limit = 300 } = {}) {
+    await this.init();
+    const slug = String(repoSlug || "").trim().toLowerCase();
+    if (!slug || !this.capabilities.githubReadmes) {
+      return { slug, items: [], warning: null };
+    }
+
+    let linkQb = this.supabase
+      .from("bookmark_github_repos")
+      .select("bookmark_id")
+      .eq("repo_slug", slug)
+      .limit(clampNumber(limit, 300, 1, 1000));
+    if (user) linkQb = linkQb.eq("user_id", user);
+
+    const { data: linkRows, error: linkErr } = await linkQb;
+    if (linkErr) {
+      if (isMissingGithubReadmesFeatureError(linkErr)) {
+        return { slug, items: [], warning: this.missingGithubReadmesWarning(linkErr) };
+      }
+      throw new Error(`Failed to read repo mentions: ${extractDbErrorMessage(linkErr)}`);
+    }
+
+    const ids = [...new Set((linkRows || []).map((r) => String(r.bookmark_id)).filter(Boolean))];
+    if (ids.length === 0) return { slug, items: [], warning: null };
+
+    const items = [];
+    for (let i = 0; i < ids.length; i += 300) {
+      const chunk = ids.slice(i, i + 300);
+      const { data, error } = await this.supabase
+        .from("bookmarks")
+        .select(
+          "id,user_id,tweet_id,text_content,author_username,author_name,created_at,source_url,links,first_comment_links"
+        )
+        .in("id", chunk);
+      if (error) {
+        throw new Error(`Failed to load mention bookmarks: ${extractDbErrorMessage(error)}`);
+      }
+      for (const row of data || []) {
+        items.push({
+          id: row.id,
+          user_id: row.user_id,
+          tweet_id: row.tweet_id,
+          text_content: row.text_content || "",
+          author_username: row.author_username || "",
+          author_name: row.author_name || "",
+          created_at: row.created_at || null,
+          source_url: row.source_url || null,
+          canonical_url: null,
+          links: Array.isArray(row.links) ? row.links : [],
+          first_comment_links: Array.isArray(row.first_comment_links) ? row.first_comment_links : [],
+          summary: null,
+          repo_slugs: [slug]
+        });
+      }
+    }
+
+    items.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+    return { slug, items, warning: null };
+  }
+
   // Lazy fetch en tiempo de lectura: cuando alguien ve los README, descarga los
   // que siguen 'pending'/'error' (acotado por githubReadmeMaxPerBatch). Reemplaza
   // el fetch eager que antes corría en la ingesta. Tolera fallos sin romper la
