@@ -762,6 +762,8 @@ function normalizeScannerPendingItemForDelivery(item, tweetId) {
     text: cleanText(item?.text || ""),
     author_username: cleanText(item?.author_handle || item?.author_username || "").replace(/^@+/, ""),
     author_name: cleanText(item?.author_name || ""),
+    // Fecha real del tweet (captura network-first); el backend la normaliza.
+    created_at: cleanText(item?.created_at || ""),
     source_url: sanitizeAbsoluteUrl(item?.url || item?.source_url || "") ||
       (tweetId ? `https://x.com/i/web/status/${tweetId}` : ""),
     links: Array.isArray(item?.links) ? item.links : [],

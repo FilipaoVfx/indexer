@@ -30,7 +30,9 @@ const BOOKMARK_SCANNER_SCROLL_CONFIG = {
   maxRounds: 80,
   idleRounds: 4,
   stepRatio: 0.85,
-  roundDelayMs: 900
+  // Con captura network-first el scroll solo dispara la paginación GraphQL;
+  // no hay que esperar al render completo del DOM para extraer.
+  roundDelayMs: 350
 };
 
 function logInfo(...args) {
@@ -59,6 +61,10 @@ const bookmarkScannerState = {
   pendingBookmarks: new Map(),
   dismissedPendingIds: new Set(),
   invalidArticleNodes: new WeakSet(),
+  // Captura network-first: entries del timeline GraphQL de Bookmarks
+  // (texto completo, t.co expandidos, autor, fecha, media) por tweetId.
+  networkEntries: new Map(),
+  networkEntryCount: 0,
   errorCount: 0,
   ignoredNodeCount: 0,
   idsLoaded: false,
@@ -925,6 +931,29 @@ function handlePageBridgeNetworkEvent(event) {
     return;
   }
 
+  // Timeline de Bookmarks: cada entry ES un bookmark con payload completo.
+  // Se almacena por tweetId como fuente primaria; el DOM queda de fallback.
+  if (detail.timeline === "bookmarks") {
+    let stored = 0;
+    for (const entry of detail.entries) {
+      const tweetId = cleanText(entry?.tweetId || "");
+      if (!tweetId) continue;
+      bookmarkScannerState.networkEntries.set(tweetId, entry);
+      stored += 1;
+    }
+    bookmarkScannerState.networkEntryCount = bookmarkScannerState.networkEntries.size;
+    if (stored > 0) {
+      rememberDebugEvent("info", "bookmarks_timeline_batch_received", {
+        url: cleanText(detail.url || "").slice(0, 220),
+        entryCount: detail.entries.length,
+        totalNetworkEntries: bookmarkScannerState.networkEntries.size
+      });
+      // Clasifica de inmediato lo que llegó por red (sin esperar al DOM).
+      scheduleBookmarkScannerScan();
+    }
+    return;
+  }
+
   let storedCount = 0;
   for (const entry of detail.entries) {
     if (rememberNetworkReplyCandidate(entry)) {
@@ -1697,7 +1726,42 @@ function extractBookmarkScannerText(article) {
   return text.slice(0, BOOKMARK_SCANNER_TEXT_LIMIT);
 }
 
+// Convierte "Sat Mar 15 03:30:04 +0000 2026" (formato legacy de X) a ISO.
+function xCreatedAtToIso(value) {
+  const raw = cleanText(value || "");
+  if (!raw) return "";
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? "" : parsed.toISOString();
+}
+
+// Item pendiente construido 100% desde el payload GraphQL (sin DOM):
+// texto completo, t.co ya expandidos, autor, fecha real y media.
+function buildPendingItemFromNetworkEntry(tweetId, entry) {
+  return {
+    tweet_id: tweetId,
+    text: cleanText(entry?.text || ""),
+    url: cleanText(entry?.sourceUrl || "") || `https://x.com/i/web/status/${tweetId}`,
+    author_handle: cleanText(entry?.authorUsername || ""),
+    author_name: cleanText(entry?.authorName || ""),
+    links: Array.isArray(entry?.links) ? entry.links.slice() : [],
+    first_comment_links: [],
+    media: Array.isArray(entry?.media) ? entry.media.slice() : [],
+    created_at: xCreatedAtToIso(entry?.createdAt),
+    detected_at: new Date().toISOString(),
+    source: BOOKMARK_SCANNER_SOURCE,
+    capture: "network"
+  };
+}
+
 function buildBookmarkScannerPendingItem(article, identity) {
+  // Preferir el payload de red si existe: más completo y sin fragilidad DOM.
+  const networkEntry = bookmarkScannerState.networkEntries.get(identity.tweetId);
+  if (networkEntry) {
+    const item = buildPendingItemFromNetworkEntry(identity.tweetId, networkEntry);
+    if (identity.url) item.url = identity.url;
+    return item;
+  }
+
   const userNameNode = article?.querySelector?.('[data-testid="User-Name"]') || null;
   return {
     tweet_id: identity.tweetId,
@@ -1709,7 +1773,8 @@ function buildBookmarkScannerPendingItem(article, identity) {
     first_comment_links: [],
     media: extractMedia(article),
     detected_at: new Date().toISOString(),
-    source: BOOKMARK_SCANNER_SOURCE
+    source: BOOKMARK_SCANNER_SOURCE,
+    capture: "dom"
   };
 }
 
@@ -1903,9 +1968,38 @@ function scanVisibleBookmarkArticles(options = {}) {
     classifyBookmarkScannerArticle(article, identity);
   }
 
+  // Network-first: clasifica también los bookmarks capturados vía GraphQL que
+  // aún no tienen artículo en el DOM (virtualización de X descarta nodos).
+  let processedFromNetwork = 0;
+  for (const [tweetId, entry] of bookmarkScannerState.networkEntries) {
+    if (bookmarkScannerState.alreadyScannedIds.has(tweetId)) continue;
+    bookmarkScannerState.alreadyScannedIds.add(tweetId);
+    processedFromNetwork += 1;
+
+    if (!bookmarkScannerState.idsLoaded) {
+      bookmarkScannerState.statusByTweetId.set(tweetId, "unknown");
+      continue;
+    }
+    if (bookmarkScannerState.savedIds.has(tweetId)) {
+      bookmarkScannerState.statusByTweetId.set(tweetId, "saved");
+      continue;
+    }
+    if (bookmarkScannerState.dismissedPendingIds.has(tweetId)) {
+      bookmarkScannerState.statusByTweetId.set(tweetId, "ignored");
+      continue;
+    }
+    if (!bookmarkScannerState.pendingBookmarks.has(tweetId)) {
+      bookmarkScannerState.pendingBookmarks.set(
+        tweetId,
+        buildPendingItemFromNetworkEntry(tweetId, entry)
+      );
+    }
+    bookmarkScannerState.statusByTweetId.set(tweetId, "pending");
+  }
+
   bookmarkScannerState.ignoredNodeCount = Math.max(0, articles.length - processedThisScan);
   return emitBookmarkScannerStatus({
-    processedThisScan,
+    processedThisScan: processedThisScan + processedFromNetwork,
     visibleArticles: articles.length
   });
 }
