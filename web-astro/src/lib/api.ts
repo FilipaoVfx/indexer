@@ -580,6 +580,7 @@ export async function fetchAuthorsSummary(
 
 export interface StatsResponse {
   bookmarks: number;
+  authors: number;
   repos: number;
   readmes_ok: number;
 }
@@ -592,6 +593,7 @@ export async function fetchStats(userId = ""): Promise<StatsResponse> {
   );
   return {
     bookmarks: Number(data.bookmarks || 0),
+    authors: Number(data.authors || 0),
     repos: Number(data.repos || 0),
     readmes_ok: Number(data.readmes_ok || 0),
   };

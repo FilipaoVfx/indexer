@@ -947,8 +947,31 @@ export class BookmarkStore {
       (reposRes.data || []).map((r) => String(r.repo_slug || "").toLowerCase()).filter(Boolean)
     );
 
+    // Autores distintos: pasada paginada sobre author_username.
+    const authorKeys = new Set();
+    {
+      const pageSize = 1000;
+      let from = 0;
+      for (;;) {
+        let qb = this.supabase
+          .from("bookmarks")
+          .select("author_username,author_name")
+          .range(from, from + pageSize - 1);
+        if (user) qb = qb.eq("user_id", user);
+        const { data } = await qb;
+        const rows = data || [];
+        for (const row of rows) {
+          const key = String(row.author_username || row.author_name || "").trim().toLowerCase();
+          if (key) authorKeys.add(key);
+        }
+        if (rows.length < pageSize) break;
+        from += pageSize;
+      }
+    }
+
     return {
       bookmarks: bookmarksRes.count || 0,
+      authors: authorKeys.size,
       repos: repoSlugs.size,
       readmes_ok: readmesRes.count || 0
     };

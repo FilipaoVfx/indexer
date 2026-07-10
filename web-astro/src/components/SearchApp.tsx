@@ -15,6 +15,8 @@ import {
   getDisplayAssetType,
   getPrimarySourceUrl,
   fetchRecentBookmarks,
+  fetchStats,
+  type StatsResponse,
   isGithubRepoUrl,
   safeDomain,
   searchGoal,
@@ -182,6 +184,21 @@ export default function SearchApp() {
   );
   const [corpusError, setCorpusError] = useState<string | null>(null);
   const [users, setUsers] = useState<UserSummary[]>([]);
+  const [stats, setStats] = useState<StatsResponse | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    fetchStats(filters.user)
+      .then((next) => {
+        if (mounted) setStats(next);
+      })
+      .catch(() => {
+        if (mounted) setStats(null);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, [filters.user]);
 
   const debounceRef = useRef<number | null>(null);
   const remoteSearch = hasRemoteSearchInput(filters);
@@ -324,6 +341,7 @@ export default function SearchApp() {
         {onDiscovery ? (
           <DiscoveryHome
             corpus={corpus}
+            stats={stats}
             users={availableUsers}
             error={corpusError}
             onPick={(patch) => update(patch)}
@@ -576,11 +594,13 @@ function SelectField({
 function DiscoveryHome({
   corpus,
   users,
+  stats,
   error,
   onPick,
 }: {
   corpus: { items: SearchItem[]; total: number } | null;
   users: UserSummary[];
+  stats: StatsResponse | null;
   error: string | null;
   onPick: (patch: Partial<Filters>) => void;
 }) {
@@ -640,9 +660,9 @@ function DiscoveryHome({
           <div className="flex items-center gap-3 border-2 border-primary bg-surface-container-low px-4 py-2 neo-shadow-purple-sm">
             <div className="w-2 h-2 bg-primary animate-pulse" />
             <span className="text-[10px] uppercase tracking-[0.2em] font-bold text-on-surface-variant">
-              <span className="text-primary">{corpus.items.length}</span>/{corpus.total} •{" "}
-              <span className="text-secondary">{authors.length}</span> autores •{" "}
-              <span className="text-secondary">{repos.length}</span> repos •{" "}
+              <span className="text-primary">{corpus.items.length}</span>/{stats?.bookmarks ?? corpus.total} •{" "}
+              <span className="text-secondary">{stats?.authors ?? authors.length}</span> autores •{" "}
+              <span className="text-secondary">{stats?.repos ?? repos.length}</span> repos •{" "}
               <span className="text-secondary">{users.length}</span> usuarios
             </span>
           </div>
