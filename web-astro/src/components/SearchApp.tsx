@@ -660,9 +660,9 @@ function DiscoveryHome({
           <div className="flex items-center gap-3 border-2 border-primary bg-surface-container-low px-4 py-2 neo-shadow-purple-sm">
             <div className="w-2 h-2 bg-primary animate-pulse" />
             <span className="text-[10px] uppercase tracking-[0.2em] font-bold text-on-surface-variant">
-              <span className="text-primary">{corpus.items.length}</span>/{stats?.bookmarks ?? corpus.total} •{" "}
-              <span className="text-secondary">{stats?.authors ?? authors.length}</span> autores •{" "}
-              <span className="text-secondary">{stats?.repos ?? repos.length}</span> repos •{" "}
+              <span className="text-primary">{corpus.items.length}</span>/{stats?.bookmarks || corpus.total} •{" "}
+              <span className="text-secondary">{stats?.authors || authors.length}</span> autores •{" "}
+              <span className="text-secondary">{stats?.repos || repos.length}</span> repos •{" "}
               <span className="text-secondary">{users.length}</span> usuarios
             </span>
           </div>
