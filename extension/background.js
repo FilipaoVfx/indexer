@@ -1093,9 +1093,19 @@ async function importBookmarkScannerPending(items, source = "x_bookmarks_dom_sca
     warnings: []
   };
 
+  reportBackgroundStage("bg_scanner_import_started", {
+    received: normalizedItems.length,
+    afterLocalDedup: payloadItems.length,
+    localDuplicates: localDuplicateIds.length
+  }, { emit: true });
+
   const preparedItems = await prepareBookmarksForDelivery(payloadItems, {
     traceId: `scanner-${Date.now().toString(36)}`
   });
+
+  reportBackgroundStage("bg_scanner_import_prepared", {
+    prepared: preparedItems.length
+  }, { emit: true });
   const importState = {
     useLegacyEndpoint: false
   };
@@ -1109,6 +1119,18 @@ async function importBookmarkScannerPending(items, source = "x_bookmarks_dom_sca
       Math.floor(index / SCANNER_IMPORT_BATCH_SIZE),
       importState
     );
+
+    // Depuración: rastro por chunk con lo que el backend respondió realmente.
+    reportBackgroundStage("bg_scanner_import_chunk_result", {
+      chunkIndex: Math.floor(index / SCANNER_IMPORT_BATCH_SIZE),
+      chunkSize: chunk.length,
+      endpoint: payload.used_legacy_endpoint ? "legacy(/api/bookmarks/batch)" : "primary(/bookmarks/import-batch)",
+      inserted: Number(payload.inserted) || 0,
+      duplicates: Number(payload.duplicates) || 0,
+      failed: Number(payload.failed) || 0,
+      importedIds: Array.isArray(payload.imported_ids) ? payload.imported_ids.length : 0,
+      rawKeys: Object.keys(payload || {}).join(",").slice(0, 200)
+    }, { emit: true });
 
     aggregate.inserted += Number(payload.inserted) || 0;
     aggregate.duplicates += Number(payload.duplicates) || 0;

@@ -129,6 +129,7 @@ function normalizeScannerImportItems(items) {
           ? item.author_username.replace(/^@+/, "")
           : "",
       author_name: typeof item.author_name === "string" ? item.author_name : "",
+      created_at: typeof item.created_at === "string" ? item.created_at : null,
       source_url: sourceUrl,
       links: Array.isArray(item.links) ? item.links : [],
       first_comment_links: Array.isArray(item.first_comment_links)

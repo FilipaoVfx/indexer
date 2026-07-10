@@ -184,7 +184,16 @@ async function scrapeAllBookmarks() {
     if (!imp || !imp.ok) throw new Error(imp?.error || "import_failed");
 
     const r = imp.backendResult || {};
-    appendLog(`Importado. insertados=${r.inserted || 0} duplicados=${r.duplicates || 0} fallidos=${r.failed || 0}`);
+    appendLog(
+      `Importado. insertados=${r.inserted || 0} duplicados=${r.duplicates || 0} fallidos=${r.failed || 0}` +
+      ` recibidos=${r.received ?? "?"} ids=${Array.isArray(r.imported_ids) ? r.imported_ids.length : "?"}`
+    );
+    if (Array.isArray(r.warnings) && r.warnings.length) {
+      appendLog(`Avisos: ${r.warnings.slice(0, 3).join(" | ").slice(0, 200)}`);
+    }
+    if (!r.inserted && !r.duplicates && !r.failed) {
+      appendLog("⚠ Conteos en cero: revisa las líneas bg_scanner_* de arriba para ver dónde se perdió.");
+    }
     await sendRuntimeMessage({ type: "INGEST_FLUSH" });
   } catch (error) {
     const message = toErrorMessage(error);
@@ -221,6 +230,18 @@ chrome.runtime.onMessage.addListener((message) => {
   if (!message || typeof message.type !== "string") return;
   if (message.type === "BOOKMARK_SCANNER_STATUS") {
     renderScannerStatus(message.payload || {});
+    return;
+  }
+  // Rastro de depuración del background (chunks de import, prepare, errores).
+  if (message.type === "SYNC_PROGRESS" || message.type === "SYNC_ERROR") {
+    const p = message.payload || {};
+    if (!p.stage || !/^bg_scanner_/.test(p.stage)) return;
+    const detail = Object.entries(p)
+      .filter(([k]) => !["stage", "debug"].includes(k))
+      .map(([k, v]) => `${k}=${v}`)
+      .join(" ")
+      .slice(0, 220);
+    appendLog(`${p.stage}: ${detail}`);
   }
 });
 
