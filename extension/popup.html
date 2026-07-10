@@ -1,51 +1,25 @@
 <!doctype html>
-<html lang="en">
+<html lang="es">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>X Indexer</title>
     <style>
-      :root {
-        color-scheme: light;
-      }
-
-      * {
-        box-sizing: border-box;
-      }
-
+      :root { color-scheme: light; }
+      * { box-sizing: border-box; }
       body {
         margin: 0;
         font-family: "Segoe UI", Tahoma, sans-serif;
-        background: linear-gradient(180deg, #f6f8fc 0%, #eef2f8 100%);
-        min-width: 360px;
+        background: #f6f8fc;
+        min-width: 340px;
+        color: #0f172a;
       }
+      main { padding: 14px; }
+      h1 { margin: 0 0 2px; font-size: 15px; }
+      .sub { margin: 0 0 12px; font-size: 11px; color: #64748b; }
 
-      main {
-        padding: 14px;
-      }
-
-      h1 {
-        margin: 0 0 8px;
-        font-size: 16px;
-      }
-
-      p {
-        margin: 0 0 12px;
-        font-size: 12px;
-        color: #364152;
-      }
-
-      .field {
-        margin-bottom: 10px;
-      }
-
-      label {
-        display: block;
-        font-size: 11px;
-        margin-bottom: 4px;
-        color: #1f2937;
-      }
-
+      .field { margin-bottom: 8px; }
+      label { display: block; font-size: 10px; margin-bottom: 3px; color: #475569; text-transform: uppercase; letter-spacing: 0.04em; }
       input {
         width: 100%;
         border: 1px solid #cbd5e1;
@@ -54,115 +28,57 @@
         font-size: 12px;
       }
 
-      .row {
-        display: flex;
-        gap: 8px;
-        margin-top: 10px;
-      }
+      button { border: 0; border-radius: 8px; font-weight: 600; cursor: pointer; }
+      button:disabled { opacity: 0.55; cursor: default; }
 
-      button {
-        flex: 1;
-        border: 0;
-        border-radius: 8px;
-        padding: 9px;
-        font-size: 12px;
-        font-weight: 600;
-        cursor: pointer;
-      }
-
-      #saveButton {
-        background: #dbeafe;
-        color: #1e3a8a;
-      }
-
-      #syncButton {
+      #scrapeButton {
+        width: 100%;
+        margin-top: 8px;
+        padding: 12px;
+        font-size: 13px;
         background: #111827;
         color: #ffffff;
       }
 
-      #flushButton {
+      .secondary-row { display: flex; gap: 8px; margin-top: 8px; }
+      .secondary-row button {
+        flex: 1;
+        padding: 7px;
+        font-size: 11px;
         background: #e5e7eb;
         color: #111827;
       }
-
-      #bulkScrapeButton {
-        background: #fde68a;
-        color: #78350f;
-      }
-
-      .panel {
-        margin-top: 12px;
-        border: 1px solid #dbe1ea;
-        border-radius: 10px;
-        background: #ffffff;
-        padding: 10px;
-      }
-
-      .panel h2 {
-        margin: 0 0 8px;
-        font-size: 13px;
-      }
+      #saveButton { background: #dbeafe; color: #1e3a8a; }
 
       .stats {
         display: grid;
-        grid-template-columns: 1fr 1fr;
+        grid-template-columns: repeat(4, 1fr);
         gap: 6px;
-        margin-bottom: 10px;
+        margin: 12px 0 0;
       }
-
       .stat {
         border: 1px solid #e5e7eb;
         border-radius: 8px;
-        padding: 7px;
-        background: #f8fafc;
+        padding: 6px 4px;
+        background: #ffffff;
+        text-align: center;
       }
+      .stat span { display: block; color: #64748b; font-size: 9px; text-transform: uppercase; letter-spacing: 0.03em; }
+      .stat strong { display: block; color: #0f172a; font-size: 16px; margin-top: 2px; }
 
-      .stat span {
-        display: block;
-        color: #64748b;
-        font-size: 10px;
-      }
-
-      .stat strong {
-        display: block;
-        color: #0f172a;
-        font-size: 15px;
-        margin-top: 2px;
-      }
-
-      #scannerStatus {
-        margin: 0 0 8px;
-        font-size: 11px;
-        color: #475569;
-      }
-
-      #scannerScanButton {
-        background: #cffafe;
-        color: #155e75;
-      }
-
-      #scannerImportButton {
-        background: #bbf7d0;
-        color: #14532d;
-      }
-
-      #scannerClearButton,
-      #scannerViewButton {
-        background: #e5e7eb;
-        color: #111827;
-      }
+      #scannerStatus { margin: 10px 0 0; font-size: 11px; color: #475569; min-height: 14px; }
 
       #log {
-        margin: 12px 0 0;
+        margin: 10px 0 0;
         border: 1px solid #dbe1ea;
-        border-radius: 10px;
+        border-radius: 8px;
         background: #ffffff;
-        min-height: 136px;
-        max-height: 220px;
+        min-height: 90px;
+        max-height: 180px;
         overflow: auto;
-        font-size: 11px;
-        line-height: 1.45;
-        padding: 10px;
+        font-size: 10.5px;
+        line-height: 1.4;
+        padding: 8px;
         white-space: pre-wrap;
       }
     </style>
@@ -170,62 +86,35 @@
   <body>
     <main>
       <h1>X Bookmarks Indexer</h1>
-      <p>Modo auto-sync: al guardar un post en X se envia solo al backend.</p>
+      <p class="sub">Auto-sync activo: al guardar un post en X se envía solo. Usa el botón para importar los bookmarks ya existentes.</p>
 
       <div class="field">
         <label for="apiBaseUrl">Backend URL</label>
         <input id="apiBaseUrl" placeholder="https://indexer-hzto.onrender.com" />
       </div>
-
       <div class="field">
         <label for="userId">User ID</label>
         <input id="userId" placeholder="local-user" />
       </div>
 
-      <div class="row">
-        <button id="saveButton">Save</button>
-        <button id="flushButton">Flush queue</button>
+      <div class="secondary-row">
+        <button id="saveButton">Guardar ajustes</button>
       </div>
 
-      <div class="row">
-        <button id="syncButton">Check auto sync</button>
-        <button id="clearActivityButton">Clear log</button>
+      <button id="scrapeButton">⬇ Importar todos los bookmarks</button>
+      <p id="scannerStatus">Abre x.com/i/bookmarks y pulsa importar.</p>
+
+      <div class="stats">
+        <div class="stat"><span>Escaneados</span><strong id="scannerScanned">0</strong></div>
+        <div class="stat"><span>Guardados</span><strong id="scannerSaved">0</strong></div>
+        <div class="stat"><span>Nuevos</span><strong id="scannerPending">0</strong></div>
+        <div class="stat"><span>Errores</span><strong id="scannerErrors">0</strong></div>
       </div>
 
-      <div class="row">
-        <button id="bulkScrapeButton">Scrape all bookmarks</button>
+      <div class="secondary-row">
+        <button id="scannerClearButton">Reiniciar cola</button>
+        <button id="clearActivityButton">Limpiar log</button>
       </div>
-
-      <section class="panel" aria-label="Bookmark DOM scanner">
-        <h2>Bookmark DOM Scanner</h2>
-        <p id="scannerStatus">Open x.com/i/bookmarks to scan visible posts.</p>
-        <div class="stats">
-          <div class="stat">
-            <span>Escaneados</span>
-            <strong id="scannerScanned">0</strong>
-          </div>
-          <div class="stat">
-            <span>Guardados</span>
-            <strong id="scannerSaved">0</strong>
-          </div>
-          <div class="stat">
-            <span>Pendientes</span>
-            <strong id="scannerPending">0</strong>
-          </div>
-          <div class="stat">
-            <span>Errores</span>
-            <strong id="scannerErrors">0</strong>
-          </div>
-        </div>
-        <div class="row">
-          <button id="scannerScanButton">Scan with scroll</button>
-          <button id="scannerImportButton">Import pending</button>
-        </div>
-        <div class="row">
-          <button id="scannerViewButton">View pending</button>
-          <button id="scannerClearButton">Clear queue</button>
-        </div>
-      </section>
 
       <pre id="log"></pre>
     </main>

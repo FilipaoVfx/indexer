@@ -1,11 +1,6 @@
 const saveButton = document.getElementById("saveButton");
-const flushButton = document.getElementById("flushButton");
-const syncButton = document.getElementById("syncButton");
-const bulkScrapeButton = document.getElementById("bulkScrapeButton");
+const scrapeButton = document.getElementById("scrapeButton");
 const clearActivityButton = document.getElementById("clearActivityButton");
-const scannerScanButton = document.getElementById("scannerScanButton");
-const scannerImportButton = document.getElementById("scannerImportButton");
-const scannerViewButton = document.getElementById("scannerViewButton");
 const scannerClearButton = document.getElementById("scannerClearButton");
 const scannerStatusElement = document.getElementById("scannerStatus");
 const scannerScannedElement = document.getElementById("scannerScanned");
@@ -20,51 +15,13 @@ function nowLabel() {
   return new Date().toLocaleTimeString();
 }
 
-function formatTs(ts) {
-  try {
-    return new Date(ts).toLocaleTimeString();
-  } catch (_error) {
-    return "--:--:--";
-  }
-}
-
-function formatActivityEntry(entry) {
-  const ts = formatTs(entry.ts);
-  const stage = entry.stage || "event";
-  const parts = [`[${ts}] ${stage}`];
-  if (entry.tweetId) parts.push(`tweet=${entry.tweetId}`);
-  if (typeof entry.count === "number") parts.push(`count=${entry.count}`);
-  if (typeof entry.pendingQueue === "number") parts.push(`pending=${entry.pendingQueue}`);
-  if (entry.error) parts.push(`err=${String(entry.error).slice(0, 120)}`);
-  return parts.join(" ");
-}
-
 function appendLog(message) {
   const line = `[${nowLabel()}] ${message}`;
   logElement.textContent = `${line}\n${logElement.textContent}`.slice(0, 8000);
 }
 
-function renderActivity(activity, counters, pendingQueue) {
-  const header = `Capturados: ${counters.captured} | Entregados: ${counters.delivered} | Fallidos: ${counters.failed} | En cola: ${pendingQueue}`;
-  const lines = (activity || []).map(formatActivityEntry);
-  logElement.textContent = [header, "", ...lines].join("\n");
-}
-
-function setBusy(isBusy) {
-  syncButton.disabled = isBusy;
-  syncButton.textContent = isBusy ? "Checking..." : "Check auto sync";
-}
-
-function setBulkBusy(isBusy) {
-  bulkScrapeButton.disabled = isBusy;
-  bulkScrapeButton.textContent = isBusy ? "Scraping..." : "Scrape all bookmarks";
-}
-
 function toErrorMessage(error) {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return String(error);
+  return error instanceof Error ? error.message : String(error);
 }
 
 function isMissingContentScriptError(message) {
@@ -105,82 +62,24 @@ function sendRuntimeMessage(message) {
 }
 
 async function loadSettings() {
-  const response = await sendRuntimeMessage({
-    type: "GET_SETTINGS"
-  });
-
+  const response = await sendRuntimeMessage({ type: "GET_SETTINGS" });
   if (!response || !response.ok) {
     throw new Error(response && response.error ? response.error : "settings_load_failed");
   }
-
   apiBaseUrlInput.value = response.apiBaseUrl || "";
   userIdInput.value = response.userId || "";
-  await loadActivity(response.pendingQueue);
-}
-
-async function loadActivity(fallbackPending) {
-  try {
-    const response = await sendRuntimeMessage({ type: "GET_ACTIVITY" });
-    if (response && response.ok) {
-      renderActivity(
-        response.activity || [],
-        response.counters || { captured: 0, delivered: 0, failed: 0 },
-        response.pendingQueue
-      );
-      return;
-    }
-  } catch (_error) {
-    // fall through to fallback
-  }
-  appendLog(`Ready. Pending queue: ${fallbackPending ?? 0}`);
-}
-
-async function clearActivity() {
-  await sendRuntimeMessage({ type: "CLEAR_ACTIVITY" });
-  await loadActivity(0);
+  appendLog(`Listo. En cola: ${response.pendingQueue ?? 0}`);
 }
 
 async function saveSettings() {
   const response = await sendRuntimeMessage({
     type: "SETTINGS_UPDATE",
-    payload: {
-      apiBaseUrl: apiBaseUrlInput.value,
-      userId: userIdInput.value
-    }
+    payload: { apiBaseUrl: apiBaseUrlInput.value, userId: userIdInput.value },
   });
-
   if (!response || !response.ok) {
     throw new Error(response && response.error ? response.error : "settings_save_failed");
   }
-
-  appendLog(`Settings saved. Backend: ${response.apiBaseUrl} | User: ${response.userId}`);
-}
-
-async function flushQueue() {
-  const response = await sendRuntimeMessage({
-    type: "INGEST_FLUSH"
-  });
-  appendLog(`Flush requested. Pending queue: ${response && response.pendingQueue}`);
-}
-
-async function getActiveTab() {
-  const tabs = await chrome.tabs.query({
-    active: true,
-    currentWindow: true
-  });
-  return tabs[0] || null;
-}
-
-async function injectContentScript(tabId) {
-  if (!chrome.scripting || typeof chrome.scripting.executeScript !== "function") {
-    throw new Error("scripting_permission_unavailable");
-  }
-
-  await chrome.scripting.executeScript({
-    target: { tabId },
-    files: ["content.js"]
-  });
-  await sleep(250);
+  appendLog(`Ajustes guardados. Backend: ${response.apiBaseUrl} | User: ${response.userId}`);
 }
 
 function renderScannerStatus(status = {}) {
@@ -188,49 +87,26 @@ function renderScannerStatus(status = {}) {
   scannerSavedElement.textContent = String(status.savedCount || 0);
   scannerPendingElement.textContent = String(status.pendingCount || 0);
   scannerErrorsElement.textContent = String(status.errorCount || 0);
-  scannerImportButton.disabled = !status.canImport;
-  scannerScanButton.disabled = !!status.scrollScanInProgress;
+}
 
-  if (!status.active) {
-    scannerStatusElement.textContent = "Open x.com/i/bookmarks to scan visible posts.";
-    return;
+async function getActiveTab() {
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  return tabs[0] || null;
+}
+
+async function injectContentScript(tabId) {
+  if (!chrome.scripting || typeof chrome.scripting.executeScript !== "function") {
+    throw new Error("scripting_permission_unavailable");
   }
-
-  if (status.scrollScanInProgress) {
-    scannerStatusElement.textContent =
-      `Scanning with scroll... round ${status.scrollScanRounds || 0}`;
-    return;
-  }
-
-  if (!status.initialized) {
-    scannerStatusElement.textContent = "Scanner ready to start.";
-    return;
-  }
-
-  if (!status.idsLoaded) {
-    const detail = status.lastError ? ` Last error: ${String(status.lastError).slice(0, 120)}` : "";
-    scannerStatusElement.textContent =
-      `Scanner waiting for saved IDs. Unknown=${status.unknownCount || 0}.${detail}`;
-    return;
-  }
-
-  if (!status.backendOnline) {
-    scannerStatusElement.textContent =
-      `Offline: using cached IDs (${status.savedIdsCount || 0}). Import disabled.`;
-    return;
-  }
-
-  const source = status.cachedIds ? "cached IDs" : "backend IDs";
-  scannerStatusElement.textContent =
-    `Using ${source}. Saved IDs=${status.savedIdsCount || 0}`;
+  await chrome.scripting.executeScript({ target: { tabId }, files: ["content.js"] });
+  await sleep(250);
 }
 
 async function sendActiveTabMessage(message, options = {}) {
   const activeTab = await getActiveTab();
   if (!activeTab || !activeTab.id) {
-    throw new Error("No active tab found.");
+    throw new Error("No hay pestaña activa.");
   }
-
   try {
     return await chrome.tabs.sendMessage(activeTab.id, message);
   } catch (error) {
@@ -239,262 +115,99 @@ async function sendActiveTabMessage(message, options = {}) {
       options.retryInject !== false &&
       isMissingContentScriptError(messageText) &&
       isXPageUrl(activeTab.url);
-
-    if (!canInject) {
-      throw error;
-    }
-
-    appendLog("Content script was not active; injecting it into the current X tab...");
+    if (!canInject) throw error;
+    appendLog("Inyectando el content script en la pestaña de X...");
     await injectContentScript(activeTab.id);
     return chrome.tabs.sendMessage(activeTab.id, message);
   }
 }
 
-async function refreshScannerStatus() {
-  try {
-    const response = await sendActiveTabMessage({
-      type: "GET_BOOKMARK_SCANNER_STATUS"
-    });
-    if (response && response.ok) {
-      renderScannerStatus(response);
-    }
-  } catch (_error) {
-    renderScannerStatus({ active: false });
-  }
-}
-
-async function rescanBookmarkDomScanner() {
-  appendLog("Scanning bookmarks with scroll...");
-  const response = await sendActiveTabMessage({
-    type: "BOOKMARK_SCANNER_RESCAN"
-  });
-
-  renderScannerStatus(response || {});
-  if (!response || !response.ok) {
-    throw new Error(response?.error || "scanner_rescan_failed");
-  }
-
-  appendLog(
-    `Scroll scan: rounds=${response.rounds || response.scrollScanRounds || 0} scanned=${response.scannedCount || 0} saved=${response.savedCount || 0} pending=${response.pendingCount || 0} unknown=${response.unknownCount || 0}`
-  );
-
-  if (!response.idsLoaded && response.lastError) {
-    appendLog(`Saved ID load failed: ${String(response.lastError).slice(0, 180)}`);
-  }
-}
-
-async function importScannerPending() {
-  appendLog("Importing scanner pending bookmarks...");
-  const response = await sendActiveTabMessage({
-    type: "BOOKMARK_SCANNER_IMPORT_PENDING"
-  });
-
-  renderScannerStatus(response || {});
-  if (!response || !response.ok) {
-    throw new Error(response?.error || "scanner_import_failed");
-  }
-
-  const result = response.backendResult || {};
-  appendLog(
-    `Import done. inserted=${result.inserted || 0} duplicates=${result.duplicates || 0} failed=${result.failed || 0}`
-  );
-}
-
-async function clearScannerPending() {
-  const response = await sendActiveTabMessage({
-    type: "BOOKMARK_SCANNER_CLEAR_PENDING"
-  });
-  renderScannerStatus(response || {});
-  appendLog(`Scanner queue cleared. Pending=${response?.pendingCount || 0}`);
-}
-
-async function viewScannerPending() {
-  const response = await sendActiveTabMessage({
-    type: "GET_BOOKMARK_SCANNER_PENDING"
-  });
-  renderScannerStatus(response || {});
-
-  if (!response || !response.ok) {
-    throw new Error(response?.error || "scanner_pending_failed");
-  }
-
-  const items = Array.isArray(response.items) ? response.items : [];
-  if (items.length === 0) {
-    appendLog("No scanner pending bookmarks.");
-    return;
-  }
-
-  const preview = items
-    .slice(0, 10)
-    .map((item) => `${item.tweet_id} ${item.author_handle ? `@${item.author_handle}` : ""}`)
-    .join("\n");
-  appendLog(`Pending (${items.length}):\n${preview}`);
-}
-
-async function checkAutoSync() {
-  setBusy(true);
-  appendLog("Checking auto-sync listener...");
-
+// Flujo único: scroll-scan network-first, luego importa lo nuevo. Un botón.
+async function scrapeAllBookmarks() {
+  scrapeButton.disabled = true;
+  scrapeButton.textContent = "Escaneando...";
   try {
     const activeTab = await getActiveTab();
-    if (!activeTab || !activeTab.id) {
-      throw new Error("No active tab found.");
-    }
-
-    const response = await sendActiveTabMessage({
-      type: "GET_CAPTURE_STATUS"
-    });
-
-    if (!response || !response.ok) {
-      throw new Error(response && response.error ? response.error : "status_check_failed");
-    }
-
-    appendLog(
-      `Auto listener ready. SyncId=${response.syncId} Captured cache=${response.trackedTweets}`
-    );
-
-    const flushResponse = await sendRuntimeMessage({
-      type: "INGEST_FLUSH"
-    });
-    appendLog(`Auto-sync active. Pending queue: ${flushResponse && flushResponse.pendingQueue}`);
-  } catch (error) {
-    const message = toErrorMessage(error);
-    if (isMissingContentScriptError(message)) {
-      appendLog("Open any x.com tab first. Auto-listener only runs on x.com.");
-    } else {
-      appendLog(`Sync error: ${message}`);
-    }
-  } finally {
-    setBusy(false);
-  }
-}
-
-async function startBulkScrape() {
-  setBulkBusy(true);
-  appendLog("Starting bulk bookmarks scrape...");
-
-  try {
-    const activeTab = await getActiveTab();
-    if (!activeTab || !activeTab.id) {
-      throw new Error("No active tab found.");
-    }
-
-    if (!/\/i\/bookmarks/i.test(activeTab.url || "")) {
-      appendLog("Open x.com/i/bookmarks first, then run scrape.");
+    if (!activeTab || !/\/i\/bookmarks/i.test(activeTab.url || "")) {
+      appendLog("Abre x.com/i/bookmarks primero.");
       return;
     }
 
-    const response = await sendActiveTabMessage({
-      type: "START_SYNC"
-    });
-
-    if (!response) {
-      throw new Error("no_response_from_content_script");
-    }
-
-    if (!response.ok) {
-      throw new Error(response.error || "bulk_scrape_failed");
-    }
-
+    appendLog("Escaneando bookmarks (scroll + captura de red)...");
+    const scan = await sendActiveTabMessage({ type: "BOOKMARK_SCANNER_RESCAN" });
+    renderScannerStatus(scan || {});
+    if (!scan || !scan.ok) throw new Error(scan?.error || "scan_failed");
     appendLog(
-      `Scrape done. Extracted=${response.totalExtracted} Enqueued=${response.totalEnqueued} Rounds=${response.rounds}`
+      `Escaneo: escaneados=${scan.scannedCount || 0} guardados=${scan.savedCount || 0} nuevos=${scan.pendingCount || 0}`
     );
 
-    const flushResponse = await sendRuntimeMessage({ type: "INGEST_FLUSH" });
-    appendLog(`Flush triggered. Pending queue: ${flushResponse && flushResponse.pendingQueue}`);
-    await loadActivity(flushResponse && flushResponse.pendingQueue);
+    if (!scan.pendingCount) {
+      appendLog("No hay bookmarks nuevos que importar.");
+      return;
+    }
+
+    scrapeButton.textContent = "Importando...";
+    appendLog(`Importando ${scan.pendingCount} nuevos...`);
+    const imp = await sendActiveTabMessage({ type: "BOOKMARK_SCANNER_IMPORT_PENDING" });
+    renderScannerStatus(imp || {});
+    if (!imp || !imp.ok) throw new Error(imp?.error || "import_failed");
+
+    const r = imp.backendResult || {};
+    appendLog(`Importado. insertados=${r.inserted || 0} duplicados=${r.duplicates || 0} fallidos=${r.failed || 0}`);
+    await sendRuntimeMessage({ type: "INGEST_FLUSH" });
   } catch (error) {
     const message = toErrorMessage(error);
     if (isMissingContentScriptError(message)) {
-      appendLog("Open x.com/i/bookmarks first. Scrape only runs on the bookmarks page.");
+      appendLog("Abre x.com/i/bookmarks primero. El scraper corre en esa página.");
     } else {
-      appendLog(`Scrape error: ${message}`);
+      appendLog(`Error: ${message}`);
     }
   } finally {
-    setBulkBusy(false);
+    scrapeButton.disabled = false;
+    scrapeButton.textContent = "⬇ Importar todos los bookmarks";
+  }
+}
+
+async function clearScannerPending() {
+  const response = await sendActiveTabMessage({ type: "BOOKMARK_SCANNER_CLEAR_PENDING" });
+  renderScannerStatus(response || {});
+  appendLog(`Cola reiniciada. Nuevos=${response?.pendingCount || 0}`);
+}
+
+async function refreshScannerStatus() {
+  try {
+    const response = await sendActiveTabMessage(
+      { type: "GET_BOOKMARK_SCANNER_STATUS" },
+      { retryInject: false }
+    );
+    if (response && response.ok) renderScannerStatus(response);
+  } catch (_error) {
+    /* pestaña no-X: sin scanner */
   }
 }
 
 chrome.runtime.onMessage.addListener((message) => {
-  if (!message || typeof message.type !== "string") {
-    return;
-  }
-
-  if (message.type === "SYNC_PROGRESS") {
-    const payload = message.payload || {};
-    const compact = JSON.stringify(payload);
-    appendLog(`Progress: ${compact}`);
-    return;
-  }
-
-  if (message.type === "SYNC_ERROR") {
-    const payload = message.payload || {};
-    appendLog(`Error: ${JSON.stringify(payload)}`);
-    return;
-  }
-
+  if (!message || typeof message.type !== "string") return;
   if (message.type === "BOOKMARK_SCANNER_STATUS") {
     renderScannerStatus(message.payload || {});
   }
 });
 
 saveButton.addEventListener("click", () => {
-  void saveSettings().catch((error) => {
-    appendLog(`Save error: ${toErrorMessage(error)}`);
-  });
+  void saveSettings().catch((error) => appendLog(`Error guardando: ${toErrorMessage(error)}`));
 });
 
-flushButton.addEventListener("click", () => {
-  void flushQueue().catch((error) => {
-    appendLog(`Flush error: ${toErrorMessage(error)}`);
-  });
-});
-
-syncButton.addEventListener("click", () => {
-  void checkAutoSync();
-});
-
-bulkScrapeButton.addEventListener("click", () => {
-  void startBulkScrape();
-});
-
-clearActivityButton.addEventListener("click", () => {
-  void clearActivity().catch((error) => {
-    appendLog(`Clear error: ${toErrorMessage(error)}`);
-  });
-});
-
-scannerScanButton.addEventListener("click", () => {
-  void rescanBookmarkDomScanner().catch((error) => {
-    const message = toErrorMessage(error);
-    if (isMissingContentScriptError(message)) {
-      appendLog("Open x.com/i/bookmarks first. Scanner runs on the bookmarks page.");
-    } else {
-      appendLog(`Scanner error: ${message}`);
-    }
-  });
-});
-
-scannerImportButton.addEventListener("click", () => {
-  void importScannerPending().catch((error) => {
-    appendLog(`Import error: ${toErrorMessage(error)}`);
-  });
-});
-
-scannerViewButton.addEventListener("click", () => {
-  void viewScannerPending().catch((error) => {
-    appendLog(`Pending error: ${toErrorMessage(error)}`);
-  });
+scrapeButton.addEventListener("click", () => {
+  void scrapeAllBookmarks();
 });
 
 scannerClearButton.addEventListener("click", () => {
-  void clearScannerPending().catch((error) => {
-    appendLog(`Clear scanner error: ${toErrorMessage(error)}`);
-  });
+  void clearScannerPending().catch((error) => appendLog(`Error reiniciando: ${toErrorMessage(error)}`));
 });
 
-void loadSettings().catch((error) => {
-  appendLog(`Init error: ${toErrorMessage(error)}`);
+clearActivityButton.addEventListener("click", () => {
+  logElement.textContent = "";
 });
 
+void loadSettings().catch((error) => appendLog(`Error init: ${toErrorMessage(error)}`));
 void refreshScannerStatus().catch(() => {});
