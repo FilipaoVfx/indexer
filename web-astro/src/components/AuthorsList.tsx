@@ -4,19 +4,16 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  extractAllAuthors,
-  extractUsers,
+  fetchAuthorsSummary,
   fetchUsers,
   formatDate,
-  getCorpus,
   initials,
   type AuthorEntity,
-  type SearchItem,
+  type AuthorSummary,
   type UserSummary,
 } from "../lib/api";
 import { withBase } from "../lib/url-state";
 import {
-  indexAuthorRepos,
   topAuthorsByRepos,
   type AuthorRepoEntry,
 } from "../lib/repo-heuristics";
@@ -167,7 +164,7 @@ function buildSearchHref(values: Record<string, string>) {
 }
 
 export default function AuthorsList() {
-  const [items, setItems] = useState<SearchItem[] | null>(null);
+  const [summary, setSummary] = useState<AuthorSummary[] | null>(null);
   const [total, setTotal] = useState(0);
   const [err, setErr] = useState<string | null>(null);
   const [users, setUsers] = useState<UserSummary[]>([]);
@@ -178,12 +175,12 @@ export default function AuthorsList() {
   const { user, q, sort, page, pageSize } = view;
 
   useEffect(() => {
-    setItems(null);
+    setSummary(null);
     setErr(null);
-    getCorpus(false, user)
-      .then((c) => {
-        setItems(c.items);
-        setTotal(c.total);
+    fetchAuthorsSummary(user)
+      .then((res) => {
+        setSummary(res.items);
+        setTotal(res.total_bookmarks);
       })
       .catch((e) => setErr(e?.message || String(e)));
   }, [user]);
@@ -219,8 +216,14 @@ export default function AuthorsList() {
   }
 
   const authors = useMemo<AuthorEntity[]>(() => {
-    if (!items) return [];
-    const list = [...extractAllAuthors(items).values()];
+    if (!summary) return [];
+    const list: AuthorEntity[] = summary.map((a) => ({
+      name: a.name,
+      handle: a.handle,
+      count: a.count,
+      latest_date: a.latest_date,
+      domains: new Set((a as unknown as { domains?: string[] }).domains || []),
+    }));
     const ql = q.trim().toLowerCase();
     const filtered = ql
       ? list.filter(
@@ -237,16 +240,30 @@ export default function AuthorsList() {
       name: (a, b) => a.name.localeCompare(b.name),
     };
     return filtered.sort(sorters[sort]);
-  }, [items, q, sort]);
-  const availableUsers = useMemo(
-    () => (users.length > 0 ? users : extractUsers(items || [])),
-    [items, users]
-  );
+  }, [summary, q, sort]);
+  const availableUsers = users;
 
-  const authorRepoIndex = useMemo(
-    () => (items ? indexAuthorRepos(items) : new Map<string, AuthorRepoEntry>()),
-    [items]
-  );
+  const authorRepoIndex = useMemo(() => {
+    const out = new Map<string, AuthorRepoEntry>();
+    for (const a of summary || []) {
+      if (!a.repos || a.repos.length === 0) continue;
+      const key = a.handle || a.name;
+      const repos = new Map(
+        a.repos.map((r) => [
+          r.repo_slug,
+          { slug: r.repo_slug, count: r.count, latest_date: r.latest_date },
+        ])
+      );
+      out.set(key, {
+        key,
+        name: a.name,
+        handle: a.handle,
+        repos,
+        totalMentions: a.repos.reduce((n, r) => n + r.count, 0),
+      });
+    }
+    return out;
+  }, [summary]);
   const leaderboard = useMemo(
     () => topAuthorsByRepos(authorRepoIndex, 10),
     [authorRepoIndex]
@@ -313,12 +330,12 @@ export default function AuthorsList() {
               <span className="material-symbols-outlined text-primary">group</span>
               Todos los autores
               <span className="text-sm font-normal text-on-surface-variant bg-surface-container-high px-2 py-0.5 rounded-full">
-                {authors.length} / {items ? extractAllAuthors(items).size : 0}
+                {authors.length} / {summary ? summary.length : 0}
               </span>
             </h2>
             <p className="text-on-surface-variant text-sm mt-1">
-              {items
-                ? `Derivado de ${items.length} marcadores (${total} en total en la base).`
+              {summary
+                ? `${summary.length} autores en ${total} marcadores.`
                 : "Cargando archivo..."}
             </p>
           </div>
@@ -364,7 +381,7 @@ export default function AuthorsList() {
           </div>
         )}
 
-        {!items && !err && (
+        {!summary && !err && (
           <div className="text-center py-16 text-on-surface-variant">
             <span className="material-symbols-outlined text-4xl animate-pulse">
               hourglass_top
@@ -373,7 +390,7 @@ export default function AuthorsList() {
           </div>
         )}
 
-        {items && authors.length === 0 && !err && (
+        {summary && authors.length === 0 && !err && (
           <p className="text-sm text-on-surface-variant text-center py-16">
             Ningun autor coincide con "{q}".
           </p>

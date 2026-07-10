@@ -816,6 +816,144 @@ export class BookmarkStore {
     return { total: count || 0, items: data || [], warning: null };
   }
 
+  // Resumen de autores agregado en el servidor (reemplaza la descarga del
+  // corpus completo al navegador que hacía AuthorsList). Una pasada paginada
+  // sobre bookmarks + join con bookmark_github_repos para el índice de repos
+  // por autor (leaderboard y modal).
+  async listAuthorSummary({ user = "" } = {}) {
+    await this.init();
+
+    // 1. Pasada paginada sobre bookmarks: agrega por author_username.
+    const authorsByKey = new Map();
+    const authorKeyByBookmarkId = new Map();
+    let totalBookmarks = 0;
+    const pageSize = 1000;
+    let from = 0;
+    for (;;) {
+      let qb = this.supabase
+        .from("bookmarks")
+        .select("id,author_username,author_name,created_at,source_url")
+        .range(from, from + pageSize - 1);
+      if (user) qb = qb.eq("user_id", user);
+      const { data, error } = await qb;
+      if (error) {
+        throw new Error(`Failed to aggregate authors: ${extractDbErrorMessage(error)}`);
+      }
+      const rows = data || [];
+      totalBookmarks += rows.length;
+      for (const row of rows) {
+        const handle = String(row.author_username || "").trim().replace(/^@+/, "");
+        const name = String(row.author_name || "").trim();
+        const key = (handle || name || "?").toLowerCase();
+        let entry = authorsByKey.get(key);
+        if (!entry) {
+          entry = {
+            key,
+            handle: handle || null,
+            name: name || handle || "?",
+            count: 0,
+            latest_date: null,
+            repos: new Map(),
+            domains: new Set()
+          };
+          authorsByKey.set(key, entry);
+        }
+        entry.count += 1;
+        if (!entry.name && name) entry.name = name;
+        if (entry.domains.size < 8 && row.source_url) {
+          try {
+            entry.domains.add(new URL(row.source_url).hostname.replace(/^www\./, ""));
+          } catch (_e) { /* url inválida: ignorar */ }
+        }
+        if (
+          row.created_at &&
+          (!entry.latest_date || new Date(row.created_at) > new Date(entry.latest_date))
+        ) {
+          entry.latest_date = row.created_at;
+        }
+        authorKeyByBookmarkId.set(String(row.id), { key, createdAt: row.created_at || null });
+      }
+      if (rows.length < pageSize) break;
+      from += pageSize;
+    }
+
+    // 2. Índice autor → repos mencionados (vía bookmark_github_repos).
+    if (this.capabilities.githubReadmes && authorKeyByBookmarkId.size > 0) {
+      let linkFrom = 0;
+      for (;;) {
+        const { data, error } = await this.supabase
+          .from("bookmark_github_repos")
+          .select("bookmark_id,repo_slug")
+          .range(linkFrom, linkFrom + pageSize - 1);
+        if (error) {
+          if (isMissingGithubReadmesFeatureError(error)) break;
+          throw new Error(`Failed to read repo links for authors: ${extractDbErrorMessage(error)}`);
+        }
+        const rows = data || [];
+        for (const link of rows) {
+          const ref = authorKeyByBookmarkId.get(String(link.bookmark_id));
+          if (!ref) continue;
+          const entry = authorsByKey.get(ref.key);
+          if (!entry) continue;
+          const slug = String(link.repo_slug || "").toLowerCase();
+          if (!slug) continue;
+          const repo = entry.repos.get(slug) || { repo_slug: slug, count: 0, latest_date: null };
+          repo.count += 1;
+          if (ref.createdAt && (!repo.latest_date || new Date(ref.createdAt) > new Date(repo.latest_date))) {
+            repo.latest_date = ref.createdAt;
+          }
+          entry.repos.set(slug, repo);
+        }
+        if (rows.length < pageSize) break;
+        linkFrom += pageSize;
+      }
+    }
+
+    const items = [...authorsByKey.values()]
+      .map((entry) => ({
+        handle: entry.handle,
+        name: entry.name,
+        count: entry.count,
+        latest_date: entry.latest_date,
+        domains: [...entry.domains],
+        repos: [...entry.repos.values()].sort((a, b) => b.count - a.count)
+      }))
+      .sort((a, b) => b.count - a.count);
+
+    return { total_authors: items.length, total_bookmarks: totalBookmarks, items };
+  }
+
+  // Contadores únicos para toda la UI (sidebar, headers). Una sola verdad.
+  async getStats({ user = "" } = {}) {
+    await this.init();
+
+    let bookmarksQb = this.supabase
+      .from("bookmarks")
+      .select("*", { count: "exact", head: true });
+    if (user) bookmarksQb = bookmarksQb.eq("user_id", user);
+
+    const [bookmarksRes, readmesRes, reposRes] = await Promise.all([
+      bookmarksQb,
+      this.supabase
+        .from("github_repo_readmes")
+        .select("*", { count: "exact", head: true })
+        .eq("status", "ok"),
+      this.supabase
+        .from("bookmark_github_repos")
+        .select("repo_slug")
+    ]);
+
+    const repoSlugs = new Set(
+      (reposRes.data || []).map((r) => String(r.repo_slug || "").toLowerCase()).filter(Boolean)
+    );
+
+    return {
+      bookmarks: bookmarksRes.count || 0,
+      repos: repoSlugs.size,
+      readmes_ok: readmesRes.count || 0
+    };
+  }
+
   // Resumen de repos derivado de las tablas REALES (bookmark_github_repos +
   // github_repo_readmes + bookmarks), no de una extracción regex en el cliente.
   // Sustituye el contador "fantasma" de la vista Repos del frontend.
@@ -876,7 +1014,7 @@ export class BookmarkStore {
       const chunk = idList.slice(i, i + 300);
       const { data } = await this.supabase
         .from("bookmarks")
-        .select("id,author_username,author_name,created_at")
+        .select("id,author_username,author_name,created_at,source_url")
         .in("id", chunk);
       for (const row of data || []) bookmarkMeta.set(String(row.id), row);
     }

@@ -512,6 +512,118 @@ async function parseJsonOrThrow(res: Response) {
   return data;
 }
 
+// Fetch con timeout + retry con backoff. Sustituye a una librería de data
+// fetching completa: en una MPA estática el cache muere en cada navegación,
+// así que retry/timeout es lo único que de verdad necesitamos.
+export async function fetchJson<T = unknown>(
+  url: string,
+  { retries = 2, timeoutMs = 30_000 }: { retries?: number; timeoutMs?: number } = {}
+): Promise<T> {
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, {
+        headers: { Accept: "application/json" },
+        signal: controller.signal,
+      });
+      return (await parseJsonOrThrow(res)) as T;
+    } catch (err) {
+      lastError = err;
+      // 4xx no se reintenta (error del cliente); red/5xx/timeout sí.
+      if (err instanceof Error && /^HTTP 4\d\d/.test(err.message)) throw err;
+      if (attempt < retries) {
+        await new Promise((r) => setTimeout(r, 500 * 2 ** attempt));
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+// ─── Autores (agregado server-side) ─────────────────────────────────
+
+export interface AuthorRepoRefSummary {
+  repo_slug: string;
+  count: number;
+  latest_date: string | null;
+}
+
+export interface AuthorSummary {
+  handle: string | null;
+  name: string;
+  count: number;
+  latest_date: string | null;
+  repos: AuthorRepoRefSummary[];
+}
+
+export async function fetchAuthorsSummary(
+  userId = ""
+): Promise<{ items: AuthorSummary[]; total_authors: number; total_bookmarks: number }> {
+  const query = new URLSearchParams();
+  if (userId) query.set("user", userId);
+  const data = await fetchJson<{
+    items?: AuthorSummary[];
+    total_authors?: number;
+    total_bookmarks?: number;
+  }>(`${API_BASE}/api/authors-summary?${query.toString()}`);
+  return {
+    items: Array.isArray(data.items) ? data.items : [],
+    total_authors: Number(data.total_authors || 0),
+    total_bookmarks: Number(data.total_bookmarks || 0),
+  };
+}
+
+// ─── Stats (contadores únicos para toda la UI) ──────────────────────
+
+export interface StatsResponse {
+  bookmarks: number;
+  repos: number;
+  readmes_ok: number;
+}
+
+export async function fetchStats(userId = ""): Promise<StatsResponse> {
+  const query = new URLSearchParams();
+  if (userId) query.set("user", userId);
+  const data = await fetchJson<Partial<StatsResponse>>(
+    `${API_BASE}/api/stats?${query.toString()}`
+  );
+  return {
+    bookmarks: Number(data.bookmarks || 0),
+    repos: Number(data.repos || 0),
+    readmes_ok: Number(data.readmes_ok || 0),
+  };
+}
+
+// Recientes desde el servidor (browse view). Reemplaza la descarga del corpus
+// completo: el servidor pagina y filtra; el cliente solo pinta.
+export async function fetchRecentBookmarks(
+  userId = "",
+  limit = 200
+): Promise<{ items: SearchItem[]; total: number }> {
+  const query = new URLSearchParams();
+  if (userId) query.set("user_id", userId);
+  query.set("limit", String(Math.min(limit, 100)));
+  query.set("sort", "recent");
+  const all: SearchItem[] = [];
+  let total = 0;
+  let offset = 0;
+  while (all.length < limit) {
+    query.set("offset", String(offset));
+    const data = await fetchJson<{ items?: SearchItem[]; total?: number }>(
+      `${API_BASE}/api/bookmarks/search?${query.toString()}`
+    );
+    const items = data.items || [];
+    total = Number(data.total || 0);
+    all.push(...items);
+    if (items.length < 100 || all.length >= total) break;
+    offset += items.length;
+  }
+  return { items: all.slice(0, limit), total };
+}
+
 export async function searchHybrid(
   params: SearchParams = {}
 ): Promise<HybridSearchResponse & { elapsed_ms: number }> {
@@ -572,35 +684,6 @@ export async function searchGoal(
   };
 }
 
-export async function fetchAllBookmarks(
-  hardLimit = Number.POSITIVE_INFINITY,
-  userId = DEFAULT_USER_ID
-): Promise<{ items: SearchItem[]; total: number }> {
-  const all: SearchItem[] = [];
-  const batch = 100;
-  let offset = 0;
-  let total = Infinity;
-
-  while (all.length < hardLimit && offset < total) {
-    const query = new URLSearchParams();
-    if (userId) query.set("user_id", userId);
-    query.set("limit", String(batch));
-    query.set("offset", String(offset));
-    const res = await fetch(
-      `${API_BASE}/api/bookmarks/search?${query.toString()}`
-    );
-    if (!res.ok) break;
-    const data = (await res.json()) as HybridSearchResponse;
-    const items = data.items || [];
-    if (typeof data.total === "number") total = data.total;
-    all.push(...items);
-    if (items.length < batch) break;
-    offset += batch;
-  }
-
-  return { items: all, total: total === Infinity ? all.length : total };
-}
-
 export async function fetchHealth(userId = DEFAULT_USER_ID): Promise<HealthResponse> {
   const query = new URLSearchParams();
   if (userId) query.set("user_id", userId);
@@ -610,16 +693,6 @@ export async function fetchHealth(userId = DEFAULT_USER_ID): Promise<HealthRespo
   const data = (await res.json()) as HealthResponse;
   if (!res.ok) throw new Error("health fetch failed");
   return data;
-}
-
-const corpusCache = new Map<string, Promise<{ items: SearchItem[]; total: number }>>();
-
-export function getCorpus(force = false, userId = DEFAULT_USER_ID) {
-  const key = userId || "__all__";
-  if (force || !corpusCache.has(key)) {
-    corpusCache.set(key, fetchAllBookmarks(Number.POSITIVE_INFINITY, userId));
-  }
-  return corpusCache.get(key)!;
 }
 
 export async function fetchUsers(limit = 100): Promise<UserSummary[]> {

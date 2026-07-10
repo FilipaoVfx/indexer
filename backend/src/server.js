@@ -285,6 +285,26 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // Autores agregados en servidor (mata la descarga del corpus al cliente).
+    if (req.method === "GET" && routePath === "/api/authors-summary") {
+      const user = sanitizeUserId(
+        requestUrl.searchParams.get("user") || requestUrl.searchParams.get("user_id") || ""
+      );
+      const result = await store.listAuthorSummary({ user });
+      sendJson(res, 200, { ok: true, ...result });
+      return;
+    }
+
+    // Contadores únicos para toda la UI.
+    if (req.method === "GET" && routePath === "/api/stats") {
+      const user = sanitizeUserId(
+        requestUrl.searchParams.get("user") || requestUrl.searchParams.get("user_id") || ""
+      );
+      const result = await store.getStats({ user });
+      sendJson(res, 200, { ok: true, ...result });
+      return;
+    }
+
     // Resumen de repos desde tablas reales (bookmark_github_repos + readmes).
     if (req.method === "GET" && routePath === "/api/github/repos-summary") {
       const limit = clampNumber(requestUrl.searchParams.get("limit"), 500, 1, 1000);

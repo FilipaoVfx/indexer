@@ -14,7 +14,7 @@ import {
   formatDate,
   getDisplayAssetType,
   getPrimarySourceUrl,
-  getCorpus,
+  fetchRecentBookmarks,
   isGithubRepoUrl,
   safeDomain,
   searchGoal,
@@ -257,7 +257,7 @@ export default function SearchApp() {
     let mounted = true;
     setCorpus(null);
     setCorpusError(null);
-    getCorpus(false, filters.user)
+    fetchRecentBookmarks(filters.user, 200)
       .then((nextCorpus) => {
         if (!mounted) return;
         setCorpus(nextCorpus);
@@ -281,8 +281,13 @@ export default function SearchApp() {
     });
   }, [corpus, filters.kind, filters.sort, response, showLocalResults]);
 
-  const total =
-    showLocalResults || filters.kind ? visibleItems.length : response?.total ?? 0;
+  const total = showLocalResults
+    ? filters.kind
+      ? visibleItems.length
+      : corpus?.total ?? 0
+    : filters.kind
+      ? visibleItems.length
+      : response?.total ?? 0;
 
   const resultsError = error || (showLocalResults ? corpusError : null);
   const resultsLoading = loading || (showLocalResults && !corpus && !corpusError);
@@ -295,10 +300,7 @@ export default function SearchApp() {
           ? `local_${filters.kind}`
           : "local"
       : response?.strategy || "---";
-  const availableUsers = useMemo(
-    () => (users.length > 0 ? users : extractUsers(corpus?.items || [])),
-    [corpus, users]
-  );
+  const availableUsers = users;
 
   return (
     <>
