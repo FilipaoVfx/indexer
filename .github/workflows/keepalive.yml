@@ -1,0 +1,23 @@
+name: Keepalive Render
+
+# Render free tier duerme el servicio tras ~15 min sin tráfico (cold start ~14s).
+# Ping cada 10 min lo mantiene despierto. Render free da 750h instancia/mes;
+# un servicio 24/7 usa ~720h, así que cabe.
+# Nota: el cron de GitHub Actions puede retrasarse unos minutos; el spin-down
+# de Render tolera ese jitter en la práctica.
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Ping /health
+        run: |
+          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 60 https://indexer-hzto.onrender.com/health)
+          echo "health -> HTTP $code"
+          test "$code" = "200"
