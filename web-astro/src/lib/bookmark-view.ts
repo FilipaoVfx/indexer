@@ -1,4 +1,4 @@
-import type { Bookmark } from "./api";
+import type { SearchItem as Bookmark } from "./api";
 
 export interface BookmarkViewOptions {
   kind?: "" | "media" | "links";

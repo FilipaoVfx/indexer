@@ -233,8 +233,8 @@ const GH_OWNER_RE = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/;
 const GH_REPO_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/;
 
 function normalizeGithubRepoMatch(ownerValue?: string, repoValue?: string) {
-  const owner = sanitizeGithubRepoSegment(ownerValue);
-  const repo = sanitizeGithubRepoSegment(repoValue);
+  const owner = sanitizeGithubRepoSegment(ownerValue ?? "");
+  const repo = sanitizeGithubRepoSegment(repoValue ?? "");
   if (!owner || !repo) return null;
   if (!GH_OWNER_RE.test(owner) || !GH_REPO_RE.test(repo)) return null;
   if (GH_NON_USERS.has(owner.toLowerCase())) return null;

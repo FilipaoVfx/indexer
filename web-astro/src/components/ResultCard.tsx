@@ -125,15 +125,15 @@ export default function ResultCard({ item, anchorId }: Props) {
       ? "Referencia"
       : "Sintesis";
   const kindColor =
-    kind === "Media"
+    kind === "Multimedia"
       ? "text-tertiary"
-      : kind === "Reference"
+      : kind === "Referencia"
       ? "text-secondary"
       : "text-primary";
   const kindBg =
-    kind === "Media"
+    kind === "Multimedia"
       ? "bg-tertiary"
-      : kind === "Reference"
+      : kind === "Referencia"
       ? "bg-secondary"
       : "bg-primary";
 
