@@ -41,6 +41,8 @@
       }
 
       .secondary-row { display: flex; gap: 8px; margin-top: 8px; }
+      .range-row { display: flex; gap: 8px; margin-top: 10px; }
+      .range-row .field { flex: 1; margin-bottom: 0; }
       .secondary-row button {
         flex: 1;
         padding: 7px;
@@ -101,7 +103,18 @@
         <button id="saveButton">Guardar ajustes</button>
       </div>
 
-      <button id="scrapeButton">⬇ Importar todos los bookmarks</button>
+      <div class="range-row">
+        <div class="field">
+          <label for="rangeMin">Desde #</label>
+          <input id="rangeMin" type="number" min="1" step="1" placeholder="1" />
+        </div>
+        <div class="field">
+          <label for="rangeMax">Hasta # (vacío = todos)</label>
+          <input id="rangeMax" type="number" min="1" step="1" placeholder="∞" />
+        </div>
+      </div>
+
+      <button id="scrapeButton">⬇ Importar bookmarks</button>
       <p id="scannerStatus">Abre x.com/i/bookmarks y pulsa importar.</p>
 
       <div class="stats">

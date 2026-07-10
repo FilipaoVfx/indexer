@@ -9,6 +9,8 @@ const scannerPendingElement = document.getElementById("scannerPending");
 const scannerErrorsElement = document.getElementById("scannerErrors");
 const apiBaseUrlInput = document.getElementById("apiBaseUrl");
 const userIdInput = document.getElementById("userId");
+const rangeMinInput = document.getElementById("rangeMin");
+const rangeMaxInput = document.getElementById("rangeMax");
 const logElement = document.getElementById("log");
 
 function nowLabel() {
@@ -122,6 +124,18 @@ async function sendActiveTabMessage(message, options = {}) {
   }
 }
 
+// Rango 1-based sobre la lista de bookmarks NUEVOS (orden del timeline).
+// min vacío = 1; max vacío = todos. max también corta el scroll temprano.
+function readRange() {
+  const min = Math.max(1, Math.floor(Number(rangeMinInput.value) || 1));
+  const rawMax = Math.floor(Number(rangeMaxInput.value) || 0);
+  const max = rawMax > 0 ? rawMax : 0; // 0 = sin tope
+  if (max > 0 && max < min) {
+    return { min: max, max: min }; // usuario los invirtió: tolerar
+  }
+  return { min, max };
+}
+
 // Flujo único: scroll-scan network-first, luego importa lo nuevo. Un botón.
 async function scrapeAllBookmarks() {
   scrapeButton.disabled = true;
@@ -133,8 +147,13 @@ async function scrapeAllBookmarks() {
       return;
     }
 
-    appendLog("Escaneando bookmarks (scroll + captura de red)...");
-    const scan = await sendActiveTabMessage({ type: "BOOKMARK_SCANNER_RESCAN" });
+    const { min, max } = readRange();
+    const rangeLabel = max > 0 ? `#${min}–#${max}` : min > 1 ? `#${min} en adelante` : "todos";
+    appendLog(`Escaneando bookmarks (${rangeLabel}, scroll + captura de red)...`);
+    const scan = await sendActiveTabMessage({
+      type: "BOOKMARK_SCANNER_RESCAN",
+      payload: { maxPending: max },
+    });
     renderScannerStatus(scan || {});
     if (!scan || !scan.ok) throw new Error(scan?.error || "scan_failed");
     appendLog(
@@ -146,9 +165,21 @@ async function scrapeAllBookmarks() {
       return;
     }
 
+    const toImport = Math.min(
+      scan.pendingCount - Math.min(min - 1, scan.pendingCount),
+      max > 0 ? max - min + 1 : scan.pendingCount
+    );
+    if (toImport <= 0) {
+      appendLog(`El rango ${rangeLabel} queda fuera de los ${scan.pendingCount} nuevos.`);
+      return;
+    }
+
     scrapeButton.textContent = "Importando...";
-    appendLog(`Importando ${scan.pendingCount} nuevos...`);
-    const imp = await sendActiveTabMessage({ type: "BOOKMARK_SCANNER_IMPORT_PENDING" });
+    appendLog(`Importando ${toImport} de ${scan.pendingCount} nuevos (${rangeLabel})...`);
+    const imp = await sendActiveTabMessage({
+      type: "BOOKMARK_SCANNER_IMPORT_PENDING",
+      payload: { rangeStart: min, rangeEnd: max > 0 ? max : 0 },
+    });
     renderScannerStatus(imp || {});
     if (!imp || !imp.ok) throw new Error(imp?.error || "import_failed");
 
@@ -164,7 +195,7 @@ async function scrapeAllBookmarks() {
     }
   } finally {
     scrapeButton.disabled = false;
-    scrapeButton.textContent = "⬇ Importar todos los bookmarks";
+    scrapeButton.textContent = "⬇ Importar bookmarks";
   }
 }
 

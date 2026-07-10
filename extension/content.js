@@ -2014,6 +2014,8 @@ async function runBookmarkScannerScrollScan(options = {}) {
 
   bookmarkScannerState.scrollScanInProgress = true;
   bookmarkScannerState.scrollScanRounds = 0;
+  // Tope opcional: deja de scrollear cuando ya hay N bookmarks nuevos en cola.
+  const maxPending = Number(options.maxPending) > 0 ? Math.floor(Number(options.maxPending)) : 0;
   let idleRounds = 0;
   let round = 0;
   let finalStatus = {
@@ -2024,7 +2026,8 @@ async function runBookmarkScannerScrollScan(options = {}) {
   try {
     while (
       round < BOOKMARK_SCANNER_SCROLL_CONFIG.maxRounds &&
-      idleRounds < BOOKMARK_SCANNER_SCROLL_CONFIG.idleRounds
+      idleRounds < BOOKMARK_SCANNER_SCROLL_CONFIG.idleRounds &&
+      (maxPending === 0 || bookmarkScannerState.pendingBookmarks.size < maxPending)
     ) {
       round += 1;
       bookmarkScannerState.scrollScanRounds = round;
@@ -2213,7 +2216,7 @@ function getBookmarkScannerPendingItems() {
   return Array.from(bookmarkScannerState.pendingBookmarks.values());
 }
 
-async function importBookmarkScannerPending() {
+async function importBookmarkScannerPending(range = {}) {
   if (!bookmarkScannerState.initialized) {
     await initializeBookmarkScanner();
   }
@@ -2234,7 +2237,12 @@ async function importBookmarkScannerPending() {
     };
   }
 
-  const items = getBookmarkScannerPendingItems();
+  let items = getBookmarkScannerPendingItems();
+  const rangeStart = Number(range.rangeStart) > 0 ? Math.floor(Number(range.rangeStart)) : 1;
+  const rangeEnd = Number(range.rangeEnd) > 0 ? Math.floor(Number(range.rangeEnd)) : items.length;
+  if (rangeStart > 1 || rangeEnd < items.length) {
+    items = items.slice(rangeStart - 1, rangeEnd);
+  }
   if (items.length === 0) {
     return {
       ok: true,
@@ -2932,7 +2940,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === "BOOKMARK_SCANNER_RESCAN") {
-    void runBookmarkScannerScrollScan({ resetDismissed: true })
+    void runBookmarkScannerScrollScan({
+      resetDismissed: true,
+      maxPending: message.payload?.maxPending
+    })
       .then((result) => sendResponse(result))
       .catch((error) =>
         sendResponse({
@@ -2964,7 +2975,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === "BOOKMARK_SCANNER_IMPORT_PENDING") {
-    void importBookmarkScannerPending()
+    void importBookmarkScannerPending(message.payload || {})
       .then((result) => sendResponse(result))
       .catch((error) =>
         sendResponse({
