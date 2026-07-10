@@ -4,7 +4,9 @@
   const SOURCE = "x-indexer-page-bridge";
   const MAX_URLS_PER_TWEET = 30;
   const MAX_ENTRIES_PER_EVENT = 80;
-  const SHORT_TEXT_LIMIT = 1200;
+  // Note tweets can exceed 1200 chars; keep full text for RAG-quality capture.
+  const SHORT_TEXT_LIMIT = 4000;
+  const MAX_MEDIA_PER_TWEET = 8;
   const URL_TEXT_RE = /\b((?:https?:\/\/)?(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:\/[^\s<>"')\]]*)?)/gi;
   const X_HOST_RE = /(^|\.)x\.com$|(^|\.)twitter\.com$/i;
   const MEDIA_HOST_RE = /(^|\.)pbs\.twimg\.com$/i;
@@ -192,6 +194,42 @@
     ]).replace(/^@+/, "");
   }
 
+  function getAuthorName(tweetNode) {
+    const userResult = getFirstExistingObject([
+      tweetNode?.core?.user_results?.result,
+      tweetNode?.author?.result,
+      tweetNode?.author_results?.result
+    ]);
+
+    return getFirstString([
+      userResult?.legacy?.name,
+      userResult?.core?.name,
+      userResult?.name
+    ]);
+  }
+
+  function getTweetMedia(tweetNode) {
+    const media = [];
+    const seen = new Set();
+    const pools = [
+      tweetNode?.legacy?.extended_entities?.media,
+      tweetNode?.legacy?.entities?.media
+    ];
+
+    for (const pool of pools) {
+      if (!Array.isArray(pool)) continue;
+      for (const item of pool) {
+        const url = cleanText(item?.media_url_https || item?.media_url || "");
+        if (!url || seen.has(url)) continue;
+        seen.add(url);
+        media.push(url);
+        if (media.length >= MAX_MEDIA_PER_TWEET) return media;
+      }
+    }
+
+    return media;
+  }
+
   function getTweetLinks(tweetNode, text) {
     const urls = [];
     const legacyEntities = tweetNode?.legacy?.entities;
@@ -264,6 +302,9 @@
         node?.legacy?.conversation_id
       ]),
       authorUsername,
+      authorName: getAuthorName(node),
+      createdAt: getFirstString([node?.legacy?.created_at]),
+      media: getTweetMedia(node),
       text,
       links,
       sortIndex: order,
@@ -327,7 +368,7 @@
     );
   }
 
-  function emitEntries(entries, url) {
+  function emitEntries(entries, url, timeline) {
     if (!entries.length) {
       return;
     }
@@ -337,9 +378,14 @@
         source: SOURCE,
         url: cleanText(url),
         ts: Date.now(),
+        timeline: timeline || "",
         entries
       }
     }));
+  }
+
+  function isBookmarksTimelineUrl(url) {
+    return /\/graphql\/[^/]+\/Bookmarks/i.test(String(url || ""));
   }
 
   function inspectBody(bodyText, url) {
@@ -349,7 +395,17 @@
 
     try {
       const payload = JSON.parse(bodyText);
-      const entries = collectTweetEntries(payload).filter(
+      const allEntries = collectTweetEntries(payload);
+
+      // Bookmarks timeline: every entry IS a bookmark — emit unfiltered so the
+      // scanner can use the network payload (full text, expanded t.co links,
+      // author, media) as the primary capture source instead of DOM scraping.
+      if (isBookmarksTimelineUrl(url)) {
+        emitEntries(allEntries, url, "bookmarks");
+        return;
+      }
+
+      const entries = allEntries.filter(
         (entry) => entry.inReplyToTweetId || entry.links.length > 0
       );
       emitEntries(entries, url);
