@@ -1180,6 +1180,13 @@ async function prepareBookmarksForDelivery(bookmarks, context = {}) {
       continue;
     }
 
+    // Captura network-first: los links vienen del payload GraphQL con
+    // expanded_url (t.co ya resuelto). Ni tab de detalle ni resolver: directo.
+    if (bookmark.capture === "network") {
+      prepared.push(bookmark);
+      continue;
+    }
+
     let firstCommentLinksRaw = uniqueUrls(bookmark.first_comment_links);
 
     if (firstCommentLinksRaw.length === 0 && shouldAttemptFirstCommentLookup(bookmark)) {

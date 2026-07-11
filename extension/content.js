@@ -2251,6 +2251,13 @@ async function importBookmarkScannerPending(range = {}) {
     };
   }
 
+  // Los items DOM pagan prepare (tab de detalle ~15s c/u); los network no.
+  const domItems = items.filter((item) => item?.capture !== "network").length;
+  const importTimeoutMs = Math.max(
+    BOOKMARK_SCANNER_IMPORT_TIMEOUT_MS,
+    120_000 + domItems * 20_000
+  );
+
   const response = await sendRuntimeMessage({
     type: "BOOKMARK_SCANNER_IMPORT_BATCH",
     payload: {
@@ -2259,7 +2266,7 @@ async function importBookmarkScannerPending(range = {}) {
     }
   }, {
     label: "BOOKMARK_SCANNER_IMPORT_BATCH",
-    timeoutMs: BOOKMARK_SCANNER_IMPORT_TIMEOUT_MS,
+    timeoutMs: importTimeoutMs,
     maxAttempts: 1
   });
 
