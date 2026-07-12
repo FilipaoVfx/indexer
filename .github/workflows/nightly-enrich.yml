@@ -1,0 +1,43 @@
+name: Nightly enrich
+
+# Enriquecimiento diario del índice (los procesos que antes se corrían a mano):
+#  1) classify-repo-readmes: clasifica READMEs nuevos/actualizados
+#     (repo_classifications: categoría, capacidades, stack, madurez)
+#  2) backfill-github-repositories: metadata de GitHub (stars, lenguaje,
+#     topics) para github_repositories. Si la migración sql/014 no está
+#     aplicada, degrada con un warning y no rompe el job.
+# Disparo manual: Actions -> Nightly enrich -> Run workflow.
+
+on:
+  schedule:
+    - cron: "0 5 * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: nightly-enrich
+  cancel-in-progress: false
+
+jobs:
+  enrich:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      # config.js lee GITHUB_TOKEN para la API de GitHub (rate limit 5000/h)
+      GITHUB_TOKEN: ${{ secrets.README_FETCH_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies (workspace)
+        run: npm ci --omit=dev
+
+      - name: Classify repo READMEs
+        run: node backend/src/classify-repo-readmes.js
+
+      - name: Backfill GitHub repo metadata
+        run: node backend/src/backfill-github-repositories.js --only-missing
