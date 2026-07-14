@@ -24,6 +24,8 @@ jobs:
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      # Clasificador v2 (LLM); sin la key cae al keyword-matcher v1
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       # config.js lee GITHUB_TOKEN para la API de GitHub (rate limit 5000/h)
       GITHUB_TOKEN: ${{ secrets.README_FETCH_TOKEN }}
     steps:

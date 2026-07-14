@@ -13,6 +13,10 @@ import {
   splitGithubRepoSlug
 } from "./github-readmes.js";
 import {
+  classifyRepoReadmeSmart,
+  activeClassifierVersion,
+} from "./repo-classifier-llm.js";
+import {
   classifyRepoReadme,
   mapRepoClassificationRow,
   REPO_CLASSIFIER_VERSION
@@ -1341,7 +1345,7 @@ export class BookmarkStore {
   shouldRefreshRepoClassification(readmeRow, classificationRow, force = false) {
     if (force) return true;
     if (!classificationRow) return true;
-    if (classificationRow.classifier_version !== REPO_CLASSIFIER_VERSION) {
+    if (classificationRow.classifier_version !== activeClassifierVersion()) {
       return true;
     }
 
@@ -1444,10 +1448,17 @@ export class BookmarkStore {
       const classificationRows = [];
       const evidenceRows = [];
 
-      for (const row of hydratedRows) {
-        const result = classifyRepoReadme(row, { now });
-        classificationRows.push(result.classification);
-        evidenceRows.push(...result.evidenceRows);
+      // LLM con concurrencia acotada (fallback interno a keyword v1).
+      const CLASSIFY_CONCURRENCY = 5;
+      for (let ci = 0; ci < hydratedRows.length; ci += CLASSIFY_CONCURRENCY) {
+        const slice = hydratedRows.slice(ci, ci + CLASSIFY_CONCURRENCY);
+        const results = await Promise.all(
+          slice.map((row) => classifyRepoReadmeSmart(row, { now }))
+        );
+        for (const result of results) {
+          classificationRows.push(result.classification);
+          evidenceRows.push(...result.evidenceRows);
+        }
       }
 
       for (const chunk of chunkArray(classificationRows, 100)) {
