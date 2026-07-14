@@ -11,7 +11,7 @@
 
 import { classifyRepoReadme, REPO_CLASSIFIER_VERSION } from "./repo-classifier.js";
 
-export const REPO_CLASSIFIER_LLM_VERSION = "repo_classifier_v2_llm";
+export const REPO_CLASSIFIER_LLM_VERSION = "repo_classifier_v3_llm";
 
 const LLM_MODEL = process.env.CLASSIFIER_MODEL || "gpt-4o-mini";
 const MAX_README_CHARS = 4000;
@@ -25,6 +25,7 @@ const CATEGORIES = {
   dev_tool: "developer tooling: CLIs, editors, terminals, testing, build, debugging",
   ui_component: "UI libraries, design systems, animations, frontend components",
   media: "video/audio/image processing, generation, transcription, OCR, rendering",
+  three_d: "3D graphics, engines, modeling, WebGL/three.js, gaussian splatting, game rendering, CAD, AR/VR",
   data_pipeline: "scraping, ETL, data extraction, enrichment, transformation",
   automation: "workflow automation, schedulers, bots, integration platforms",
   knowledge_docs: "note-taking, documentation, bookmarks, knowledge management, education",
