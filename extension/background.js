@@ -15,6 +15,9 @@ const SCANNER_IMPORT_BATCH_SIZE = 40;
 const SCANNER_IDS_FETCH_TIMEOUT_MS = 30_000;
 const SCANNER_IMPORT_CHUNK_TIMEOUT_MS = 90_000;
 const DETAIL_LOOKUP_TIMEOUT_MS = 16_000;
+const POST_BATCH_TIMEOUT_MS = 60_000;
+const FAILED_QUEUE_STORAGE_KEY = "failed_queue_v1";
+const FAILED_QUEUE_MAX = 50;
 const DETAIL_LOOKUP_MESSAGE_DELAY_MS = 900;
 const DETAIL_LOOKUP_MESSAGE_MAX_ATTEMPTS = 6;
 const FIRST_COMMENT_LOOKUP_CACHE_MAX = 200;
@@ -1301,9 +1304,16 @@ async function postBatch(queueItem) {
     emit: true
   });
 
-  const preparedBookmarks = await prepareBookmarksForDelivery(queueItem.bookmarks, {
-    traceId: queueItem.traceId
-  });
+  // Prepara UNA vez por item de cola: los retries no re-pagan los tabs de
+  // detalle de los posts densos (~18s c/u) ni la resolución de shorteners.
+  let preparedBookmarks = queueItem.preparedBookmarks;
+  if (!Array.isArray(preparedBookmarks)) {
+    preparedBookmarks = await prepareBookmarksForDelivery(queueItem.bookmarks, {
+      traceId: queueItem.traceId
+    });
+    queueItem.preparedBookmarks = preparedBookmarks;
+    await persistQueue();
+  }
 
   reportBackgroundStage("bg_post_batch_prepared", {
     traceId: cleanText(queueItem.traceId || ""),
@@ -1319,13 +1329,23 @@ async function postBatch(queueItem) {
     bookmarks: preparedBookmarks
   };
 
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(payload)
-  });
+  // Timeout duro: un backend colgado (cold start, red) no puede congelar el
+  // drenaje de la cola — el AbortController corta y el retry/backoff decide.
+  const controller = new AbortController();
+  const fetchTimer = setTimeout(() => controller.abort(), POST_BATCH_TIMEOUT_MS);
+  let response;
+  try {
+    response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal
+    });
+  } finally {
+    clearTimeout(fetchTimer);
+  }
 
   if (!response.ok) {
     const errorText = await response.text();
@@ -1435,6 +1455,12 @@ async function flushQueue() {
               syncId: current.syncId,
               error: current.lastError
             });
+            // Dead-letter: fuera de la cola activa para no bloquear al resto
+            // (head-of-line). Queda en failed_queue_v1, recuperable desde el
+            // popup con "Reintentar fallidos".
+            state.queue.shift();
+            await persistQueue();
+            await appendFailedQueueItem(current);
             safeSendMessage({
               type: "SYNC_ERROR",
               payload: {
@@ -1470,12 +1496,59 @@ async function flushQueue() {
       }
 
       if (!delivered) {
-        break;
+        // Si el item fue movido a dead-letter ya no está en queue[0]:
+        // seguir drenando los demás. Si sigue ahí (fallo transitorio sin
+        // agotar retries), parar y esperar el próximo flush.
+        if (state.queue[0] === current) {
+          break;
+        }
+        continue;
       }
     }
   } finally {
     state.isFlushing = false;
   }
+}
+
+// ─── Dead-letter queue ────────────────────────────────────────────────
+
+async function appendFailedQueueItem(item) {
+  try {
+    const current = await chrome.storage.local.get([FAILED_QUEUE_STORAGE_KEY]);
+    const failed = Array.isArray(current[FAILED_QUEUE_STORAGE_KEY])
+      ? current[FAILED_QUEUE_STORAGE_KEY]
+      : [];
+    // preparedBookmarks puede ser pesado y quedar obsoleto: se re-prepara al reintentar.
+    const { preparedBookmarks: _drop, ...slim } = item || {};
+    failed.push({ ...slim, failedAt: new Date().toISOString() });
+    await chrome.storage.local.set({
+      [FAILED_QUEUE_STORAGE_KEY]: failed.slice(-FAILED_QUEUE_MAX)
+    });
+  } catch (error) {
+    reportAsyncError("append_failed_queue", error);
+  }
+}
+
+async function retryFailedQueueItems() {
+  const current = await chrome.storage.local.get([FAILED_QUEUE_STORAGE_KEY]);
+  const failed = Array.isArray(current[FAILED_QUEUE_STORAGE_KEY])
+    ? current[FAILED_QUEUE_STORAGE_KEY]
+    : [];
+  if (failed.length === 0) {
+    return { requeued: 0, pendingQueue: state.queue.length };
+  }
+
+  await loadQueueState();
+  for (const item of failed) {
+    item.attempts = 0;
+    delete item.lastError;
+    delete item.failedAt;
+    state.queue.push(item);
+  }
+  await persistQueue();
+  await chrome.storage.local.set({ [FAILED_QUEUE_STORAGE_KEY]: [] });
+  scheduleFlushQueue("retry_failed");
+  return { requeued: failed.length, pendingQueue: state.queue.length };
 }
 
 function scheduleFlushQueue(reason) {
@@ -1588,6 +1661,23 @@ chrome.runtime.onInstalled.addListener(() => {
   bootstrapQueue("onInstalled");
 });
 
+// MV3: el service worker muere a los ~30s idle; sin un reloj nadie drena la
+// cola que quedó pendiente. Alarm cada minuto: si hay cola, flush.
+try {
+  chrome.alarms.create("queue-drain", { periodInMinutes: 1 });
+  chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm?.name !== "queue-drain") return;
+    void (async () => {
+      await loadQueueState();
+      if (state.queue.length > 0) {
+        scheduleFlushQueue("alarm");
+      }
+    })().catch((error) => reportAsyncError("alarm_drain", error));
+  });
+} catch (error) {
+  reportAsyncError("alarm_setup", error);
+}
+
 chrome.runtime.onStartup.addListener(() => {
   bootstrapQueue("onStartup");
 });
@@ -1639,6 +1729,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         message?.payload?.source
       );
       sendResponse(result);
+      return;
+    }
+
+    if (message.type === "RETRY_FAILED") {
+      const result = await retryFailedQueueItems();
+      sendResponse({ ok: true, ...result });
       return;
     }
 

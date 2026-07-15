@@ -2,6 +2,7 @@ const saveButton = document.getElementById("saveButton");
 const scrapeButton = document.getElementById("scrapeButton");
 const clearActivityButton = document.getElementById("clearActivityButton");
 const scannerClearButton = document.getElementById("scannerClearButton");
+const retryFailedButton = document.getElementById("retryFailedButton");
 const scannerStatusElement = document.getElementById("scannerStatus");
 const scannerScannedElement = document.getElementById("scannerScanned");
 const scannerSavedElement = document.getElementById("scannerSaved");
@@ -259,6 +260,13 @@ scannerClearButton.addEventListener("click", () => {
 
 clearActivityButton.addEventListener("click", () => {
   logElement.textContent = "";
+});
+
+retryFailedButton.addEventListener("click", () => {
+  void (async () => {
+    const res = await sendRuntimeMessage({ type: "RETRY_FAILED" });
+    appendLog(`Fallidos reencolados: ${res?.requeued ?? 0}. En cola: ${res?.pendingQueue ?? "?"}`);
+  })().catch((error) => appendLog(`Retry error: ${toErrorMessage(error)}`));
 });
 
 void loadSettings().catch((error) => appendLog(`Error init: ${toErrorMessage(error)}`));
