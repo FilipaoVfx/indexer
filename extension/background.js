@@ -1171,28 +1171,76 @@ async function importBookmarkScannerPending(items, source = "x_bookmarks_dom_sca
 
 async function prepareBookmarksForDelivery(bookmarks, context = {}) {
   const items = Array.isArray(bookmarks) ? bookmarks : [];
-  const prepared = [];
   const traceId = cleanText(context.traceId || "");
 
-  for (const bookmark of items) {
+  // Pasada 1: decidir qué items necesitan el lookup del primer comentario.
+  // Captura network: t.co ya llega expandido (GraphQL), así que solo pagan el
+  // tab de detalle los posts "densos" cuyo texto manda al recurso en los
+  // comentarios ("REPOOO👇", "link below", ...). Captura DOM: criterio igual.
+  const tasks = items.map((bookmark) => ({
+    bookmark,
+    fcl: [],
+    needsLookup:
+      Boolean(bookmark && typeof bookmark === "object") &&
+      uniqueUrls(bookmark.first_comment_links).length === 0 &&
+      shouldAttemptFirstCommentLookup(bookmark)
+  }));
+
+  // Pasada 2: lookups con concurrencia 2 (antes serial, ~18s por post denso;
+  // un lote de densos dejaba el import "colgado" hasta el timeout).
+  const LOOKUP_CONCURRENCY = 2;
+  const lookupQueue = tasks.filter((task) => task.needsLookup);
+  if (lookupQueue.length > 0) {
+    reportBackgroundStage("bg_first_comment_lookup_queue", {
+      traceId,
+      pending: lookupQueue.length,
+      concurrency: LOOKUP_CONCURRENCY
+    }, { emit: true });
+
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < lookupQueue.length) {
+        const task = lookupQueue[cursor];
+        cursor += 1;
+        try {
+          task.fcl = await extractFirstCommentLinksViaDetailTab(task.bookmark, { traceId });
+        } catch (_error) {
+          task.fcl = [];
+        }
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(LOOKUP_CONCURRENCY, lookupQueue.length) }, worker)
+    );
+  }
+
+  // Pasada 3: ensamblar. resolveUrls completo solo para captura DOM; para
+  // network solo se resuelven los first-comment links recién descubiertos.
+  const prepared = [];
+  for (const task of tasks) {
+    const bookmark = task.bookmark;
     if (!bookmark || typeof bookmark !== "object") {
       prepared.push(bookmark);
       continue;
     }
 
-    // Captura network-first: los links vienen del payload GraphQL con
-    // expanded_url (t.co ya resuelto). Ni tab de detalle ni resolver: directo.
+    const firstCommentLinksRaw = uniqueUrls([
+      ...(Array.isArray(bookmark.first_comment_links) ? bookmark.first_comment_links : []),
+      ...(Array.isArray(task.fcl) ? task.fcl : [])
+    ]);
+
     if (bookmark.capture === "network") {
-      prepared.push(bookmark);
+      let firstCommentLinks = firstCommentLinksRaw;
+      if (firstCommentLinksRaw.length > 0) {
+        try {
+          const resolvedFcl = await resolveUrls(firstCommentLinksRaw);
+          firstCommentLinks = uniqueUrls(resolvedFcl.urls);
+        } catch (_error) {
+          // se quedan las urls sin resolver: mejor eso que perderlas
+        }
+      }
+      prepared.push({ ...bookmark, first_comment_links: firstCommentLinks });
       continue;
-    }
-
-    let firstCommentLinksRaw = uniqueUrls(bookmark.first_comment_links);
-
-    if (firstCommentLinksRaw.length === 0 && shouldAttemptFirstCommentLookup(bookmark)) {
-      firstCommentLinksRaw = await extractFirstCommentLinksViaDetailTab(bookmark, {
-        traceId
-      });
     }
 
     const rawLinks = uniqueUrls([
