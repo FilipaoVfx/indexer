@@ -2839,7 +2839,9 @@ async function handleBookmarkSave(event, source) {
     });
   } catch (error) {
     const formattedError = formatRuntimeError(error);
-    logWarn("enqueue failed", {
+    // Mensaje inline: la página de Errors de Chrome/Brave solo muestra el
+    // primer argumento como string — un objeto queda como [object Object].
+    logWarn(`enqueue failed: ${formattedError}`, {
       traceId,
       tweetId: tweet.tweet_id,
       source,

@@ -3,6 +3,7 @@ const scrapeButton = document.getElementById("scrapeButton");
 const clearActivityButton = document.getElementById("clearActivityButton");
 const scannerClearButton = document.getElementById("scannerClearButton");
 const retryFailedButton = document.getElementById("retryFailedButton");
+const diagButton = document.getElementById("diagButton");
 const scannerStatusElement = document.getElementById("scannerStatus");
 const scannerScannedElement = document.getElementById("scannerScanned");
 const scannerSavedElement = document.getElementById("scannerSaved");
@@ -242,15 +243,19 @@ chrome.runtime.onMessage.addListener((message) => {
     return;
   }
   // Rastro de depuración del background (chunks de import, prepare, errores).
+  // SYNC_ERROR pasa siempre: ocultar los fallos de envío (bg_flush_*,
+  // bg_post_batch_*) dejaba la cola atascada sin pista visible.
   if (message.type === "SYNC_PROGRESS" || message.type === "SYNC_ERROR") {
     const p = message.payload || {};
-    if (!p.stage || !/^bg_scanner_/.test(p.stage)) return;
+    const isError = message.type === "SYNC_ERROR";
+    if (!p.stage) return;
+    if (!isError && !/^bg_(scanner_|flush_|post_batch_)/.test(p.stage)) return;
     const detail = Object.entries(p)
       .filter(([k]) => !["stage", "debug"].includes(k))
       .map(([k, v]) => `${k}=${v}`)
       .join(" ")
       .slice(0, 220);
-    appendLog(`${p.stage}: ${detail}`);
+    appendLog(`${isError ? "⚠ " : ""}${p.stage}: ${detail}`);
   }
 });
 
@@ -275,6 +280,34 @@ retryFailedButton.addEventListener("click", () => {
     const res = await sendRuntimeMessage({ type: "RETRY_FAILED" });
     appendLog(`Fallidos reencolados: ${res?.requeued ?? 0}. En cola: ${res?.pendingQueue ?? "?"}`);
   })().catch((error) => appendLog(`Retry error: ${toErrorMessage(error)}`));
+});
+
+diagButton.addEventListener("click", () => {
+  void (async () => {
+    const d = await sendRuntimeMessage({ type: "DIAGNOSTICS" });
+    if (!d || !d.ok) {
+      throw new Error(d && d.error ? d.error : "diagnostics_failed");
+    }
+    const mb = (bytes) => (bytes >= 0 ? `${(bytes / 1024 / 1024).toFixed(2)}MB` : "?");
+    appendLog(
+      [
+        `── Diagnóstico ──`,
+        `backend: ${d.apiBaseUrl}`,
+        `user: ${d.userId} | apiKey: ${d.apiKeyConfigured ? "configurada" : "SIN CONFIGURAR"}`,
+        `storage: ${mb(d.storageBytesInUse)} / ${mb(d.storageQuotaBytes ?? -1)}`,
+        `cola: ${d.pendingQueue} (flushing: ${d.isFlushing}) | fallidos: ${d.failedQueue}`,
+        `contadores: capturados=${d.counters?.captured ?? 0} enviados=${d.counters?.delivered ?? 0} fallidos=${d.counters?.failed ?? 0}`,
+        d.queueHead
+          ? `head: ${d.queueHead.bookmarkCount} bookmarks, intentos=${d.queueHead.attempts}, encolado=${d.queueHead.queuedAt}\n  lastError: ${d.queueHead.lastError || "(ninguno)"}`
+          : `head: (cola vacía)`,
+        d.failedLast
+          ? `último fallido: ${d.failedLast.failedAt}\n  lastError: ${d.failedLast.lastError || "?"}`
+          : null,
+      ]
+        .filter(Boolean)
+        .join("\n")
+    );
+  })().catch((error) => appendLog(`Diagnóstico error: ${toErrorMessage(error)}`));
 });
 
 void loadSettings().catch((error) => appendLog(`Error init: ${toErrorMessage(error)}`));

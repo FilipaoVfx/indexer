@@ -322,9 +322,32 @@ async function loadQueueState() {
 }
 
 async function persistQueue() {
-  await chrome.storage.local.set({
-    [QUEUE_STORAGE_KEY]: state.queue
-  });
+  // preparedBookmarks es pesado (links resueltos, media) y regenerable: se
+  // persiste la cola sin él para no acercarse a la quota de chrome.storage
+  // (10MB, sin unlimitedStorage) y abaratar cada set(). En memoria queda
+  // cacheado para los retries dentro de la misma vida del service worker.
+  const slimQueue = state.queue.map(
+    ({ preparedBookmarks: _drop, ...item }) => item
+  );
+
+  try {
+    await chrome.storage.local.set({
+      [QUEUE_STORAGE_KEY]: slimQueue
+    });
+  } catch (error) {
+    if (!/quota/i.test(extractErrorMessage(error))) {
+      throw error;
+    }
+    // Quota llena: sacrificar dead-letter y actividad (recuperables) antes
+    // que perder la cola activa.
+    await chrome.storage.local.remove([FAILED_QUEUE_STORAGE_KEY, ACTIVITY_STORAGE_KEY]);
+    reportBackgroundStage("bg_storage_quota_recovered", {
+      queueLength: slimQueue.length
+    }, { level: "warn", emit: true });
+    await chrome.storage.local.set({
+      [QUEUE_STORAGE_KEY]: slimQueue
+    });
+  }
 }
 
 function updateBadge() {
@@ -2015,6 +2038,59 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       sendResponse({
         ok: true,
         ...updatedSettings
+      });
+      return;
+    }
+
+    if (message.type === "DIAGNOSTICS") {
+      const settings = await getSettings();
+      const bytesInUse = await new Promise((resolve) => {
+        try {
+          chrome.storage.local.getBytesInUse(null, (bytes) => {
+            resolve(chrome.runtime.lastError ? -1 : bytes);
+          });
+        } catch (_error) {
+          resolve(-1);
+        }
+      });
+      const stored = await chrome.storage.local.get([FAILED_QUEUE_STORAGE_KEY]);
+      const failed = Array.isArray(stored[FAILED_QUEUE_STORAGE_KEY])
+        ? stored[FAILED_QUEUE_STORAGE_KEY]
+        : [];
+      const head = state.queue[0] || null;
+      const lastFailed = failed[failed.length - 1] || null;
+
+      sendResponse({
+        ok: true,
+        apiBaseUrl: settings.apiBaseUrl,
+        userId: settings.userId,
+        apiKeyConfigured: Boolean(settings.apiKey),
+        storageBytesInUse: bytesInUse,
+        storageQuotaBytes: chrome.storage.local.QUOTA_BYTES ?? null,
+        pendingQueue: state.queue.length,
+        isFlushing: state.isFlushing,
+        counters: { ...state.counters },
+        queueHead: head
+          ? {
+              id: head.id || null,
+              syncId: head.syncId || null,
+              batchIndex: head.batchIndex ?? null,
+              bookmarkCount: Array.isArray(head.bookmarks) ? head.bookmarks.length : 0,
+              attempts: Number(head.attempts) || 0,
+              queuedAt: head.queuedAt || null,
+              lastError: head.lastError || null,
+              prepared: Array.isArray(head.preparedBookmarks)
+            }
+          : null,
+        failedQueue: failed.length,
+        failedLast: lastFailed
+          ? {
+              id: lastFailed.id || null,
+              failedAt: lastFailed.failedAt || null,
+              attempts: Number(lastFailed.attempts) || 0,
+              lastError: lastFailed.lastError || null
+            }
+          : null
       });
       return;
     }
