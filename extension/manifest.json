@@ -3,7 +3,7 @@
   "name": "X Bookmarks Indexer MVP",
   "description": "Scrape de bookmarks en X + ingesta por lotes en backend propio.",
   "version": "0.4.4",
-  "version_name": "0.4.2-fast-import",
+  "version_name": "0.4.4-reply-lookup-hardening",
   "permissions": ["storage", "tabs", "activeTab", "scripting", "alarms"],
   "host_permissions": [
     "*://*/*"
