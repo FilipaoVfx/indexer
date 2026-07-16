@@ -19,7 +19,7 @@ const POST_BATCH_TIMEOUT_MS = 60_000;
 const FAILED_QUEUE_STORAGE_KEY = "failed_queue_v1";
 const FAILED_QUEUE_MAX = 50;
 const DETAIL_LOOKUP_MESSAGE_DELAY_MS = 900;
-const DETAIL_LOOKUP_MESSAGE_MAX_ATTEMPTS = 6;
+const DETAIL_LOOKUP_MESSAGE_MAX_ATTEMPTS = 8;
 const FIRST_COMMENT_LOOKUP_CACHE_MAX = 200;
 const SHORTENER_HOST_RE = /^(t\.co|bit\.ly|buff\.ly|ow\.ly|tinyurl\.com|goo\.gl|dlvr\.it|lnkd\.in|is\.gd|tr\.im|cutt\.ly|rebrand\.ly|shorturl\.at)$/i;
 const FIRST_COMMENT_CUE_RE = /\b((?:1st|first)\s+(?:comment|reply)|primer\s+comentario|primera\s+respuesta|en\s+comentarios|en\s+las?\s+respuestas|in\s+the\s+comments|in\s+replies|reply\s+below|comments?\s+below)\b/i;
@@ -460,8 +460,13 @@ function trimLookupCache(cache, maxSize) {
 
 function cacheFirstCommentLinks(cacheKey, links) {
   const normalizedLinks = uniqueUrls(links);
-  firstCommentLookupCache.set(cacheKey, normalizedLinks);
-  trimLookupCache(firstCommentLookupCache, FIRST_COMMENT_LOOKUP_CACHE_MAX);
+  // Solo cachear éxitos: un lookup vacío suele ser timing (tab background aún
+  // hidratando, reply recién publicado). Cachear [] envenenaba el tweet para
+  // toda la sesión del service worker.
+  if (normalizedLinks.length > 0) {
+    firstCommentLookupCache.set(cacheKey, normalizedLinks);
+    trimLookupCache(firstCommentLookupCache, FIRST_COMMENT_LOOKUP_CACHE_MAX);
+  }
   return normalizedLinks.slice();
 }
 

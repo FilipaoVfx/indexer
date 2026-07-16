@@ -7,7 +7,7 @@ const AUTO_CAPTURE_CONFIG = {
   runtimeMaxAttempts: 4,
   runtimeResponseTimeoutMs: 6_000,
   detailLookupPollMs: 500,
-  detailLookupMaxAttempts: 8,
+  detailLookupMaxAttempts: 10,
   detailLookupScrollStepPx: 960
 };
 
@@ -17,9 +17,9 @@ const PAGE_BRIDGE_SOURCE = "x-indexer-page-bridge";
 const PAGE_BRIDGE_SCRIPT_ID = "x-indexer-page-bridge-script";
 const NETWORK_REPLY_CACHE_MAX = 200;
 const NETWORK_REPLY_CACHE_PER_TWEET_MAX = 24;
-const NETWORK_REPLY_WAIT_POLL_MS = 150;
-const NETWORK_REPLY_INITIAL_WAIT_MS = 1200;
-const NETWORK_REPLY_RECHECK_WAIT_MS = 250;
+const NETWORK_REPLY_WAIT_POLL_MS = 250;
+const NETWORK_REPLY_INITIAL_WAIT_MS = 5000;
+const NETWORK_REPLY_RECHECK_WAIT_MS = 800;
 const BOOKMARK_SCANNER_SOURCE = "x_bookmarks_dom_scan";
 const BOOKMARK_SCANNER_SCAN_DEBOUNCE_MS = 500;
 const BOOKMARK_SCANNER_TEXT_LIMIT = 12000;
