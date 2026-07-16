@@ -512,6 +512,75 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // Candidatos para el re-lookup diferido: posts "densos" (cue tipo
+    // "REPOOO👇") guardados sin link de GitHub porque el reply no existía al
+    // capturar o el tab de detalle falló. La extensión los consume, re-corre
+    // el lookup del primer comentario y parchea vía PATCH.
+    if (req.method === "GET" && routePath === "/api/bookmarks/relookup-candidates") {
+      const userId = sanitizeUserId(requestUrl.searchParams.get("user_id") || "");
+      const limit = clampNumber(requestUrl.searchParams.get("limit"), 50, 1, 200);
+      const scanLimit = clampNumber(
+        requestUrl.searchParams.get("scan_limit"),
+        4000,
+        100,
+        20_000
+      );
+
+      const result = await store.listFirstCommentRelookupCandidates({
+        userId: userId || null,
+        limit,
+        scanLimit
+      });
+
+      sendJson(res, 200, {
+        ok: true,
+        user_id: userId || null,
+        ...result
+      });
+      return;
+    }
+
+    if (req.method === "PATCH" && routePath === "/api/bookmarks/first-comment-links") {
+      enforceWriteAccess(req);
+
+      const body = await parseJsonBody(req);
+      const traceId = sanitizeTraceId(body.traceId) || createServerTraceId("fclpatch");
+      req.traceId = traceId;
+
+      const userId = sanitizeUserId(body.user_id) || "local-user";
+      const tweetId = String(body.tweet_id || "").trim();
+      if (!/^\d+$/.test(tweetId)) {
+        throw createHttpError(
+          400,
+          "invalid_tweet_id",
+          "Field tweet_id must be a numeric tweet id"
+        );
+      }
+
+      const links = (Array.isArray(body.first_comment_links) ? body.first_comment_links : [])
+        .filter((value) => typeof value === "string" && /^https?:\/\//i.test(value.trim()));
+
+      if (links.length === 0) {
+        throw createHttpError(
+          400,
+          "first_comment_links_required",
+          "Field first_comment_links must contain at least one http(s) URL"
+        );
+      }
+
+      const result = await store.updateBookmarkFirstCommentLinks({ userId, tweetId, links });
+      if (!result) {
+        throw createHttpError(404, "bookmark_not_found", "Bookmark not found");
+      }
+
+      sendJson(res, 200, {
+        ok: true,
+        trace_id: traceId,
+        ...result
+      });
+      return;
+    }
+
     if (req.method === "GET" && routePath === "/api/bookmarks/search") {
       const query = requestUrl.searchParams.get("q") || "";
       const author = requestUrl.searchParams.get("author") || "";

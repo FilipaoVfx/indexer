@@ -347,6 +347,45 @@ function stripFirstCommentLinks(bookmarks = []) {
   return bookmarks.map(({ first_comment_links: _ignored, ...bookmark }) => bookmark);
 }
 
+// ─── Re-lookup diferido de posts "densos" ─────────────────────────────
+// Un post "denso" manda al recurso al primer comentario ("REPOOO👇",
+// "link below"). Si el reply no existía al capturar, o el tab de detalle
+// falló, la fila queda sin link de GitHub y el dedupe de la ingesta impide
+// reintentarla. Estos criterios espejan shouldAttemptFirstCommentLookup de
+// la extensión; la recuperación la ejecuta la extensión (única con sesión
+// de x.com) vía PATCH /api/bookmarks/first-comment-links.
+const DENSE_FIRST_COMMENT_RE = /\b((?:1st|first)\s+(?:comment|reply)|primer\s+comentario|primera\s+respuesta|en\s+comentarios|en\s+las?\s+respuestas|in\s+the\s+comments|in\s+replies|reply\s+below|comments?\s+below)\b/i;
+const DENSE_DOWNWARD_RE = /(?:\u{1F447}|⬇|↓|\bbelow\b|\babajo\b|\bdown\b)/iu;
+const DENSE_RESOURCE_RE = /\b(rep(?:o+|ository)|github|links?|enlaces?|codigo|code|source|demo|gist|tutorial)\b/i;
+const GITHUB_LINK_RE = /(?:^|\/\/)(?:www\.)?github\.com\//i;
+
+function normalizeDenseText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "");
+}
+
+function isDenseBookmarkMissingRepoLink(row) {
+  const text = normalizeDenseText(row?.text_content);
+  if (!text) {
+    return false;
+  }
+
+  const cued =
+    DENSE_FIRST_COMMENT_RE.test(text) ||
+    (DENSE_DOWNWARD_RE.test(text) && DENSE_RESOURCE_RE.test(text));
+  if (!cued) {
+    return false;
+  }
+
+  const pools = [
+    ...(Array.isArray(row?.links) ? row.links : []),
+    ...(Array.isArray(row?.first_comment_links) ? row.first_comment_links : [])
+  ];
+  return !pools.some((url) => GITHUB_LINK_RE.test(String(url || "")));
+}
+
 function normalizeContextLinkRows(bookmarks = [], receivedAt) {
   const rows = [];
 
@@ -1762,6 +1801,154 @@ export class BookmarkStore {
     }
 
     return expanded;
+  }
+
+  // Candidatos para el re-lookup diferido: posts densos ya guardados sin
+  // link de GitHub. Pagina el corpus y filtra en memoria (los criterios son
+  // regex sobre text_content + arrays, inviables en PostgREST directo).
+  async listFirstCommentRelookupCandidates({ userId, limit = 50, scanLimit = 4000 }) {
+    await this.init();
+
+    const pageSize = 500;
+    const items = [];
+    let scanned = 0;
+
+    for (let offset = 0; offset < scanLimit && items.length < limit; offset += pageSize) {
+      let query = this.supabase
+        .from("bookmarks")
+        .select(
+          "id,user_id,tweet_id,text_content,author_username,source_url,links,first_comment_links,created_at"
+        )
+        .order("created_at", { ascending: false, nullsFirst: false })
+        .range(offset, offset + pageSize - 1);
+
+      if (userId) {
+        query = query.eq("user_id", userId);
+      }
+
+      const { data, error } = await query;
+      if (error) {
+        throw new Error(
+          `Failed to list relookup candidates: ${extractDbErrorMessage(error)}`
+        );
+      }
+
+      const rows = data || [];
+      scanned += rows.length;
+
+      for (const row of rows) {
+        if (items.length >= limit) {
+          break;
+        }
+        if (!/^\d+$/.test(String(row?.tweet_id || ""))) {
+          continue;
+        }
+        if (!isDenseBookmarkMissingRepoLink(row)) {
+          continue;
+        }
+
+        items.push({
+          id: row.id,
+          user_id: row.user_id,
+          tweet_id: row.tweet_id,
+          text_content: row.text_content || "",
+          author_username: row.author_username || "",
+          source_url: row.source_url || "",
+          links: Array.isArray(row.links) ? row.links : [],
+          first_comment_links: Array.isArray(row.first_comment_links)
+            ? row.first_comment_links
+            : [],
+          created_at: row.created_at || null
+        });
+      }
+
+      if (rows.length < pageSize) {
+        break;
+      }
+    }
+
+    return { total_scanned: scanned, items };
+  }
+
+  // Merge de first_comment_links sobre una fila existente + re-disparo del
+  // post-ingest (context links + bookmark_github_repos + goal index): la
+  // fila ya existía, así que la ingesta normal nunca la reprocesa por dedupe.
+  async updateBookmarkFirstCommentLinks({ userId, tweetId, links }) {
+    await this.init();
+
+    if (!this.capabilities.bookmarksFirstCommentLinks) {
+      throw new Error(
+        "Cannot update first_comment_links: column missing in Supabase schema. " +
+          "Apply backend/sql/004_search_bookmarks_scalable.sql or backend/sql/005_bookmark_context_links.sql."
+      );
+    }
+
+    const bookmarkId = `${userId}:${tweetId}`;
+    const { data, error } = await this.supabase
+      .from("bookmarks")
+      .select("id,user_id,tweet_id,text_content,source_url,links,first_comment_links")
+      .eq("id", bookmarkId)
+      .maybeSingle();
+
+    if (error) {
+      throw new Error(
+        `Failed to load bookmark for first-comment patch: ${extractDbErrorMessage(error)}`
+      );
+    }
+    if (!data) {
+      return null;
+    }
+
+    const existing = Array.isArray(data.first_comment_links)
+      ? data.first_comment_links
+      : [];
+    const merged = [];
+    const seen = new Set();
+    for (const value of [...existing, ...links]) {
+      const url = String(value || "").trim().slice(0, 1500);
+      if (!url || seen.has(url)) {
+        continue;
+      }
+      seen.add(url);
+      merged.push(url);
+      if (merged.length >= 20) {
+        break;
+      }
+    }
+
+    const changed = JSON.stringify(merged) !== JSON.stringify(existing);
+    const receivedAt = new Date().toISOString();
+
+    if (changed) {
+      const { error: updateError } = await this.supabase
+        .from("bookmarks")
+        .update({ first_comment_links: merged, updated_at: receivedAt })
+        .eq("id", bookmarkId);
+
+      if (updateError) {
+        throw new Error(
+          `Failed to update first_comment_links: ${extractDbErrorMessage(updateError)}`
+        );
+      }
+    }
+
+    const pipelineScheduled = changed
+      ? this.schedulePostIngestPipeline({
+          userId,
+          bookmarks: [{ ...data, first_comment_links: merged }],
+          receivedAt
+        })
+      : false;
+
+    return {
+      id: bookmarkId,
+      user_id: userId,
+      tweet_id: String(tweetId),
+      updated: changed,
+      first_comment_links: merged,
+      added: merged.length - existing.length,
+      post_ingest_scheduled: pipelineScheduled
+    };
   }
 
   async upsertBatch({ userId, syncId, bookmarks, receivedAt, insertOnly = false }) {

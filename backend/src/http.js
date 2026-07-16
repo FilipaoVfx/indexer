@@ -27,7 +27,7 @@ export function setCorsHeaders(req, res, allowedOrigins) {
     res.setHeader("Vary", "Origin");
   }
 
-  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PATCH,OPTIONS");
   res.setHeader(
     "Access-Control-Allow-Headers",
     "Content-Type, X-Supabase-Url, X-Supabase-Key, X-Api-Key"

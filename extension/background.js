@@ -21,6 +21,16 @@ const FAILED_QUEUE_MAX = 50;
 const DETAIL_LOOKUP_MESSAGE_DELAY_MS = 900;
 const DETAIL_LOOKUP_MESSAGE_MAX_ATTEMPTS = 8;
 const FIRST_COMMENT_LOOKUP_CACHE_MAX = 200;
+// Re-lookup diferido de posts densos guardados sin link de GitHub.
+const RELOOKUP_STATE_KEY = "fcl_relookup_state_v1";
+const RELOOKUP_ALARM_NAME = "fcl-relookup";
+const RELOOKUP_ALARM_PERIOD_MINUTES = 360;
+const RELOOKUP_MAX_ATTEMPTS = 6;
+const RELOOKUP_MIN_RETRY_MS = 6 * 60 * 60 * 1000;
+const RELOOKUP_MAX_PER_PASS = 6;
+const RELOOKUP_CANDIDATES_LIMIT = 40;
+const RELOOKUP_FETCH_TIMEOUT_MS = 30_000;
+const RELOOKUP_STATE_MAX = 500;
 const SHORTENER_HOST_RE = /^(t\.co|bit\.ly|buff\.ly|ow\.ly|tinyurl\.com|goo\.gl|dlvr\.it|lnkd\.in|is\.gd|tr\.im|cutt\.ly|rebrand\.ly|shorturl\.at)$/i;
 const FIRST_COMMENT_CUE_RE = /\b((?:1st|first)\s+(?:comment|reply)|primer\s+comentario|primera\s+respuesta|en\s+comentarios|en\s+las?\s+respuestas|in\s+the\s+comments|in\s+replies|reply\s+below|comments?\s+below)\b/i;
 const RESOURCE_HINT_RE = /\b(repo+|repository|github|source|code|codigo|demo|link|links|enlace|enlaces|url|urls|gist|tutorial|readme|doc|docs|article|post|thread|prompt)\b/i;
@@ -46,6 +56,7 @@ function logError(...args) {
 
 const resolvedUrlCache = new Map();
 const firstCommentLookupCache = new Map();
+let relookupPassRunning = false;
 
 function safeJsonStringify(value, maxLength = 1200) {
   const seen = new WeakSet();
@@ -1188,6 +1199,11 @@ async function importBookmarkScannerPending(items, source = "x_bookmarks_dom_sca
     });
   }
 
+  // Usuario activo en X con sesión válida: buen momento para reintentar los
+  // densos viejos que quedaron sin link (el import normal los ve como
+  // duplicados y nunca los reprocesa).
+  scheduleFirstCommentRelookupPass("scanner_import");
+
   return aggregate;
 }
 
@@ -1309,6 +1325,206 @@ async function prepareBookmarksForDelivery(bookmarks, context = {}) {
   }
 
   return prepared;
+}
+
+// ─── Re-lookup diferido de posts densos sin repo ──────────────────────
+// Bookmarks ya guardados con cue ("REPOOO👇") pero sin link de GitHub: el
+// reply no existía al capturar o el tab de detalle falló. El backend los
+// marca duplicados en imports futuros, así que nadie los reintenta. Este
+// pase pide candidatos al backend, re-corre el lookup de detalle y parchea
+// la fila vía PATCH (el backend re-dispara el sync de repos/context links).
+
+async function readRelookupState() {
+  const current = await chrome.storage.local.get([RELOOKUP_STATE_KEY]);
+  const stored = current[RELOOKUP_STATE_KEY];
+  return stored && typeof stored === "object" ? stored : {};
+}
+
+async function writeRelookupState(relookupState) {
+  let next = relookupState;
+  const entries = Object.entries(relookupState);
+  if (entries.length > RELOOKUP_STATE_MAX) {
+    entries.sort((a, b) => (Number(a[1]?.lastAt) || 0) - (Number(b[1]?.lastAt) || 0));
+    next = Object.fromEntries(entries.slice(entries.length - RELOOKUP_STATE_MAX));
+  }
+  await chrome.storage.local.set({ [RELOOKUP_STATE_KEY]: next });
+  return next;
+}
+
+async function fetchRelookupCandidates(settings) {
+  const endpoint = buildBackendUrl(settings.apiBaseUrl, "/api/bookmarks/relookup-candidates", {
+    user_id: settings.userId,
+    limit: RELOOKUP_CANDIDATES_LIMIT
+  });
+  const response = await withTimeout(
+    (signal) =>
+      fetch(endpoint, {
+        method: "GET",
+        cache: "no-store",
+        headers: { Accept: "application/json" },
+        signal
+      }),
+    RELOOKUP_FETCH_TIMEOUT_MS
+  );
+  const payload = await response.json().catch(() => null);
+
+  if (!response.ok || !payload || payload.ok === false || !Array.isArray(payload.items)) {
+    throw new Error(
+      payload?.error?.message || payload?.error || `HTTP ${response.status}`
+    );
+  }
+
+  return payload.items;
+}
+
+async function patchFirstCommentLinks(settings, candidate, links) {
+  const endpoint = buildBackendUrl(settings.apiBaseUrl, "/api/bookmarks/first-comment-links");
+  const response = await withTimeout(
+    (signal) =>
+      fetch(endpoint, {
+        method: "PATCH",
+        headers: buildWriteHeaders(settings.apiKey, {
+          "Content-Type": "application/json",
+          Accept: "application/json"
+        }),
+        body: JSON.stringify({
+          user_id: settings.userId,
+          tweet_id: candidate.tweet_id,
+          first_comment_links: links
+        }),
+        signal
+      }),
+    RELOOKUP_FETCH_TIMEOUT_MS
+  );
+  const payload = await response.json().catch(() => null);
+
+  if (!response.ok || !payload || payload.ok === false) {
+    throw new Error(
+      payload?.error?.message || payload?.error || `HTTP ${response.status}`
+    );
+  }
+
+  return payload;
+}
+
+async function runFirstCommentRelookupPass(trigger = "manual") {
+  if (relookupPassRunning) {
+    return { ok: true, skipped: "already_running", trigger };
+  }
+  relookupPassRunning = true;
+
+  try {
+    const settings = await getSettings();
+    const candidates = await fetchRelookupCandidates(settings);
+    const relookupState = await readRelookupState();
+    const now = Date.now();
+
+    // Backoff por tweet: máx RELOOKUP_MAX_ATTEMPTS intentos, mínimo
+    // RELOOKUP_MIN_RETRY_MS entre intentos. Un post cuyo autor nunca publicó
+    // el link no puede quedar reintentándose para siempre.
+    const eligible = candidates
+      .filter((candidate) => {
+        const tweetId = getTweetIdForBookmark(candidate);
+        if (!tweetId) {
+          return false;
+        }
+        const entry = relookupState[tweetId];
+        if (!entry) {
+          return true;
+        }
+        if (entry.done === true) {
+          return false;
+        }
+        if ((Number(entry.attempts) || 0) >= RELOOKUP_MAX_ATTEMPTS) {
+          return false;
+        }
+        return now - (Number(entry.lastAt) || 0) >= RELOOKUP_MIN_RETRY_MS;
+      })
+      .slice(0, RELOOKUP_MAX_PER_PASS);
+
+    reportBackgroundStage("bg_fcl_relookup_pass_started", {
+      trigger,
+      candidates: candidates.length,
+      eligible: eligible.length
+    }, { emit: true });
+
+    if (eligible.length === 0) {
+      return { ok: true, trigger, candidates: candidates.length, attempted: 0, recovered: 0, failed: 0 };
+    }
+
+    const traceId = `relookup-${Date.now().toString(36)}`;
+    let recovered = 0;
+    let failed = 0;
+
+    for (const candidate of eligible) {
+      const tweetId = getTweetIdForBookmark(candidate);
+      const entry = relookupState[tweetId] || { attempts: 0 };
+      entry.attempts = (Number(entry.attempts) || 0) + 1;
+      entry.lastAt = Date.now();
+      relookupState[tweetId] = entry;
+
+      try {
+        const rawLinks = await extractFirstCommentLinksViaDetailTab(candidate, { traceId });
+        let links = uniqueUrls(rawLinks);
+        if (links.length === 0) {
+          continue;
+        }
+
+        try {
+          const resolved = await resolveUrls(links);
+          links = uniqueUrls(resolved.urls);
+        } catch (_error) {
+          // mejor sin resolver que perder el hallazgo
+        }
+
+        const patchResult = await patchFirstCommentLinks(settings, candidate, links);
+        entry.done = true;
+        recovered += 1;
+        reportBackgroundStage("bg_fcl_relookup_recovered", {
+          traceId,
+          tweetId,
+          links: links.length,
+          updated: patchResult.updated === true,
+          attempts: entry.attempts
+        }, { emit: true });
+      } catch (error) {
+        failed += 1;
+        reportBackgroundStage("bg_fcl_relookup_attempt_failed", {
+          traceId,
+          tweetId,
+          attempts: entry.attempts,
+          error: extractErrorMessage(error) || "unknown_error"
+        }, { level: "warn" });
+      }
+    }
+
+    await writeRelookupState(relookupState);
+    await recordActivity({
+      stage: "relookup_densos",
+      traceId,
+      candidates: candidates.length,
+      attempted: eligible.length,
+      recovered,
+      failed
+    });
+
+    return {
+      ok: true,
+      trigger,
+      candidates: candidates.length,
+      attempted: eligible.length,
+      recovered,
+      failed
+    };
+  } finally {
+    relookupPassRunning = false;
+  }
+}
+
+function scheduleFirstCommentRelookupPass(trigger) {
+  void runFirstCommentRelookupPass(trigger).catch((error) => {
+    reportAsyncError(`fcl_relookup_failed:${trigger}`, error);
+  });
 }
 
 async function postBatch(queueItem) {
@@ -1687,7 +1903,22 @@ chrome.runtime.onInstalled.addListener(() => {
 // cola que quedó pendiente. Alarm cada minuto: si hay cola, flush.
 try {
   chrome.alarms.create("queue-drain", { periodInMinutes: 1 });
+  // Re-lookup: solo crear si no existe. create() resetea el timer y el
+  // service worker reinicia seguido — recreándola en cada arranque la alarma
+  // de 6h nunca llegaría a disparar.
+  chrome.alarms.get(RELOOKUP_ALARM_NAME, (existing) => {
+    if (!existing) {
+      chrome.alarms.create(RELOOKUP_ALARM_NAME, {
+        periodInMinutes: RELOOKUP_ALARM_PERIOD_MINUTES,
+        delayInMinutes: 15
+      });
+    }
+  });
   chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm?.name === RELOOKUP_ALARM_NAME) {
+      scheduleFirstCommentRelookupPass("alarm");
+      return;
+    }
     if (alarm?.name !== "queue-drain") return;
     void (async () => {
       await loadQueueState();
@@ -1750,6 +1981,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         message?.payload?.items,
         message?.payload?.source
       );
+      sendResponse(result);
+      return;
+    }
+
+    if (message.type === "RELOOKUP_DENSE") {
+      if (message?.payload?.reset === true) {
+        await chrome.storage.local.set({ [RELOOKUP_STATE_KEY]: {} });
+      }
+      const result = await runFirstCommentRelookupPass("manual");
       sendResponse(result);
       return;
     }
