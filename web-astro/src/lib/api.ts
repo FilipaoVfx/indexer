@@ -3,6 +3,12 @@
  * The UI now supports two remote modes:
  * - hybrid: keyword + structured filters
  * - goal: objective-driven retrieval backed by Supabase knowledge assets
+ *
+ * Auth: los endpoints de LECTURA del backend son públicos a propósito — este
+ * bundle se sirve estático desde GitHub Pages y cualquier key incluida aquí
+ * sería visible para todo el mundo. La ESCRITURA (batch/import-batch) exige
+ * el header x-api-key (API_KEY en el backend) y solo la hace la extensión
+ * Chrome, nunca esta web. No agregar keys a este archivo.
  */
 
 export const DEFAULT_USER_ID = "";

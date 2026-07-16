@@ -55,6 +55,15 @@ export const config = {
     process.env.DATA_FILE ||
     path.resolve(__dirname, "..", "data", "bookmarks.json"),
   allowedOrigins: parseOrigins(process.env.ALLOWED_ORIGINS || "*"),
+  // API key (header x-api-key) para los endpoints de escritura. Vacía = sin
+  // protección (se avisa al arrancar). Generar con: openssl rand -hex 32
+  apiKey: (process.env.API_KEY || "").trim(),
+  // true = exigir la key también en lectura. Por defecto false: el frontend
+  // estático (GitHub Pages) no puede ocultar una key en su bundle.
+  apiKeyProtectReads: parseBool(process.env.API_KEY_PROTECT_READS, false),
+  // Rate limit en memoria por IP para escritura.
+  writeRateLimitMax: parseNumber(process.env.WRITE_RATE_LIMIT_MAX, 60),
+  writeRateLimitWindowMs: parseNumber(process.env.WRITE_RATE_LIMIT_WINDOW_MS, 60_000),
   supabaseUrl: process.env.SUPABASE_URL,
   // The backend should prefer the service role key so DB-side RLS can stay enabled.
   supabaseKey: process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY,

@@ -17,11 +17,30 @@ import {
 } from "./http.js";
 import { BookmarkStore } from "./store.js";
 import { metrics, instrumentRequest, normalizeRoute } from "./metrics.js";
+import { createRateLimiter, requireApiKey } from "./auth.js";
 
 validateConfig();
 
+if (!config.apiKey) {
+  console.warn(
+    "[backend] API_KEY not set — write endpoints (/api/bookmarks/batch, /bookmarks/import-batch) accept unauthenticated requests"
+  );
+}
+
 const store = new BookmarkStore(config);
 await store.init();
+
+const checkWriteRateLimit = createRateLimiter({
+  windowMs: config.writeRateLimitWindowMs,
+  max: config.writeRateLimitMax
+});
+
+// Escritura: primero rate limit (barato, frena fuerza bruta contra la key),
+// después la key.
+function enforceWriteAccess(req) {
+  checkWriteRateLimit(req);
+  requireApiKey(req, config.apiKey);
+}
 
 function sanitizeUserId(value) {
   if (typeof value !== "string") {
@@ -188,6 +207,13 @@ const server = http.createServer(async (req, res) => {
       });
       res.end(body);
       return;
+    }
+
+    // Lectura protegida opcional (API_KEY_PROTECT_READS=true). /health queda
+    // libre para los healthchecks de Render. La escritura se valida aparte
+    // en enforceWriteAccess, así que este gate solo aplica a lecturas.
+    if (config.apiKeyProtectReads && routePath !== "/health") {
+      requireApiKey(req, config.apiKey);
     }
 
     if (req.method === "GET" && routePath === "/health") {
@@ -359,6 +385,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && isBookmarkImportBatchRoute(routePath)) {
+      enforceWriteAccess(req);
       const body = await parseJsonBody(req);
       const traceId = sanitizeTraceId(body.traceId) || createServerTraceId("import");
       req.traceId = traceId;
@@ -436,6 +463,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && routePath === "/api/bookmarks/batch") {
+      enforceWriteAccess(req);
       const body = await parseJsonBody(req);
       const traceId = sanitizeTraceId(body.traceId) || createServerTraceId("batch");
       req.traceId = traceId;
@@ -785,6 +813,9 @@ const server = http.createServer(async (req, res) => {
     sendJson(res, statusCode, {
       ok: false,
       trace_id: traceId,
+      ...(typeof error.retryAfterSeconds === "number"
+        ? { retry_after_seconds: error.retryAfterSeconds }
+        : {}),
       error: {
         code,
         message,

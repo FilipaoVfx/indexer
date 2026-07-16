@@ -1653,21 +1653,128 @@ export class BookmarkStore {
     }
   }
 
+  // Post-procesamiento de la ingesta (fire-and-forget). Todo lo que no afecta
+  // la respuesta al cliente — expansión de shorteners, context links, repos de
+  // GitHub y refresh del índice de goals — corre después de responder. Los
+  // errores se registran pero nunca alcanzan el request.
+  schedulePostIngestPipeline({ userId, bookmarks, receivedAt }) {
+    if (!Array.isArray(bookmarks) || bookmarks.length === 0) {
+      return false;
+    }
+
+    setImmediate(() => {
+      this.runPostIngestPipeline({ userId, bookmarks, receivedAt }).catch((error) => {
+        console.error("[store] post-ingest pipeline failed", {
+          user_id: userId,
+          bookmarks: bookmarks.length,
+          details: extractDbErrorMessage(error) || String(error)
+        });
+      });
+    });
+
+    return true;
+  }
+
+  async runPostIngestPipeline({ userId, bookmarks, receivedAt }) {
+    const startedAt = Date.now();
+    const warnings = [];
+
+    const expandedBookmarks = await this.expandAndPersistShortenerLinks(
+      bookmarks,
+      receivedAt
+    );
+
+    const contextWarning = await this.syncBookmarkContextLinks({
+      bookmarks: expandedBookmarks,
+      receivedAt
+    });
+    if (contextWarning) {
+      warnings.push(contextWarning);
+    }
+
+    const githubReadmeResult = await this.processGithubReadmesForBookmarks({
+      bookmarks: expandedBookmarks,
+      receivedAt
+    });
+    warnings.push(...githubReadmeResult.warnings);
+
+    const refreshWarning = await this.refreshGoalSearchIndex(userId);
+    if (refreshWarning) {
+      warnings.push(refreshWarning);
+    }
+
+    console.log("[store] post-ingest pipeline done", {
+      user_id: userId,
+      bookmarks: bookmarks.length,
+      github_readmes_fetched: githubReadmeResult.fetched,
+      github_readmes_skipped: githubReadmeResult.skipped,
+      warnings: warnings.length,
+      elapsed_ms: Date.now() - startedAt
+    });
+    if (warnings.length > 0) {
+      console.warn("[store] post-ingest pipeline warnings", {
+        user_id: userId,
+        warnings
+      });
+    }
+  }
+
+  // La captura network-first de la extensión ya entrega t.co expandidos, así
+  // que expandShortenerLinks es casi siempre un no-op sin red. Cuando sí hay
+  // shorteners (imports históricos), la resolución corre aquí — fuera del
+  // request — y los links reescritos se persisten sobre las filas ya
+  // insertadas para que dedupe/repos/domains trabajen con URLs finales.
+  async expandAndPersistShortenerLinks(bookmarks, receivedAt) {
+    const expanded = await this.expandShortenerLinks(bookmarks);
+    if (expanded === bookmarks) {
+      return bookmarks;
+    }
+
+    for (let index = 0; index < expanded.length; index += 1) {
+      const before = bookmarks[index];
+      const after = expanded[index];
+      if (!after || typeof after !== "object" || !after.id) continue;
+
+      const patch = {};
+      if (JSON.stringify(before?.links || []) !== JSON.stringify(after.links || [])) {
+        patch.links = after.links || [];
+      }
+      if (
+        this.capabilities.bookmarksFirstCommentLinks &&
+        JSON.stringify(before?.first_comment_links || []) !==
+          JSON.stringify(after.first_comment_links || [])
+      ) {
+        patch.first_comment_links = after.first_comment_links || [];
+      }
+      if (Object.keys(patch).length === 0) continue;
+      patch.updated_at = receivedAt;
+
+      const { error } = await this.supabase
+        .from("bookmarks")
+        .update(patch)
+        .eq("id", after.id);
+      if (error) {
+        console.warn("[store] failed to persist resolved shortener links", {
+          bookmark_id: after.id,
+          details: extractDbErrorMessage(error)
+        });
+      }
+    }
+
+    return expanded;
+  }
+
   async upsertBatch({ userId, syncId, bookmarks, receivedAt, insertOnly = false }) {
     await this.init();
 
     let inserted = 0;
     let updated = 0;
     let ignoredInvalid = 0;
-    let githubReadmesFetched = 0;
-    let githubReadmesSkipped = 0;
     const warnings = [];
 
     const bookmarksToUpsert = [];
 
-    const preparedBookmarks = await this.expandShortenerLinks(bookmarks);
-
-    for (const rawBookmark of preparedBookmarks) {
+    for (const rawBookmark of bookmarks) {
       const normalized = normalizeBookmark(rawBookmark, {
         userId,
         syncId,
@@ -1687,6 +1794,8 @@ export class BookmarkStore {
       });
     }
 
+    let postProcessingScheduled = false;
+
     if (bookmarksToUpsert.length > 0) {
       const {
         data,
@@ -1696,8 +1805,8 @@ export class BookmarkStore {
         : await this.upsertBookmarksWithFallback(bookmarksToUpsert);
       warnings.push(...upsertWarnings);
 
-      // Supabase returns the upserted records. 
-      // We can distinguish between inserted and updated if we query before, 
+      // Supabase returns the upserted records.
+      // We can distinguish between inserted and updated if we query before,
       // but for simplicity in a batch we'll count total successes.
       inserted = data.length;
       const storedBookmarkIds = new Set(
@@ -1709,28 +1818,11 @@ export class BookmarkStore {
         ? bookmarksToUpsert.filter((bookmark) => storedBookmarkIds.has(String(bookmark.id || "")))
         : bookmarksToUpsert;
 
-      if (storedBookmarks.length > 0) {
-        const contextWarning = await this.syncBookmarkContextLinks({
-          bookmarks: storedBookmarks,
-          receivedAt
-        });
-        if (contextWarning) {
-          warnings.push(contextWarning);
-        }
-
-        const githubReadmeResult = await this.processGithubReadmesForBookmarks({
-          bookmarks: storedBookmarks,
-          receivedAt
-        });
-        githubReadmesFetched = githubReadmeResult.fetched;
-        githubReadmesSkipped = githubReadmeResult.skipped;
-        warnings.push(...githubReadmeResult.warnings);
-
-        const refreshWarning = await this.refreshGoalSearchIndex(userId);
-        if (refreshWarning) {
-          warnings.push(refreshWarning);
-        }
-      }
+      postProcessingScheduled = this.schedulePostIngestPipeline({
+        userId,
+        bookmarks: storedBookmarks,
+        receivedAt
+      });
     }
 
     const { count: totalStored } = await this.supabase
@@ -1743,8 +1835,11 @@ export class BookmarkStore {
       inserted,
       updated, // In Supabase upsert, we don't easily distinguish without extra checks
       ignored_invalid: ignoredInvalid,
-      github_readmes_fetched: githubReadmesFetched,
-      github_readmes_skipped: githubReadmesSkipped,
+      // README fetch/skip ahora ocurre en el pipeline diferido; las claves se
+      // conservan por compatibilidad con clientes existentes.
+      github_readmes_fetched: 0,
+      github_readmes_skipped: 0,
+      post_processing: postProcessingScheduled ? "scheduled" : "skipped",
       total_stored: totalStored,
       warnings
     };

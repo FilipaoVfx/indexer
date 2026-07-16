@@ -10,6 +10,7 @@ const scannerPendingElement = document.getElementById("scannerPending");
 const scannerErrorsElement = document.getElementById("scannerErrors");
 const apiBaseUrlInput = document.getElementById("apiBaseUrl");
 const userIdInput = document.getElementById("userId");
+const apiKeyInput = document.getElementById("apiKey");
 const rangeMinInput = document.getElementById("rangeMin");
 const rangeMaxInput = document.getElementById("rangeMax");
 const logElement = document.getElementById("log");
@@ -71,18 +72,25 @@ async function loadSettings() {
   }
   apiBaseUrlInput.value = response.apiBaseUrl || "";
   userIdInput.value = response.userId || "";
+  apiKeyInput.value = response.apiKey || "";
   appendLog(`Listo. En cola: ${response.pendingQueue ?? 0}`);
 }
 
 async function saveSettings() {
   const response = await sendRuntimeMessage({
     type: "SETTINGS_UPDATE",
-    payload: { apiBaseUrl: apiBaseUrlInput.value, userId: userIdInput.value },
+    payload: {
+      apiBaseUrl: apiBaseUrlInput.value,
+      userId: userIdInput.value,
+      apiKey: apiKeyInput.value,
+    },
   });
   if (!response || !response.ok) {
     throw new Error(response && response.error ? response.error : "settings_save_failed");
   }
-  appendLog(`Ajustes guardados. Backend: ${response.apiBaseUrl} | User: ${response.userId}`);
+  appendLog(
+    `Ajustes guardados. Backend: ${response.apiBaseUrl} | User: ${response.userId} | API key: ${response.apiKey ? "configurada" : "sin configurar"}`
+  );
 }
 
 function renderScannerStatus(status = {}) {

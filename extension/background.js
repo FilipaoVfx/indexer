@@ -4,7 +4,7 @@ const QUEUE_STORAGE_KEY = "ingest_queue_v1";
 const ACTIVITY_STORAGE_KEY = "activity_log_v1";
 const COUNTERS_STORAGE_KEY = "counters_v1";
 const SCANNER_IDS_CACHE_KEY = "bookmark_scanner_saved_ids_v1";
-const SETTINGS_KEYS = ["apiBaseUrl", "userId"];
+const SETTINGS_KEYS = ["apiBaseUrl", "userId", "apiKey"];
 const MAX_RETRIES = 3;
 const RETRY_BASE_DELAY_MS = 1200;
 const ACTIVITY_LOG_MAX = 25;
@@ -267,8 +267,20 @@ async function getSettings() {
   const current = await chrome.storage.local.get(SETTINGS_KEYS);
   return {
     apiBaseUrl: current.apiBaseUrl || DEFAULT_API_BASE_URL,
-    userId: current.userId || DEFAULT_USER_ID
+    userId: current.userId || DEFAULT_USER_ID,
+    apiKey: typeof current.apiKey === "string" ? current.apiKey.trim() : ""
   };
+}
+
+// Header x-api-key para los endpoints de escritura del backend (API_KEY en
+// Render). Sin key configurada no se manda el header.
+function buildWriteHeaders(apiKey, base = {}) {
+  const headers = { ...base };
+  const key = cleanText(apiKey);
+  if (key) {
+    headers["x-api-key"] = key;
+  }
+  return headers;
 }
 
 async function loadQueueState() {
@@ -972,15 +984,15 @@ async function fetchBookmarkScannerSavedIds() {
   }
 }
 
-async function postBookmarkScannerImportJson(endpoint, body) {
+async function postBookmarkScannerImportJson(endpoint, body, apiKey = "") {
   const response = await withTimeout(
     (signal) =>
       fetch(endpoint, {
         method: "POST",
-        headers: {
+        headers: buildWriteHeaders(apiKey, {
           "Content-Type": "application/json",
           Accept: "application/json"
-        },
+        }),
         body: JSON.stringify(body),
         signal
       }),
@@ -1036,7 +1048,8 @@ async function postBookmarkScannerImportChunk(settings, chunk, source, batchInde
           user_id: settings.userId,
           source: normalizedSource,
           items: chunk
-        }
+        },
+        settings.apiKey
       );
     } catch (error) {
       if (!shouldUseLegacyScannerImportEndpoint(error)) {
@@ -1053,7 +1066,8 @@ async function postBookmarkScannerImportChunk(settings, chunk, source, batchInde
       sync_id: normalizedSource,
       batch_index: batchIndex,
       bookmarks: chunk
-    }
+    },
+    settings.apiKey
   );
 
   return normalizeLegacyScannerImportResponse(
@@ -1342,9 +1356,9 @@ async function postBatch(queueItem) {
   try {
     response = await fetch(endpoint, {
       method: "POST",
-      headers: {
+      headers: buildWriteHeaders(settings.apiKey, {
         "Content-Type": "application/json"
-      },
+      }),
       body: JSON.stringify(payload),
       signal: controller.signal
     });
@@ -1649,6 +1663,9 @@ async function updateSettings(payload) {
     }
     if (typeof payload.userId === "string") {
       updates.userId = sanitizeUserId(payload.userId);
+    }
+    if (typeof payload.apiKey === "string") {
+      updates.apiKey = payload.apiKey.trim().slice(0, 200);
     }
   }
 
