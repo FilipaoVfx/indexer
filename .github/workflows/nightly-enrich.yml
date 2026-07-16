@@ -6,6 +6,11 @@ name: Nightly enrich
 #  2) backfill-github-repositories: metadata de GitHub (stars, lenguaje,
 #     topics) para github_repositories. Si la migración sql/014 no está
 #     aplicada, degrada con un warning y no rompe el job.
+#  3) rag-ingest: sincroniza bookmarks + READMEs a Pinecone (embeddings
+#     OpenAI). Incremental vía rag_sync_state (content_hash): solo paga
+#     embeddings de lo nuevo/cambiado. continue-on-error: si Pinecone falla,
+#     la clasificación ya corrida no se pierde y el job no queda en rojo
+#     permanente.
 # Disparo manual: Actions -> Nightly enrich -> Run workflow.
 
 on:
@@ -43,3 +48,10 @@ jobs:
 
       - name: Backfill GitHub repo metadata
         run: node backend/src/backfill-github-repositories.js --only-missing
+
+      - name: RAG ingest to Pinecone (bookmarks + readmes)
+        continue-on-error: true
+        env:
+          PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY }}
+          PINECONE_INDEX: ${{ secrets.PINECONE_INDEX }}
+        run: node backend/src/rag-ingest.js all

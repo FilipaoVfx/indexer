@@ -10,10 +10,18 @@
     "readmes:github": "node src/fetch-github-readmes.js",
     "readmes:backfill": "node src/backfill-github-readmes.js",
     "repos:backfill": "node src/backfill-github-repositories.js",
-    "classify:repos": "node src/classify-repo-readmes.js"
+    "classify:repos": "node src/classify-repo-readmes.js",
+    "rag:ingest": "node src/rag-ingest.js",
+    "rag:ingest:bookmarks": "node src/rag-ingest.js bookmarks",
+    "rag:ingest:readmes": "node src/rag-ingest.js readmes",
+    "rag:cli": "node src/rag-cli.js",
+    "rag:telegram": "node src/telegram-bot.js start"
   },
   "dependencies": {
+    "@pinecone-database/pinecone": "^4.0.0",
     "@supabase/supabase-js": "^2.103.0",
-    "dotenv": "^17.4.1"
+    "dotenv": "^17.4.1",
+    "openai": "^4.50.0",
+    "telegraf": "^4.16.0"
   }
 }
