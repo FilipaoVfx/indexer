@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1220" height="1110" viewBox="10 -10 1220 1110" font-family="Helvetica, Arial, sans-serif">
+<rect x="10" y="-10" width="1220" height="1110" fill="#ffffff"/>
+<defs><marker id="ah" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L9,3 L0,6 z" fill="#1e1e1e"/></marker><marker id="ahp" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L9,3 L0,6 z" fill="#5f3dc4"/></marker></defs>
+<rect x="40" y="200" width="240" height="110" rx="14" fill="#ffc9c9" stroke="#1e1e1e" stroke-width="2"/>
+<rect x="40" y="380" width="240" height="90" rx="14" fill="#ffd8a8" stroke="#1e1e1e" stroke-width="2"/>
+<rect x="470" y="250" width="300" height="200" rx="14" fill="#b2f2bb" stroke="#2b8a3e" stroke-width="2"/>
+<rect x="470" y="540" width="300" height="120" rx="14" fill="#a5d8ff" stroke="#1864ab" stroke-width="2"/>
+<rect x="940" y="210" width="260" height="110" rx="14" fill="#d0bfff" stroke="#1e1e1e" stroke-width="2"/>
+<rect x="940" y="390" width="260" height="130" rx="14" fill="#d0bfff" stroke="#1e1e1e" stroke-width="2"/>
+<rect x="40" y="760" width="240" height="80" rx="14" fill="#ffec99" stroke="#1e1e1e" stroke-width="2"/>
+<rect x="320" y="760" width="240" height="80" rx="14" fill="#ffec99" stroke="#1e1e1e" stroke-width="2"/>
+<rect x="600" y="760" width="240" height="80" rx="14" fill="#ffec99" stroke="#1e1e1e" stroke-width="2"/>
+<line x1="160" y1="310" x2="160" y2="380" stroke="#1e1e1e" stroke-width="2" marker-end="url(#ah)"/>
+<line x1="280" y1="405" x2="470" y2="374" stroke="#1e1e1e" stroke-width="2" marker-end="url(#ah)"/>
+<line x1="620" y1="450" x2="620" y2="540" stroke="#1e1e1e" stroke-width="2" marker-end="url(#ah)"/>
+<line x1="770" y1="322" x2="940" y2="290" stroke="#1e1e1e" stroke-width="2" marker-end="url(#ah)"/>
+<line x1="770" y1="552" x2="940" y2="497" stroke="#1e1e1e" stroke-width="2" marker-end="url(#ah)"/>
+<line x1="770" y1="385" x2="940" y2="425" stroke="#1e1e1e" stroke-width="2" stroke-dasharray="8 6" marker-end="url(#ah)"/>
+<line x1="252" y1="760" x2="482" y2="660" stroke="#5f3dc4" stroke-width="2" marker-end="url(#ahp)"/>
+<line x1="456" y1="760" x2="580" y2="450" stroke="#5f3dc4" stroke-width="2" stroke-dasharray="8 6" marker-end="url(#ahp)"/>
+<line x1="660" y1="760" x2="227" y2="470" stroke="#5f3dc4" stroke-width="2" stroke-dasharray="8 6" marker-end="url(#ahp)"/>
+<text x="40" y="54.0" font-size="34" fill="#1e1e1e" text-anchor="start">Sistema Indexer + Bot — Arquitectura</text>
+<text x="40" y="82.0" font-size="16" fill="#495057" text-anchor="start">Captura → Supabase (verdad única) → Pinecone (derivado) → Consumo hibrido</text>
+<text x="60" y="150.0" font-size="20" fill="#c92a2a" text-anchor="start">CAPTURA</text>
+<text x="470" y="150.0" font-size="20" fill="#2b8a3e" text-anchor="start">ALMACENES</text>
+<text x="940" y="150.0" font-size="20" fill="#1864ab" text-anchor="start">CONSUMO</text>
+<text x="160" y="228.0" font-size="18" fill="#1e1e1e" text-anchor="middle">Extension Chrome (MV3)</text>
+<text x="160" y="250.5" font-size="18" fill="#1e1e1e" text-anchor="middle">v0.4.4</text>
+<text x="160" y="273.0" font-size="18" fill="#1e1e1e" text-anchor="middle">captura network-first</text>
+<text x="160" y="295.5" font-size="18" fill="#1e1e1e" text-anchor="middle">+ lookup replies</text>
+<text x="160" y="409.2" font-size="18" fill="#1e1e1e" text-anchor="middle">Backend  (Render free)</text>
+<text x="160" y="431.8" font-size="18" fill="#1e1e1e" text-anchor="middle">upsertBatch + API key</text>
+<text x="160" y="454.2" font-size="18" fill="#1e1e1e" text-anchor="middle">post-proceso async</text>
+<text x="620" y="303.2" font-size="17" fill="#2b8a3e" text-anchor="middle">SUPABASE</text>
+<text x="620" y="324.5" font-size="17" fill="#2b8a3e" text-anchor="middle">(fuente unica de verdad)</text>
+<text x="620" y="345.8" font-size="17" fill="#2b8a3e" text-anchor="middle"></text>
+<text x="620" y="367.0" font-size="17" fill="#2b8a3e" text-anchor="middle">bookmarks 1814</text>
+<text x="620" y="388.2" font-size="17" fill="#2b8a3e" text-anchor="middle">readmes 366 · repos 382</text>
+<text x="620" y="409.5" font-size="17" fill="#2b8a3e" text-anchor="middle">engagement · rag_sync_state</text>
+<text x="620" y="574.5" font-size="17" fill="#1864ab" text-anchor="middle">PINECONE</text>
+<text x="620" y="595.8" font-size="17" fill="#1864ab" text-anchor="middle">(derivado · regenerable)</text>
+<text x="620" y="617.0" font-size="17" fill="#1864ab" text-anchor="middle">vectores bookmark+readme</text>
+<text x="620" y="638.2" font-size="17" fill="#1864ab" text-anchor="middle">~13k chunks</text>
+<text x="1070" y="238.0" font-size="18" fill="#1e1e1e" text-anchor="middle">Web indexer</text>
+<text x="1070" y="260.5" font-size="18" fill="#1e1e1e" text-anchor="middle">(GitHub Pages)</text>
+<text x="1070" y="283.0" font-size="18" fill="#1e1e1e" text-anchor="middle">busqueda SQL hibrida</text>
+<text x="1070" y="305.5" font-size="18" fill="#1e1e1e" text-anchor="middle">authors/repos/stats</text>
+<text x="1070" y="428.0" font-size="18" fill="#1e1e1e" text-anchor="middle">Bot Telegram (24/7)</text>
+<text x="1070" y="450.5" font-size="18" fill="#1e1e1e" text-anchor="middle">busqueda semantica</text>
+<text x="1070" y="473.0" font-size="18" fill="#1e1e1e" text-anchor="middle">trust v3 + stars</text>
+<text x="1070" y="495.5" font-size="18" fill="#1e1e1e" text-anchor="middle">/repos /buscar_repo</text>
+<text x="430" y="738.0" font-size="18" fill="#5f3dc4" text-anchor="start">CRONS  (GitHub Actions · $0)</text>
+<text x="160" y="796.2" font-size="15" fill="#1e1e1e" text-anchor="middle">rag-ingest 6h (botRepos)</text>
+<text x="160" y="815.0" font-size="15" fill="#1e1e1e" text-anchor="middle">Supabase -&gt; Pinecone</text>
+<text x="440" y="796.2" font-size="15" fill="#1e1e1e" text-anchor="middle">nightly-enrich (indexer)</text>
+<text x="440" y="815.0" font-size="15" fill="#1e1e1e" text-anchor="middle">clasifica + metadata</text>
+<text x="720" y="796.2" font-size="15" fill="#1e1e1e" text-anchor="middle">keepalive loop 2h</text>
+<text x="720" y="815.0" font-size="15" fill="#1e1e1e" text-anchor="middle">Render despierto</text>
+<rect x="103" y="322" width="114" height="18" fill="#ffffff" opacity="0.9"/>
+<text x="160" y="336.0" font-size="13" fill="#1e1e1e" text-anchor="middle">HTTP batch</text>
+<rect x="318" y="367" width="114" height="18" fill="#ffffff" opacity="0.9"/>
+<text x="375" y="380.9" font-size="13" fill="#1e1e1e" text-anchor="middle">bookmarks</text>
+<rect x="563" y="472" width="114" height="18" fill="#ffffff" opacity="0.9"/>
+<text x="620" y="486.0" font-size="13" fill="#1e1e1e" text-anchor="middle">embeddings</text>
+<rect x="798" y="283" width="114" height="18" fill="#ffffff" opacity="0.9"/>
+<text x="855" y="296.6" font-size="13" fill="#1e1e1e" text-anchor="middle">SQL (Render)</text>
+<rect x="798" y="501" width="114" height="18" fill="#ffffff" opacity="0.9"/>
+<text x="855" y="515.3" font-size="13" fill="#1e1e1e" text-anchor="middle">vector</text>
+<rect x="798" y="382" width="114" height="18" fill="#ffffff" opacity="0.9"/>
+<text x="855" y="395.8" font-size="13" fill="#1e1e1e" text-anchor="middle">enrich</text>
+</svg>

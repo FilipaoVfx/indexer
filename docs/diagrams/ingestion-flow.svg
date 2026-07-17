@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="900" viewBox="10 -10 1400 900" font-family="Helvetica,Arial,sans-serif">
+<rect x="10" y="-10" width="1400" height="900" fill="#ffffff"/>
+<defs><marker id="ah" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L9,3 L0,6 z" fill="#1e1e1e"/></marker><marker id="ahg" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L9,3 L0,6 z" fill="#868e96"/></marker></defs>
+<rect x="60" y="160" width="320" height="70" rx="14" fill="#ffc9c9" stroke="#1e1e1e" stroke-width="2"/>
+<rect x="60" y="270" width="320" height="80" rx="14" fill="#ffc9c9" stroke="#1e1e1e" stroke-width="2"/>
+<polygon points="220,390 380,435 220,480 60,435" fill="#ffc9c9" stroke="#1e1e1e" stroke-width="2"/>
+<rect x="470" y="160" width="320" height="80" rx="14" fill="#ffd8a8" stroke="#1e1e1e" stroke-width="2"/>
+<rect x="470" y="280" width="320" height="70" rx="14" fill="#ffd8a8" stroke="#1e1e1e" stroke-width="2"/>
+<rect x="470" y="390" width="320" height="90" rx="14" fill="#ffd8a8" stroke="#1e1e1e" stroke-width="2"/>
+<rect x="470" y="555" width="320" height="80" rx="14" fill="#e9ecef" stroke="#1e1e1e" stroke-width="2"/>
+<rect x="880" y="160" width="300" height="90" rx="14" fill="#b2f2bb" stroke="#2b8a3e" stroke-width="2"/>
+<rect x="880" y="300" width="300" height="80" rx="14" fill="#ffec99" stroke="#1e1e1e" stroke-width="2"/>
+<rect x="880" y="430" width="300" height="80" rx="14" fill="#a5d8ff" stroke="#1864ab" stroke-width="2"/>
+<rect x="880" y="560" width="300" height="70" rx="14" fill="#d0bfff" stroke="#1e1e1e" stroke-width="2"/>
+<line x1="220" y1="230" x2="220" y2="270" stroke="#1e1e1e" stroke-width="2" marker-end="url(#ah)"/>
+<line x1="220" y1="350" x2="220" y2="390" stroke="#1e1e1e" stroke-width="2" marker-end="url(#ah)"/>
+<line x1="299" y1="390" x2="560" y2="240" stroke="#1e1e1e" stroke-width="2" marker-end="url(#ah)"/>
+<line x1="630" y1="240" x2="630" y2="280" stroke="#1e1e1e" stroke-width="2" marker-end="url(#ah)"/>
+<line x1="630" y1="350" x2="630" y2="390" stroke="#1e1e1e" stroke-width="2" stroke-dasharray="8 6" marker-end="url(#ah)"/>
+<line x1="757" y1="280" x2="880" y2="246" stroke="#1e1e1e" stroke-width="2" marker-end="url(#ah)"/>
+<line x1="708" y1="390" x2="952" y2="250" stroke="#1e1e1e" stroke-width="2" stroke-dasharray="8 6" marker-end="url(#ah)"/>
+<line x1="630" y1="240" x2="630" y2="555" stroke="#868e96" stroke-width="2" stroke-dasharray="8 6" marker-end="url(#ahg)"/>
+<line x1="671" y1="555" x2="984" y2="250" stroke="#868e96" stroke-width="2" stroke-dasharray="8 6" marker-end="url(#ahg)"/>
+<line x1="1030" y1="250" x2="1030" y2="300" stroke="#1e1e1e" stroke-width="2" marker-end="url(#ah)"/>
+<line x1="1030" y1="380" x2="1030" y2="430" stroke="#1e1e1e" stroke-width="2" marker-end="url(#ah)"/>
+<line x1="1030" y1="510" x2="1030" y2="560" stroke="#1e1e1e" stroke-width="2" marker-end="url(#ah)"/>
+<line x1="1030" y1="250" x2="1030" y2="560" stroke="#1e1e1e" stroke-width="2" stroke-dasharray="8 6" marker-end="url(#ah)"/>
+<text x="40" y="50.0" font-size="30" fill="#1e1e1e" text-anchor="start">Flujo de ingesta y sincronizacion</text>
+<text x="40" y="77.0" font-size="15" fill="#495057" text-anchor="start">del guardado en X hasta que el bot/web lo encuentran — con las guardas antifragiles</text>
+<text x="60" y="137.0" font-size="17" fill="#c92a2a" text-anchor="start">1 · CAPTURA (extension)</text>
+<text x="220" y="191.0" font-size="16" fill="#1e1e1e" text-anchor="middle">Guardas bookmark en X</text>
+<text x="220" y="211.0" font-size="16" fill="#1e1e1e" text-anchor="middle">(auto-sync) o import por rango</text>
+<text x="220" y="306.0" font-size="16" fill="#1e1e1e" text-anchor="middle">Captura network-first:</text>
+<text x="220" y="326.0" font-size="16" fill="#1e1e1e" text-anchor="middle">lee GraphQL de X (t.co ya expandido)</text>
+<text x="220" y="422.8" font-size="14" fill="#1e1e1e" text-anchor="middle">Es denso? (&quot;REPOOO&quot;)</text>
+<text x="220" y="440.2" font-size="14" fill="#1e1e1e" text-anchor="middle">-&gt; lookup del reply (tab, solo exitos</text>
+<text x="220" y="457.8" font-size="14" fill="#1e1e1e" text-anchor="middle">se cachean; timeouts; degrada)</text>
+<text x="470" y="137.0" font-size="17" fill="#e8590c" text-anchor="start">2 · BACKEND (Render)</text>
+<text x="630" y="196.0" font-size="16" fill="#1e1e1e" text-anchor="middle">POST batch (x-api-key + rate limit)</text>
+<text x="630" y="216.0" font-size="16" fill="#1e1e1e" text-anchor="middle">dedup por tweet_id</text>
+<text x="630" y="321.0" font-size="16" fill="#1e1e1e" text-anchor="middle">upsertBatch -&gt; responde ~200ms</text>
+<text x="630" y="423.6" font-size="13" fill="#1e1e1e" text-anchor="middle">Post-proceso ASYNC (setImmediate):</text>
+<text x="630" y="439.9" font-size="13" fill="#1e1e1e" text-anchor="middle">t.co, links repo, seed readmes,</text>
+<text x="630" y="456.1" font-size="13" fill="#1e1e1e" text-anchor="middle">goal index</text>
+<text x="470" y="533.0" font-size="13" fill="#868e96" text-anchor="start">cola de entrega (MV3)</text>
+<text x="630" y="584.5" font-size="12" fill="#1e1e1e" text-anchor="middle">reintentos + backoff · timeout duro</text>
+<text x="630" y="599.5" font-size="12" fill="#1e1e1e" text-anchor="middle">dead-letter + chrome.alarms</text>
+<text x="630" y="614.5" font-size="12" fill="#1e1e1e" text-anchor="middle">(nunca &#x27;En cola&#x27; colgado)</text>
+<text x="880" y="137.0" font-size="17" fill="#2b8a3e" text-anchor="start">3 · SINCRONIZACION</text>
+<text x="1030" y="191.9" font-size="15" fill="#2b8a3e" text-anchor="middle">SUPABASE</text>
+<text x="1030" y="210.6" font-size="15" fill="#2b8a3e" text-anchor="middle">(fuente unica de verdad)</text>
+<text x="1030" y="229.4" font-size="15" fill="#2b8a3e" text-anchor="middle">bookmarks + readmes + links</text>
+<text x="1030" y="327.8" font-size="14" fill="#1e1e1e" text-anchor="middle">cron rag-ingest (6h)</text>
+<text x="1030" y="345.2" font-size="14" fill="#1e1e1e" text-anchor="middle">dedup por content_hash</text>
+<text x="1030" y="362.8" font-size="14" fill="#1e1e1e" text-anchor="middle">solo embebe lo nuevo</text>
+<text x="1030" y="457.8" font-size="14" fill="#1864ab" text-anchor="middle">PINECONE (derivado)</text>
+<text x="1030" y="475.2" font-size="14" fill="#1864ab" text-anchor="middle">vector id determinista</text>
+<text x="1030" y="492.8" font-size="14" fill="#1864ab" text-anchor="middle">= idempotente</text>
+<text x="1030" y="591.2" font-size="15" fill="#1e1e1e" text-anchor="middle">Bot (semantica) + Web (SQL)</text>
+<text x="1030" y="610.0" font-size="15" fill="#1e1e1e" text-anchor="middle">consultan</text>
+<rect x="357" y="294" width="144" height="17" fill="#ffffff" opacity="0.92"/>
+<text x="429" y="307.0" font-size="12" fill="#1e1e1e" text-anchor="middle">HTTP batch</text>
+<rect x="558" y="349" width="144" height="17" fill="#ffffff" opacity="0.92"/>
+<text x="630" y="362.0" font-size="12" fill="#1e1e1e" text-anchor="middle">despues de responder</text>
+<rect x="747" y="242" width="144" height="17" fill="#ffffff" opacity="0.92"/>
+<text x="819" y="255.1" font-size="12" fill="#1e1e1e" text-anchor="middle">insert</text>
+<rect x="758" y="299" width="144" height="17" fill="#ffffff" opacity="0.92"/>
+<text x="830" y="312.0" font-size="12" fill="#1e1e1e" text-anchor="middle">enriquece</text>
+<rect x="558" y="376" width="144" height="17" fill="#ffffff" opacity="0.92"/>
+<text x="630" y="389.5" font-size="12" fill="#868e96" text-anchor="middle">si falla</text>
+<rect x="755" y="382" width="144" height="17" fill="#ffffff" opacity="0.92"/>
+<text x="827" y="394.5" font-size="12" fill="#868e96" text-anchor="middle">reintenta</text>
+<rect x="958" y="384" width="144" height="17" fill="#ffffff" opacity="0.92"/>
+<text x="1030" y="397.0" font-size="12" fill="#1e1e1e" text-anchor="middle">embeddings</text>
+<rect x="958" y="514" width="144" height="17" fill="#ffffff" opacity="0.92"/>
+<text x="1030" y="527.0" font-size="12" fill="#1e1e1e" text-anchor="middle">vector</text>
+<rect x="958" y="384" width="144" height="17" fill="#ffffff" opacity="0.92"/>
+<text x="1030" y="397.0" font-size="12" fill="#1e1e1e" text-anchor="middle">SQL / enrich</text>
+</svg>

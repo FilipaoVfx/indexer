@@ -23,6 +23,8 @@ un estado recuperable con un comando, sin pérdida de la fuente de verdad.
 
 ## 1. Mapa del sistema
 
+> Diagramas visuales (Excalidraw + PNG): [docs/diagrams/](docs/diagrams/README.md)
+
 ```
 CAPTURA                        ALMACENES                     CONSUMO
 ────────                       ─────────                     ───────
