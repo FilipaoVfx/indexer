@@ -248,8 +248,17 @@ const server = http.createServer(async (req, res) => {
       const repo = requestUrl.searchParams.get("repo") || "";
       const limit = clampNumber(requestUrl.searchParams.get("limit"), 50, 1, 100);
       const offset = clampNumber(requestUrl.searchParams.get("offset"), 0, 0, 10_000);
-      const includeContent =
+      let includeContent =
         requestUrl.searchParams.get("include_content") !== "false";
+
+      // Guardia anti payload-bomb: 100 READMEs completos (hasta 300KB c/u)
+      // son decenas de MB — la instancia free (0.1 CPU/512MB) moría
+      // serializándolos y tumbaba el servicio entero. Con límite alto se
+      // degrada a previews; el contenido completo se pide por repo vía
+      // GET /api/github-readmes/:owner/:repo.
+      if (includeContent && limit > 10) {
+        includeContent = false;
+      }
 
       // Lazy fetch: descarga al verlos los README que sigan pendientes.
       await store.refreshPendingReadmes({ userId: userId || null, repoSlug: repo });

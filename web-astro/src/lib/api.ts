@@ -722,6 +722,12 @@ export interface RepoSummary {
   sample_author: string | null;
   latest_date: string | null;
   readme_status: string | null;
+  // Metadata de github_repositories (sql/014); null si el backfill aún no la pobló.
+  stars: number | null;
+  language: string | null;
+  topics: string[];
+  description: string | null;
+  unavailable?: boolean;
 }
 
 // Resumen de repos desde las tablas reales del servidor (reemplaza la
@@ -763,6 +769,28 @@ export interface GithubReadmesResponse {
   items: GithubReadme[];
   total: number;
   warning?: string | null;
+}
+
+// README individual con contenido completo. La lista se pide SIN contenido
+// (include_content=false): 100 READMEs completos era un payload de decenas de
+// MB que tumbaba la instancia free de Render (OOM). El contenido se baja solo
+// para el repo seleccionado.
+export async function fetchGithubReadme(
+  repoSlug: string,
+  userId = ""
+): Promise<GithubReadme | null> {
+  const [owner, repo] = String(repoSlug || "").split("/");
+  if (!owner || !repo) return null;
+  const query = new URLSearchParams();
+  if (userId) query.set("user_id", userId);
+  const res = await fetch(
+    `${API_BASE}/api/github-readmes/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}${
+      query.toString() ? `?${query.toString()}` : ""
+    }`,
+    { headers: { Accept: "application/json" } }
+  );
+  const data = await parseJsonOrThrow(res);
+  return (data.item as GithubReadme) || null;
 }
 
 export async function fetchGithubReadmes(params: {

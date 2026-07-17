@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  fetchGithubReadme,
   fetchGithubReadmes,
   fetchUsers,
   formatDate,
@@ -226,10 +227,13 @@ export default function RepoReadmesList() {
     setError(null);
     setWarning(null);
 
+    // Lista SIN contenido: 100 READMEs completos (hasta 300KB c/u) era un
+    // payload que mataba el backend free de Render. El contenido completo se
+    // baja aparte solo para el seleccionado.
     fetchGithubReadmes({
       user_id: view.user || undefined,
       q: view.q || undefined,
-      include_content: true,
+      include_content: false,
       limit: 100,
     })
       .then((response) => {
@@ -260,6 +264,43 @@ export default function RepoReadmesList() {
     }
     return items[0] || null;
   }, [items, view.repo]);
+
+  // Contenido completo bajo demanda para el README seleccionado.
+  const [detail, setDetail] = useState<GithubReadme | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+
+  useEffect(() => {
+    const slug = selected?.repo_slug;
+    if (!slug || selected.status !== "ok") {
+      setDetail(null);
+      setDetailLoading(false);
+      return;
+    }
+
+    let mounted = true;
+    setDetailLoading(true);
+    fetchGithubReadme(slug, view.user || "")
+      .then((item) => {
+        if (!mounted) return;
+        setDetail(item);
+      })
+      .catch(() => {
+        if (!mounted) return;
+        setDetail(null);
+      })
+      .finally(() => {
+        if (!mounted) return;
+        setDetailLoading(false);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [selected?.repo_slug, selected?.status, view.user]);
+
+  const detailMatchesSelection = Boolean(
+    detail && selected && detail.repo_slug === selected.repo_slug
+  );
 
   function updateView(patch: Partial<ViewState>) {
     setView((current) => ({
@@ -466,7 +507,11 @@ export default function RepoReadmesList() {
 
                 {selected.status === "ok" ? (
                   <pre className="max-h-[calc(100vh-310px)] overflow-auto whitespace-pre-wrap break-words p-5 text-sm leading-relaxed text-on-surface-variant">
-                    {selected.content || ""}
+                    {detailMatchesSelection
+                      ? detail?.content || ""
+                      : detailLoading
+                      ? "Cargando README..."
+                      : selected.content || selected.content_preview || ""}
                   </pre>
                 ) : (
                   <div className="p-8 text-sm text-on-surface-variant">
