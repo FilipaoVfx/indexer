@@ -1097,6 +1097,27 @@ export class BookmarkStore {
       for (const row of data || []) readmeMeta.set(String(row.repo_slug), row);
     }
 
+    // 4b. Metadata enriquecida de GitHub (capa 1, sql/014). Si la tabla no está
+    // aplicada el resumen sigue funcionando sin stars/language.
+    const repoMeta = new Map();
+    if (this.capabilities.githubRepositories) {
+      for (let i = 0; i < slugList.length; i += 300) {
+        const chunk = slugList.slice(i, i + 300);
+        const { data, error } = await this.supabase
+          .from("github_repositories")
+          .select("repo_slug,github_id,stars,language,topics,description,metadata_fetched_at")
+          .in("repo_slug", chunk);
+        if (error) {
+          if (isMissingGithubRepositoriesFeatureError(error)) {
+            this.missingGithubRepositoriesWarning(error);
+            break;
+          }
+          throw new Error(`Failed to read github_repositories: ${extractDbErrorMessage(error)}`);
+        }
+        for (const row of data || []) repoMeta.set(String(row.repo_slug), row);
+      }
+    }
+
     // 5. Ensambla el resumen por repo.
     const items = [];
     for (const [slug, entry] of bySlug) {
@@ -1114,6 +1135,7 @@ export class BookmarkStore {
         }
       }
       const [slugOwner, slugRepo] = slug.split("/");
+      const enriched = repoMeta.get(slug) || null;
       items.push({
         repo_slug: slug,
         owner: meta.owner || slugOwner,
@@ -1122,7 +1144,13 @@ export class BookmarkStore {
         count: entry.bookmarkIds.size,
         sample_author: sampleAuthor,
         latest_date: latestDate,
-        readme_status: meta.status || null
+        readme_status: meta.status || null,
+        stars: enriched && enriched.metadata_fetched_at ? enriched.stars || 0 : null,
+        language: enriched?.language || null,
+        topics: Array.isArray(enriched?.topics) ? enriched.topics : [],
+        description: enriched?.description || null,
+        // Metadata buscada pero GitHub respondió 404/410: repo borrado o renombrado.
+        unavailable: Boolean(enriched?.metadata_fetched_at && !enriched?.github_id)
       });
     }
 
@@ -1131,7 +1159,8 @@ export class BookmarkStore {
       count: (a, b) => b.count - a.count || a.repo_slug.localeCompare(b.repo_slug),
       latest: (a, b) => new Date(b.latest_date || 0) - new Date(a.latest_date || 0),
       owner: (a, b) => a.owner.localeCompare(b.owner),
-      repo: (a, b) => a.repo.localeCompare(b.repo)
+      repo: (a, b) => a.repo.localeCompare(b.repo),
+      stars: (a, b) => (b.stars || 0) - (a.stars || 0) || b.count - a.count
     };
     items.sort(sorters[sort] || sorters.count);
 
@@ -2953,7 +2982,14 @@ export class BookmarkStore {
       }
     }
 
-    const columns = [
+    // Solo metadata en la consulta principal. Los dos asesinos de la
+    // instancia free vivían aquí: (1) seleccionar `content` para TODO el
+    // catálogo (400+ READMEs × hasta 300KB) porque el limit se aplicaba en
+    // JS después de traerlo todo; (2) ensureRepoClassificationsForReadmeRows
+    // corría el clasificador LLM dentro del request. Ahora: metadata capada,
+    // clasificación solo-lectura (la escribe el nightly classify-repo-readmes)
+    // y el contenido se trae aparte únicamente para la página final.
+    const metadataColumns = [
       "repo_slug",
       "owner",
       "repo",
@@ -2970,11 +3006,14 @@ export class BookmarkStore {
       "last_requested_at",
       "error_message",
       "error_status",
-      "updated_at",
-      includeContent ? "content" : null
-    ].filter(Boolean).join(",");
+      "updated_at"
+    ].join(",");
 
-    let queryBuilder = this.supabase.from("github_repo_readmes").select(columns);
+    let queryBuilder = this.supabase
+      .from("github_repo_readmes")
+      .select(metadataColumns)
+      // Tope de seguridad: el filtro q se evalúa en memoria sobre metadata.
+      .limit(2000);
 
     if (scopedRepoSlugs) {
       queryBuilder = queryBuilder.in("repo_slug", scopedRepoSlugs);
@@ -2996,8 +3035,9 @@ export class BookmarkStore {
       throw new Error(`Failed to list GitHub READMEs: ${extractDbErrorMessage(error)}`);
     }
 
-    const classificationResult = await this.ensureRepoClassificationsForReadmeRows(data || []);
-    const classifications = classificationResult.classifications;
+    const classifications = await this.fetchRepoClassificationMap(
+      (data || []).map((row) => row.repo_slug)
+    );
 
     const repoSlugs = (data || []).map((row) => row.repo_slug);
     if (!userId && repoSlugs.length > 0) {
@@ -3022,44 +3062,79 @@ export class BookmarkStore {
       mentionsByRepo.set(row.repo_slug, entry);
     }
 
-    const mapped = (data || [])
-      .map((row) => {
-        const readme = mapGithubReadmeRow(row, { includeContent });
-        const mentions = mentionsByRepo.get(row.repo_slug);
-        return {
-          ...readme,
-          classification: classifications.get(row.repo_slug) || null,
-          bookmark_count: mentions ? mentions.bookmark_ids.size : 0,
-          bookmark_ids: mentions ? [...mentions.bookmark_ids].sort() : [],
-          user_ids: mentions ? [...mentions.user_ids].sort() : []
-        };
-      })
-      .filter((item) => {
+    // q ya no busca dentro del contenido: eso exigía traer el corpus entero.
+    // Cubre slug/url/clasificación, que es lo que la UI expone como filtros.
+    const filtered = (data || [])
+      .map((row) => ({
+        row,
+        classification: classifications.get(row.repo_slug) || null
+      }))
+      .filter(({ row, classification }) => {
         if (!normalizedQuery) return true;
         return (
-          item.repo_slug?.toLowerCase().includes(normalizedQuery) ||
-          item.repo_url?.toLowerCase().includes(normalizedQuery) ||
-          item.content?.toLowerCase().includes(normalizedQuery) ||
-          item.classification?.primary_category?.toLowerCase().includes(normalizedQuery) ||
-          item.classification?.secondary_categories?.some((value) =>
+          row.repo_slug?.toLowerCase().includes(normalizedQuery) ||
+          row.repo_url?.toLowerCase().includes(normalizedQuery) ||
+          classification?.primary_category?.toLowerCase().includes(normalizedQuery) ||
+          classification?.secondary_categories?.some((value) =>
             value.toLowerCase().includes(normalizedQuery)
           ) ||
-          item.classification?.capabilities?.some((value) =>
+          classification?.capabilities?.some((value) =>
             value.toLowerCase().includes(normalizedQuery)
           ) ||
-          item.classification?.integration_types?.some((value) =>
+          classification?.integration_types?.some((value) =>
             value.toLowerCase().includes(normalizedQuery)
           ) ||
-          item.classification?.tech_stack?.some((value) =>
+          classification?.tech_stack?.some((value) =>
             value.toLowerCase().includes(normalizedQuery)
           )
         );
       });
 
+    // Con contenido la página se capa a 10: es la garantía de que este
+    // método no puede volver a armar un payload de decenas de MB, venga de
+    // donde venga la llamada.
+    const effectiveLimit = includeContent
+      ? Math.min(normalizedLimit, 10)
+      : normalizedLimit;
+    const pageEntries = filtered.slice(
+      normalizedOffset,
+      normalizedOffset + effectiveLimit
+    );
+
+    let contentBySlug = new Map();
+    if (includeContent && pageEntries.length > 0) {
+      const { data: contentRows, error: contentError } = await this.supabase
+        .from("github_repo_readmes")
+        .select("repo_slug,content")
+        .in("repo_slug", pageEntries.map(({ row }) => row.repo_slug));
+      if (!contentError) {
+        contentBySlug = new Map(
+          (contentRows || []).map((r) => [r.repo_slug, r.content])
+        );
+      }
+    }
+
+    const items = pageEntries.map(({ row, classification }) => {
+      const readme = mapGithubReadmeRow(
+        includeContent
+          ? { ...row, content: contentBySlug.get(row.repo_slug) || "" }
+          : row,
+        { includeContent }
+      );
+      const mentions = mentionsByRepo.get(row.repo_slug);
+      return {
+        ...readme,
+        classification,
+        bookmark_count: mentions ? mentions.bookmark_ids.size : 0,
+        bookmark_ids: mentions ? [...mentions.bookmark_ids].sort() : [],
+        user_ids: mentions ? [...mentions.user_ids].sort() : []
+      };
+    });
+
     return {
-      total: mapped.length,
-      items: mapped.slice(normalizedOffset, normalizedOffset + normalizedLimit),
-      warning: classificationResult.warning || null
+      total: filtered.length,
+      items,
+      warning: this.repoClassifierWarning || null
     };
   }
 
