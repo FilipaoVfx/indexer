@@ -222,6 +222,9 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 200, {
         ok: true,
         service: "x-bookmarks-backend",
+        // Commit desplegado (Render lo inyecta): permite verificar desde
+        // fuera qué versión está viva sin acceso al dashboard.
+        commit: (process.env.RENDER_GIT_COMMIT || "").slice(0, 7) || null,
         timestamp: new Date().toISOString(),
         user_id: userId || null,
         total_bookmarks: total
@@ -260,8 +263,15 @@ const server = http.createServer(async (req, res) => {
         includeContent = false;
       }
 
-      // Lazy fetch: descarga al verlos los README que sigan pendientes.
-      await store.refreshPendingReadmes({ userId: userId || null, repoSlug: repo });
+      // Lazy fetch en background: descargar READMEs pendientes de GitHub
+      // DENTRO del request bloqueaba la respuesta ~55s y contribuía a tumbar
+      // la instancia free. La lista responde ya; los pendientes se completan
+      // solos y aparecen en la siguiente visita.
+      void store
+        .refreshPendingReadmes({ userId: userId || null, repoSlug: repo })
+        .catch((error) => {
+          console.warn("[backend] background_readme_refresh_failed", error?.message || error);
+        });
 
       const result = await store.listGithubReadmes({
         userId: userId || null,
