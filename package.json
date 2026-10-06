@@ -16,6 +16,12 @@
     "start:backend": "npm run start --workspace=x-bookmarks-backend",
     "record:demo": "npm run record --workspace=indexbook-demo-video",
     "narrate:demo": "npm run narrate --workspace=indexbook-demo-video",
-    "compose:demo": "npm run compose --workspace=indexbook-demo-video"
+    "compose:demo": "npm run compose --workspace=indexbook-demo-video",
+    "test": "node --test --test-isolation=none test/*.test.mjs",
+    "check:extension": "node scripts/check-extension.mjs",
+    "test:browser": "node --test test/browser-smoke.mjs"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8"
   }
 }

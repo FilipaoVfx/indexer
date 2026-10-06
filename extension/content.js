@@ -43,7 +43,9 @@ function logWarn(...args) {
 }
 
 const recentCapturedAtByTweet = new Map();
+const capturesInFlight = new Set();
 const networkReplyCache = new Map();
+const networkTweetCache = new Map();
 const debugEventHistory = [];
 let autoBatchIndex = 0;
 const autoSyncId = `auto-${Date.now().toString(36)}-${Math.random().toString(16).slice(2, 8)}`;
@@ -51,6 +53,18 @@ const DEBUG_EVENT_LIMIT = 60;
 const RUNTIME_NOTICE_ID = "x-indexer-runtime-notice";
 let autoCaptureDisabledReason = "";
 const bookmarkScannerState = {
+  namespace: "",
+  queuedIds: new Set(),
+  bridgeHealth: "waiting",
+  coverageGap: false,
+  requests: new Set(),
+  terminal: false,
+  lastNetworkAt: 0,
+  coverage: "partial",
+  jobId: "",
+  clearingPending: false,
+  checkpoint: Promise.resolve(),
+  stagedSignatures: new Map(),
   initialized: false,
   initializing: null,
   observer: null,
@@ -893,7 +907,7 @@ function getNetworkFirstCommentLinks(mainTweet) {
       continue;
     }
 
-    if (!mainUser || sameAuthor || mainTweetSuggestsResource) {
+    if (sameAuthor && candidate.inReplyToTweetId === String(mainTweet.tweet_id)) {
       return links;
     }
   }
@@ -927,89 +941,49 @@ async function waitForNetworkFirstCommentLinks(mainTweet, timeoutMs = NETWORK_RE
 
 function handlePageBridgeNetworkEvent(event) {
   const detail = event?.detail;
-  if (!detail || detail.source !== PAGE_BRIDGE_SOURCE || !Array.isArray(detail.entries)) {
-    return;
-  }
-
-  // Timeline de Bookmarks: cada entry ES un bookmark con payload completo.
-  // Se almacena por tweetId como fuente primaria; el DOM queda de fallback.
+  if (!detail || detail.source !== PAGE_BRIDGE_SOURCE || detail.protocol !== 2 || !Array.isArray(detail.entries) || detail.entries.length > 80) return;
+  if (detail.health === "ready") bookmarkScannerState.bridgeHealth = "ready";
   if (detail.timeline === "bookmarks") {
-    let stored = 0;
+    if (!isBookmarkScannerPage()) return;
+    if (detail.pending && detail.requestId) bookmarkScannerState.requests.add(detail.requestId);
+    if (detail.pending === false && detail.requestId) bookmarkScannerState.requests.delete(detail.requestId);
+    if (detail.health) bookmarkScannerState.bridgeHealth = detail.health;
+    if (["schema_unknown", "decode_error", "api_error", "network_error"].includes(detail.health)) bookmarkScannerState.coverageGap = true;
+    bookmarkScannerState.lastNetworkAt = Date.now();
+    if (detail.pending !== true) bookmarkScannerState.terminal = Boolean(detail.terminal);
     for (const entry of detail.entries) {
-      const tweetId = cleanText(entry?.tweetId || "");
-      if (!tweetId) continue;
+      const tweetId = String(entry?.tweetId || "");
+      if (!/^\d+$/.test(tweetId) || entry.entityType !== "Tweet" || String(entry.text || "").length > 12000) continue;
       bookmarkScannerState.networkEntries.set(tweetId, entry);
-      stored += 1;
+      networkTweetCache.set(tweetId, entry);
+      if (bookmarkScannerState.savedIds.has(tweetId) && bookmarkScannerState.namespace) {
+        const item = buildPendingItemFromNetworkEntry(tweetId, entry);
+        void sendRuntimeMessage({ type: "BOOKMARK_SCANNER_STAGE", payload: { namespace: bookmarkScannerState.namespace, items: [item] } }).then(result => { if (!result?.ok) throw new Error(result?.error || "capture_checkpoint_failed"); }).catch(error => showRuntimeNotice(formatRuntimeError(error)));
+      }
     }
     bookmarkScannerState.networkEntryCount = bookmarkScannerState.networkEntries.size;
-    if (stored > 0) {
-      rememberDebugEvent("info", "bookmarks_timeline_batch_received", {
-        url: cleanText(detail.url || "").slice(0, 220),
-        entryCount: detail.entries.length,
-        totalNetworkEntries: bookmarkScannerState.networkEntries.size
-      });
-      // Clasifica de inmediato lo que llegó por red (sin esperar al DOM).
-      scheduleBookmarkScannerScan();
-    }
+    scanVisibleBookmarkArticles();
+    scheduleBookmarkScannerScan();
     return;
   }
-
-  let storedCount = 0;
-  for (const entry of detail.entries) {
-    if (rememberNetworkReplyCandidate(entry)) {
-      storedCount += 1;
-    }
+  for (const entry of detail.entries) if (entry?.entityType === "Tweet" && /^\d+$/.test(String(entry.tweetId)) && String(entry.text || "").length <= 12000) {
+    networkTweetCache.set(String(entry.tweetId), entry);
+    rememberNetworkReplyCandidate(entry);
   }
-
-  if (storedCount > 0) {
-    rememberDebugEvent("info", "network_reply_batch_received", {
-      url: cleanText(detail.url || "").slice(0, 220),
-      entryCount: detail.entries.length,
-      storedCount
-    });
-  }
+  while (networkTweetCache.size > 400) networkTweetCache.delete(networkTweetCache.keys().next().value);
 }
 
 function ensurePageBridgeInjected() {
-  if (window.__xIndexerPageBridgeReady) {
-    return;
-  }
-
+  if (window.__xIndexerPageBridgeReady) return;
   window.__xIndexerPageBridgeReady = true;
   window.addEventListener(PAGE_BRIDGE_EVENT_NAME, handlePageBridgeNetworkEvent);
-
-  const injectScript = () => {
-    if (document.getElementById(PAGE_BRIDGE_SCRIPT_ID)) {
-      return;
+  window.dispatchEvent(new CustomEvent("x-indexer:bridge-ping"));
+  window.setTimeout(() => {
+    if (bookmarkScannerState.bridgeHealth === "waiting") {
+      bookmarkScannerState.bridgeHealth = "missing";
+      emitBookmarkScannerStatus({ warning: "Recarga X para activar la captura de red." });
     }
-
-    const target = document.head || document.documentElement;
-    if (!target) {
-      window.setTimeout(injectScript, 25);
-      return;
-    }
-
-    try {
-      const script = document.createElement("script");
-      script.id = PAGE_BRIDGE_SCRIPT_ID;
-      script.src = chrome.runtime.getURL("page-bridge.js");
-      script.async = false;
-      script.onload = () => {
-        rememberDebugEvent("info", "page_bridge_injected", {});
-      };
-      script.onerror = () => {
-        rememberDebugEvent("warn", "page_bridge_inject_failed", {});
-      };
-      target.appendChild(script);
-    } catch (error) {
-      rememberDebugEvent("warn", "page_bridge_inject_failed", {
-        error: formatRuntimeError(error),
-        raw: safeJsonStringify(error, 500)
-      });
-    }
-  };
-
-  injectScript();
+  }, 3000);
 }
 
 function getAnchorHref(anchor) {
@@ -1271,24 +1245,13 @@ function findCardContainerFromNode(node, tweetNode) {
 }
 
 function expandUrlFromAnchor(anchor) {
-  const rawHref = getAnchorHref(anchor);
-  if (!rawHref) return "";
-
-  const parsedHref = parseUrlSafe(rawHref);
-  const hrefIsShortener = Boolean(
-    parsedHref && SHORTENER_HOST_RE.test(parsedHref.hostname)
-  );
-  const textCandidates = collectAnchorUrlCandidates(anchor);
-
-  if (!hrefIsShortener) {
-    // Even for direct links, prefer a longer display form if available.
-    const best = pickLongerUrl([rawHref, ...textCandidates]);
-    return best || rawHref;
+  const href = sanitizeAbsoluteUrl(getAnchorHref(anchor));
+  if (!href) return "";
+  for (const attribute of ["data-expanded-url", "data-full-url"]) {
+    const raw = anchor.getAttribute?.(attribute) || "";
+    if (!/[…]|\.\.\./.test(raw) && /^https?:\/\//i.test(raw)) return sanitizeAbsoluteUrl(raw) || href;
   }
-
-  // Shortener href: try to recover the expanded URL from the anchor subtree.
-  const expanded = pickLongerUrl(textCandidates);
-  return expanded || rawHref;
+  return href;
 }
 
 function extractCardLinks(tweetNode) {
@@ -1499,7 +1462,7 @@ function extractTweetTextWithExpandedUrls(textNode) {
 }
 
 async function extractTweetFromNode(tweetNode) {
-  const statusLink = tweetNode.querySelector('a[href*="/status/"]');
+  const statusLink = tweetNode.querySelector('a[href*="/status/"] time')?.closest('a') || tweetNode.querySelector('a[href*="/status/"]');
   if (!statusLink) {
     return null;
   }
@@ -1669,7 +1632,8 @@ function getBookmarkScannerArticles() {
 function extractBookmarkScannerIdentity(article) {
   const links = article?.querySelectorAll?.('a[href*="/status/"]') || [];
 
-  for (const link of links) {
+  const primary = Array.from(links).filter(link => link.querySelector?.("time"));
+  for (const link of [...primary, ...links]) {
     const rawHref = cleanText(link.getAttribute("href") || "");
     const href = cleanText(link.href || rawHref);
     const tweetId = extractTweetIdFromHref(href || rawHref);
@@ -1718,7 +1682,7 @@ function xCreatedAtToIso(value) {
 function buildPendingItemFromNetworkEntry(tweetId, entry) {
   return {
     tweet_id: tweetId,
-    text: cleanText(entry?.text || ""),
+    text: cleanMultilineText(entry?.text || "").slice(0, BOOKMARK_SCANNER_TEXT_LIMIT),
     url: cleanText(entry?.sourceUrl || "") || `https://x.com/i/web/status/${tweetId}`,
     author_handle: cleanText(entry?.authorUsername || ""),
     author_name: cleanText(entry?.authorName || ""),
@@ -1726,15 +1690,17 @@ function buildPendingItemFromNetworkEntry(tweetId, entry) {
     first_comment_links: [],
     media: Array.isArray(entry?.media) ? entry.media.slice() : [],
     created_at: xCreatedAtToIso(entry?.createdAt),
-    detected_at: new Date().toISOString(),
     source: BOOKMARK_SCANNER_SOURCE,
-    capture: "network"
+    capture: "network",
+    entity_type: "Tweet",
+    timeline_order: String(entry?.bookmarkOrder || ""),
+    content_truncated: entry?.contentTruncated === true
   };
 }
 
 function buildBookmarkScannerPendingItem(article, identity) {
   // Preferir el payload de red si existe: más completo y sin fragilidad DOM.
-  const networkEntry = bookmarkScannerState.networkEntries.get(identity.tweetId);
+  const networkEntry = bookmarkScannerState.networkEntries.get(identity.tweetId) || networkTweetCache.get(identity.tweetId);
   if (networkEntry) {
     const item = buildPendingItemFromNetworkEntry(identity.tweetId, networkEntry);
     if (identity.url) item.url = identity.url;
@@ -1751,9 +1717,9 @@ function buildBookmarkScannerPendingItem(article, identity) {
     links: extractLinks(article),
     first_comment_links: [],
     media: extractMedia(article),
-    detected_at: new Date().toISOString(),
     source: BOOKMARK_SCANNER_SOURCE,
-    capture: "dom"
+    capture: "dom",
+    content_truncated: Boolean(article?.querySelector?.('[data-testid="tweetText"]')?.textContent?.length > BOOKMARK_SCANNER_TEXT_LIMIT || Array.from(article?.querySelectorAll?.('[role="button"]') || []).some(button => /show more|mostrar más/i.test(button.textContent || "")))
   };
 }
 
@@ -1793,10 +1759,12 @@ function getBookmarkScannerStatus(extra = {}) {
     savedIdsCount: bookmarkScannerState.savedIds.size,
     scrollScanInProgress: bookmarkScannerState.scrollScanInProgress,
     scrollScanRounds: bookmarkScannerState.scrollScanRounds,
-    canImport:
-      bookmarkScannerState.idsLoaded &&
-      bookmarkScannerState.backendOnline &&
-      bookmarkScannerState.pendingBookmarks.size > 0,
+    canImport: bookmarkScannerState.pendingBookmarks.size > 0,
+    namespace: bookmarkScannerState.namespace,
+    bridgeHealth: bookmarkScannerState.bridgeHealth,
+    coverageGap: bookmarkScannerState.coverageGap,
+    coverage: bookmarkScannerState.coverage,
+    queuedCount: bookmarkScannerState.queuedIds.size,
     lastError: bookmarkScannerState.lastError,
     ...counts,
     ...extra
@@ -1820,12 +1788,14 @@ function markBookmarkScannerArticle(article, status) {
   const labels = {
     saved: "Guardado",
     pending: "Pendiente",
+    queued: "En cola",
     error: "Error ID",
     unknown: "Offline",
     ignored: "Ignorado"
   };
   const colors = {
     saved: { bg: "#dcfce7", fg: "#14532d", border: "#86efac" },
+    queued: { bg: "#dbeafe", fg: "#1e40af", border: "#93c5fd" },
     pending: { bg: "#fef3c7", fg: "#78350f", border: "#fbbf24" },
     error: { bg: "#fee2e2", fg: "#7f1d1d", border: "#fca5a5" },
     unknown: { bg: "#e0f2fe", fg: "#075985", border: "#7dd3fc" },
@@ -1868,36 +1838,54 @@ function markBookmarkScannerArticle(article, status) {
   badge.style.border = `1px solid ${palette.border}`;
 }
 
+function mergePendingCapture(old, item) {
+  if (!old) return item;
+  const preferred = item.capture === "network" || (old.capture !== "network" && item.text.length > old.text.length) ? item : old;
+  return { ...old, ...preferred, links: dedupeUrls([...(old.links || []), ...(item.links || [])]),
+    media: dedupeUrls([...(old.media || []), ...(item.media || [])]) };
+}
+function classifyScannerItem(tweetId, item) {
+  const st = bookmarkScannerState;
+  if (st.savedIds.has(tweetId)) { st.pendingBookmarks.delete(tweetId); st.statusByTweetId.set(tweetId, "saved"); return; }
+  if (st.dismissedPendingIds.has(tweetId)) { st.statusByTweetId.set(tweetId, "ignored"); return; }
+  st.pendingBookmarks.set(tweetId, mergePendingCapture(st.pendingBookmarks.get(tweetId), item));
+  st.statusByTweetId.set(tweetId, st.queuedIds.has(tweetId) ? "queued" : st.idsLoaded ? "pending" : "unknown");
+}
 function classifyBookmarkScannerArticle(article, identity) {
-  if (!bookmarkScannerState.idsLoaded) {
-    bookmarkScannerState.statusByTweetId.set(identity.tweetId, "unknown");
-    markBookmarkScannerArticle(article, "unknown");
-    return;
+  classifyScannerItem(identity.tweetId, buildBookmarkScannerPendingItem(article, identity));
+  markBookmarkScannerArticle(article, bookmarkScannerState.statusByTweetId.get(identity.tweetId));
+}
+async function checkpointScannerDrafts() {
+  const st = bookmarkScannerState;
+  if (!st.namespace || st.clearingPending) return;
+  const items = getBookmarkScannerPendingItems().filter(item => st.stagedSignatures.get(item.tweet_id) !== JSON.stringify(item));
+  const namespace = st.namespace;
+  const operation = st.checkpoint.catch(() => {}).then(async () => {
+    for (let i = 0; i < items.length; i += 40) {
+      const result = await sendRuntimeMessage({ type: "BOOKMARK_SCANNER_STAGE", payload: { namespace, items: items.slice(i,i+40) } });
+      if (!result?.ok) throw new Error(result?.error || "capture_checkpoint_failed");
+      if (st.namespace !== namespace) throw new Error("settings_changed_restart_scan");
+      for (const item of items.slice(i,i+40)) st.stagedSignatures.set(item.tweet_id, JSON.stringify(item));
+    }
+  });
+  st.checkpoint = operation;
+  return operation;
+}
+async function restoreScannerDrafts() {
+  const response = await sendRuntimeMessage({ type: "BOOKMARK_SCANNER_RESTORE" });
+  if (!response?.ok) throw new Error(response?.error || "capture_restore_failed");
+  const st = bookmarkScannerState;
+  if (st.namespace && st.namespace !== response.namespace) {
+    st.savedIds.clear(); st.pendingBookmarks.clear(); st.statusByTweetId.clear(); st.alreadyScannedIds.clear();
+    st.stagedSignatures.clear();
+    st.networkEntries.clear(); st.dismissedPendingIds.clear(); st.idsLoaded = false;
+    st.terminal = false; st.requests.clear(); st.lastNetworkAt = 0; st.coverage = "partial";
   }
-
-  if (bookmarkScannerState.savedIds.has(identity.tweetId)) {
-    bookmarkScannerState.pendingBookmarks.delete(identity.tweetId);
-    bookmarkScannerState.dismissedPendingIds.delete(identity.tweetId);
-    bookmarkScannerState.statusByTweetId.set(identity.tweetId, "saved");
-    markBookmarkScannerArticle(article, "saved");
-    return;
-  }
-
-  if (bookmarkScannerState.dismissedPendingIds.has(identity.tweetId)) {
-    bookmarkScannerState.pendingBookmarks.delete(identity.tweetId);
-    bookmarkScannerState.statusByTweetId.set(identity.tweetId, "ignored");
-    markBookmarkScannerArticle(article, "ignored");
-    return;
-  }
-
-  if (!bookmarkScannerState.pendingBookmarks.has(identity.tweetId)) {
-    bookmarkScannerState.pendingBookmarks.set(
-      identity.tweetId,
-      buildBookmarkScannerPendingItem(article, identity)
-    );
-  }
-  bookmarkScannerState.statusByTweetId.set(identity.tweetId, "pending");
-  markBookmarkScannerArticle(article, "pending");
+  st.namespace = response.namespace;
+  st.queuedIds = new Set(response.queuedIds || []);
+  for (const id of response.confirmedIds || []) st.savedIds.add(id);
+  for (const item of response.items || []) if (!st.savedIds.has(item.tweet_id)) st.pendingBookmarks.set(item.tweet_id, mergePendingCapture(st.pendingBookmarks.get(item.tweet_id), item));
+  return response;
 }
 
 function scanVisibleBookmarkArticles(options = {}) {
@@ -1934,15 +1922,6 @@ function scanVisibleBookmarkArticles(options = {}) {
       processedThisScan += 1;
     }
 
-    if (
-      wasScanned &&
-      existingStatus &&
-      existingStatus !== "unknown" &&
-      !(existingStatus === "ignored" && !bookmarkScannerState.dismissedPendingIds.has(identity.tweetId))
-    ) {
-      markBookmarkScannerArticle(article, existingStatus);
-      continue;
-    }
 
     classifyBookmarkScannerArticle(article, identity);
   }
@@ -1951,30 +1930,14 @@ function scanVisibleBookmarkArticles(options = {}) {
   // aún no tienen artículo en el DOM (virtualización de X descarta nodos).
   let processedFromNetwork = 0;
   for (const [tweetId, entry] of bookmarkScannerState.networkEntries) {
-    if (bookmarkScannerState.alreadyScannedIds.has(tweetId)) continue;
+    if (!bookmarkScannerState.alreadyScannedIds.has(tweetId)) processedFromNetwork++;
     bookmarkScannerState.alreadyScannedIds.add(tweetId);
-    processedFromNetwork += 1;
-
-    if (!bookmarkScannerState.idsLoaded) {
-      bookmarkScannerState.statusByTweetId.set(tweetId, "unknown");
-      continue;
-    }
-    if (bookmarkScannerState.savedIds.has(tweetId)) {
-      bookmarkScannerState.statusByTweetId.set(tweetId, "saved");
-      continue;
-    }
-    if (bookmarkScannerState.dismissedPendingIds.has(tweetId)) {
-      bookmarkScannerState.statusByTweetId.set(tweetId, "ignored");
-      continue;
-    }
-    if (!bookmarkScannerState.pendingBookmarks.has(tweetId)) {
-      bookmarkScannerState.pendingBookmarks.set(
-        tweetId,
-        buildPendingItemFromNetworkEntry(tweetId, entry)
-      );
-    }
-    bookmarkScannerState.statusByTweetId.set(tweetId, "pending");
+    classifyScannerItem(tweetId, buildPendingItemFromNetworkEntry(tweetId, entry));
   }
+  if (bookmarkScannerState.namespace && !bookmarkScannerState.scrollScanInProgress) void checkpointScannerDrafts().catch(error => {
+    bookmarkScannerState.lastError = formatRuntimeError(error);
+    showRuntimeNotice("No se pudo conservar la captura: " + bookmarkScannerState.lastError);
+  });
 
   bookmarkScannerState.ignoredNodeCount = Math.max(0, articles.length - processedThisScan);
   return emitBookmarkScannerStatus({
@@ -1995,110 +1958,59 @@ function scheduleBookmarkScannerScan() {
 }
 
 async function runBookmarkScannerScrollScan(options = {}) {
-  if (bookmarkScannerState.scrollScanInProgress) {
-    return getBookmarkScannerStatus({
-      error: "scroll_scan_already_running"
-    });
-  }
-
-  const initStatus = await initializeBookmarkScanner({
-    retryIds: !bookmarkScannerState.idsLoaded || !bookmarkScannerState.backendOnline
-  });
-  if (!initStatus.ok || !isBookmarkScannerPage()) {
-    return initStatus;
-  }
-
-  if (options.resetDismissed) {
-    bookmarkScannerState.dismissedPendingIds.clear();
-  }
-
-  bookmarkScannerState.scrollScanInProgress = true;
-  bookmarkScannerState.scrollScanRounds = 0;
-  // Tope opcional: deja de scrollear cuando ya hay N bookmarks nuevos en cola.
-  const maxPending = Number(options.maxPending) > 0 ? Math.floor(Number(options.maxPending)) : 0;
-  let idleRounds = 0;
-  let round = 0;
-  let finalStatus = {
-    stage: "bookmark_scanner_scroll_completed",
-    rounds: 0
-  };
-
+  if (bookmarkScannerState.scrollScanInProgress) return getBookmarkScannerStatus({ ok: false, error: "scroll_scan_already_running" });
+  const init = await initializeBookmarkScanner({ retryIds: !bookmarkScannerState.idsLoaded });
+  if (!init.ok || !isBookmarkScannerPage()) return init;
+  const st = bookmarkScannerState;
+  st.scrollScanInProgress = true; st.scrollScanRounds = 0; st.coverage = "partial";
+  if (options.resetDismissed) st.dismissedPendingIds.clear();
+  let rounds = 0, lastGrowth = Date.now(), count = st.alreadyScannedIds.size;
+  const startedAtTop = window.scrollY < 20;
+  const maxPending = Math.max(0, Number(options.maxPending) || 0);
+  let result = { stage: "bookmark_scanner_scroll_completed" };
   try {
-    while (
-      round < BOOKMARK_SCANNER_SCROLL_CONFIG.maxRounds &&
-      idleRounds < BOOKMARK_SCANNER_SCROLL_CONFIG.idleRounds &&
-      (maxPending === 0 || bookmarkScannerState.pendingBookmarks.size < maxPending)
-    ) {
-      round += 1;
-      bookmarkScannerState.scrollScanRounds = round;
-      const before = bookmarkScannerState.alreadyScannedIds.size;
-      const beforeY = window.scrollY;
-      const status = scanVisibleBookmarkArticles({
-        markExisting: true,
-        resetDismissed: round === 1 && options.resetDismissed
-      });
-      const after = bookmarkScannerState.alreadyScannedIds.size;
-      const newThisRound = after - before;
-
-      safeEmit({
-        type: "BOOKMARK_SCANNER_STATUS",
-        payload: {
-          ...status,
-          stage: "bookmark_scanner_scroll_round",
-          round,
-          newThisRound,
-          idleRounds
-        }
-      });
-
-      if (newThisRound === 0) {
-        idleRounds += 1;
-      } else {
-        idleRounds = 0;
-      }
-
-      const maxScrollY = Math.max(
-        document.documentElement?.scrollHeight || 0,
-        document.body ? document.body.scrollHeight : 0
-      );
-      const scrollStep = Math.max(
-        240,
-        Math.floor(window.innerHeight * BOOKMARK_SCANNER_SCROLL_CONFIG.stepRatio)
-      );
-      window.scrollBy({
-        top: scrollStep,
-        left: 0,
-        behavior: "auto"
-      });
+    while (rounds < BOOKMARK_SCANNER_SCROLL_CONFIG.maxRounds) {
+      if (!isBookmarkScannerPage()) throw new Error("scan_page_changed");
+      rounds++; st.scrollScanRounds = rounds;
+      scanVisibleBookmarkArticles({ markExisting: true });
+      await checkpointScannerDrafts();
+      if (st.alreadyScannedIds.size !== count) { count = st.alreadyScannedIds.size; lastGrowth = Date.now(); }
+      if (st.jobId) await reportScanJob(st.jobId, { rounds });
+      if (maxPending && st.pendingBookmarks.size >= maxPending) { st.coverage = "range_limit"; break; }
+      if (st.terminal && !st.requests.size && st.bridgeHealth === "ok" && !st.coverageGap) { st.coverage = startedAtTop ? "complete" : "partial"; break; }
+      // A quiet DOM is insufficient proof of completion; slow network gets at least 6 seconds.
+      if (!st.requests.size && Date.now() - Math.max(lastGrowth, st.lastNetworkAt) >= 6000) break;
+      if (st.requests.size && Date.now() - st.lastNetworkAt >= 15000) { st.lastError = "x_request_stalled"; break; }
+      window.scrollBy({ top: Math.max(240, Math.floor(window.innerHeight * BOOKMARK_SCANNER_SCROLL_CONFIG.stepRatio)), left: 0, behavior: "auto" });
       await sleep(BOOKMARK_SCANNER_SCROLL_CONFIG.roundDelayMs);
-
-      const nearBottom =
-        window.scrollY + window.innerHeight >= maxScrollY - Math.max(240, scrollStep / 2);
-      const didNotMove = Math.abs(window.scrollY - beforeY) < 8;
-      if (nearBottom || didNotMove) {
-        idleRounds += 1;
-      }
     }
-
-    finalStatus = {
-      stage: "bookmark_scanner_scroll_completed",
-      rounds: round
-    };
+  } catch (error) { st.lastError = formatRuntimeError(error); result = { ok: false, error: st.lastError, stage: "bookmark_scanner_scroll_failed" }; }
+  finally { st.scrollScanInProgress = false; scanVisibleBookmarkArticles({ markExisting: true }); await checkpointScannerDrafts(); }
+  return emitBookmarkScannerStatus({ ...result, rounds, coverage: st.coverage });
+}
+async function reportScanJob(jobId, extra) {
+  const response = await sendRuntimeMessage({ type: "BOOKMARK_SCANNER_JOB_PROGRESS", payload: { jobId, namespace: bookmarkScannerState.namespace, ...extra } });
+  if (!response?.ok) throw new Error(response?.error || "job_progress_failed");
+}
+async function runCaptureJob(job) {
+  const st = bookmarkScannerState;
+  st.jobId = job.id;
+  try {
+    await initializeBookmarkScanner();
+    if (job.namespace !== st.namespace) throw new Error("settings_changed_restart_scan");
+    // Resuming uses durable drafts; the tab remains responsible only for observing X.
+    let scan = getBookmarkScannerStatus({ coverage: job.coverage || "partial", rounds: job.rounds || 0 });
+    if (!job.selectedIds) {
+      scan = await runBookmarkScannerScrollScan({ resetDismissed: true, maxPending: job.range?.max });
+      if (!scan.ok) throw new Error(scan.error || "scan_failed");
+    }
+    await importBookmarkScannerPending({ rangeStart: job.range?.min, rangeEnd: job.range?.max, jobId: job.id, selectedIds: job.selectedIds });
+    await reportScanJob(job.id, { scanFinished: true, coverage: scan.coverage, rounds: scan.rounds });
   } catch (error) {
-    bookmarkScannerState.lastError = formatRuntimeError(error);
-    finalStatus = {
-      ok: false,
-      stage: "bookmark_scanner_scroll_failed",
-      error: bookmarkScannerState.lastError,
-      rounds: round
-    };
-  } finally {
-    bookmarkScannerState.scrollScanInProgress = false;
-    bookmarkScannerState.scrollScanRounds = round;
-    scanVisibleBookmarkArticles({ markExisting: true });
-  }
-
-  return emitBookmarkScannerStatus(finalStatus);
+    st.lastError = formatRuntimeError(error);
+    try { await reportScanJob(job.id, { error: st.lastError, coverage: "partial" }); } catch (_error) {}
+    showRuntimeNotice("La importación quedó pendiente: " + st.lastError);
+  } finally { st.jobId = ""; }
 }
 
 function startBookmarkScannerObserver() {
@@ -2147,6 +2059,7 @@ async function loadBookmarkScannerSavedIds() {
     return false;
   }
 
+  if (response?.namespace && response.namespace !== bookmarkScannerState.namespace) throw new Error("settings_changed_restart_scan");
   bookmarkScannerState.backendOnline = Boolean(response?.online);
   bookmarkScannerState.cachedIds = Boolean(response?.cached);
   bookmarkScannerState.lastError = response?.error ? String(response.error) : "";
@@ -2158,7 +2071,7 @@ async function loadBookmarkScannerSavedIds() {
     return false;
   }
 
-  bookmarkScannerState.savedIds = new Set(response.ids.map(String).filter(Boolean));
+  bookmarkScannerState.savedIds = new Set([...bookmarkScannerState.savedIds, ...response.ids.map(String).filter(Boolean)]);
   bookmarkScannerState.savedIdsVersion = cleanText(response.version || "");
   bookmarkScannerState.idsLoaded = true;
   return true;
@@ -2167,9 +2080,9 @@ async function loadBookmarkScannerSavedIds() {
 async function initializeBookmarkScanner(options = {}) {
   if (!isBookmarkScannerPage()) {
     return {
+      ...getBookmarkScannerStatus({ active: false }),
       ok: false,
-      error: "not_on_bookmarks_page",
-      ...getBookmarkScannerStatus({ active: false })
+      error: "not_on_bookmarks_page"
     };
   }
 
@@ -2183,6 +2096,7 @@ async function initializeBookmarkScanner(options = {}) {
   }
 
   bookmarkScannerState.initializing = (async () => {
+    await restoreScannerDrafts();
     bookmarkScannerState.initialized = true;
     await loadBookmarkScannerSavedIds();
     scanVisibleBookmarkArticles({ markExisting: true });
@@ -2198,110 +2112,58 @@ async function initializeBookmarkScanner(options = {}) {
   }
 }
 
-function clearBookmarkScannerPending() {
-  for (const tweetId of bookmarkScannerState.pendingBookmarks.keys()) {
-    bookmarkScannerState.dismissedPendingIds.add(tweetId);
-  }
-  bookmarkScannerState.pendingBookmarks.clear();
-  for (const [tweetId, status] of bookmarkScannerState.statusByTweetId.entries()) {
-    if (status === "pending") {
-      bookmarkScannerState.statusByTweetId.set(tweetId, "ignored");
-    }
-  }
-  scanVisibleBookmarkArticles({ markExisting: true });
-  return emitBookmarkScannerStatus({ cleared: true });
+async function clearBookmarkScannerPending() {
+  const st = bookmarkScannerState;
+  st.clearingPending = true;
+  try {
+    await st.checkpoint;
+    const ids = [...st.pendingBookmarks.keys()].filter(id => !st.queuedIds.has(id));
+    const result = await sendRuntimeMessage({ type: "BOOKMARK_SCANNER_CLEAR_DRAFTS", payload: { namespace: st.namespace, ids } });
+    if (!result?.ok) throw new Error(result?.error || "clear_drafts_failed");
+    for (const id of ids) { st.dismissedPendingIds.add(id); st.pendingBookmarks.delete(id); st.statusByTweetId.set(id, "ignored"); st.stagedSignatures.delete(id); }
+    return emitBookmarkScannerStatus({ cleared: true });
+  } finally { st.clearingPending = false; }
 }
 
 function getBookmarkScannerPendingItems() {
-  return Array.from(bookmarkScannerState.pendingBookmarks.values());
+  return Array.from(bookmarkScannerState.pendingBookmarks.values()).sort((a,b) => {
+    const left = /^\d+$/.test(a.timeline_order || "") ? BigInt(a.timeline_order) : null;
+    const right = /^\d+$/.test(b.timeline_order || "") ? BigInt(b.timeline_order) : null;
+    if (left !== null && right !== null) return left === right ? 0 : left > right ? -1 : 1;
+    return left !== null ? -1 : right !== null ? 1 : 0;
+  });
 }
 
 async function importBookmarkScannerPending(range = {}) {
-  if (!bookmarkScannerState.initialized) {
-    await initializeBookmarkScanner();
+  if (!bookmarkScannerState.initialized) await initializeBookmarkScanner();
+  await checkpointScannerDrafts();
+  const all = getBookmarkScannerPendingItems();
+  const start = Math.max(1, Number(range.rangeStart) || 1);
+  const end = Number(range.rangeEnd) > 0 ? Number(range.rangeEnd) : all.length;
+  let ids = range.selectedIds || all.slice(start - 1, end).map(item => item.tweet_id);
+  if (range.jobId && !range.selectedIds) {
+    const selection = await sendRuntimeMessage({ type: "BOOKMARK_SCANNER_SELECT_JOB", payload: { jobId: range.jobId, namespace: bookmarkScannerState.namespace, ids } });
+    if (!selection?.ok) throw new Error(selection?.error || "capture_selection_failed");
+    ids = selection.ids;
   }
-
-  if (!bookmarkScannerState.idsLoaded) {
-    return {
-      ok: false,
-      error: "saved_ids_not_loaded",
-      ...getBookmarkScannerStatus()
-    };
+  const byId = new Map(all.map(item => [item.tweet_id, item]));
+  let queued = 0;
+  for (let i = 0; i < ids.length; i += 40) {
+    const originalIds = ids.slice(i, i + 40);
+    const remainingIds = originalIds.filter(id => !bookmarkScannerState.savedIds.has(id) && !bookmarkScannerState.queuedIds.has(id));
+    if (remainingIds.some(id => !byId.has(id))) throw new Error("selected_capture_missing_restore_required");
+    const chunk = remainingIds.map(id => byId.get(id));
+    if (!chunk.length) continue;
+    const response = await sendRuntimeMessage({ type: "BOOKMARK_SCANNER_IMPORT_BATCH", payload: {
+      source: BOOKMARK_SCANNER_SOURCE, items: chunk, jobId: range.jobId,
+      namespace: bookmarkScannerState.namespace, requestId: `${range.jobId || createTraceId("import")}-${i}`, requestIds: originalIds
+    } }, { timeoutMs: 15000, maxAttempts: 2 });
+    if (!response?.ok) throw new Error(response?.error || "capture_enqueue_failed");
+    for (const item of chunk) bookmarkScannerState.queuedIds.add(item.tweet_id);
+    queued += chunk.length;
   }
-
-  if (!bookmarkScannerState.backendOnline) {
-    return {
-      ok: false,
-      error: "backend_offline",
-      ...getBookmarkScannerStatus()
-    };
-  }
-
-  let items = getBookmarkScannerPendingItems();
-  const rangeStart = Number(range.rangeStart) > 0 ? Math.floor(Number(range.rangeStart)) : 1;
-  const rangeEnd = Number(range.rangeEnd) > 0 ? Math.floor(Number(range.rangeEnd)) : items.length;
-  if (rangeStart > 1 || rangeEnd < items.length) {
-    items = items.slice(rangeStart - 1, rangeEnd);
-  }
-  if (items.length === 0) {
-    return {
-      ok: true,
-      imported: 0,
-      ...getBookmarkScannerStatus()
-    };
-  }
-
-  // Los items DOM pagan prepare (tab de detalle ~15s c/u); los network no.
-  const domItems = items.filter((item) => item?.capture !== "network").length;
-  const importTimeoutMs = Math.max(
-    BOOKMARK_SCANNER_IMPORT_TIMEOUT_MS,
-    120_000 + domItems * 20_000
-  );
-
-  const response = await sendRuntimeMessage({
-    type: "BOOKMARK_SCANNER_IMPORT_BATCH",
-    payload: {
-      source: BOOKMARK_SCANNER_SOURCE,
-      items
-    }
-  }, {
-    label: "BOOKMARK_SCANNER_IMPORT_BATCH",
-    timeoutMs: importTimeoutMs,
-    maxAttempts: 1
-  });
-
-  if (!response || !response.ok) {
-    const error = response?.error || "bookmark_scanner_import_failed";
-    bookmarkScannerState.lastError = String(error);
-    return {
-      ok: false,
-      error,
-      ...getBookmarkScannerStatus()
-    };
-  }
-
-  const importedIds = new Set(
-    [
-      ...(Array.isArray(response.imported_ids) ? response.imported_ids : []),
-      ...(Array.isArray(response.duplicate_ids) ? response.duplicate_ids : [])
-    ].map(String)
-  );
-
-  for (const tweetId of importedIds) {
-    bookmarkScannerState.savedIds.add(tweetId);
-    bookmarkScannerState.pendingBookmarks.delete(tweetId);
-    bookmarkScannerState.statusByTweetId.set(tweetId, "saved");
-  }
-
-  bookmarkScannerState.backendOnline = true;
-  bookmarkScannerState.lastError = "";
   scanVisibleBookmarkArticles({ markExisting: true });
-
-  return {
-    ok: true,
-    backendResult: response,
-    ...getBookmarkScannerStatus()
-  };
+  return getBookmarkScannerStatus({ queued });
 }
 
 function scheduleBookmarkScannerAutostart() {
@@ -2335,6 +2197,7 @@ function watchBookmarkScannerNavigation() {
       return;
     }
     bookmarkScannerLastHref = nextHref;
+    bookmarkScannerState.terminal = false; bookmarkScannerState.requests.clear(); bookmarkScannerState.coverage = "partial";
     scheduleBookmarkScannerAutostart();
   }, 1500);
 }
@@ -2439,6 +2302,8 @@ function collectReplyCandidates(mainTweetNode, mainTweet) {
       ...extractCardLinks(candidate)
     ]);
     const sameAuthor = Boolean(mainUser && replyUser && replyUser === mainUser);
+    const verified = getNetworkReplyCandidates(mainTweetId).some(entry => entry.tweetId === candidateTweetId && entry.inReplyToTweetId === mainTweetId && entry.authorUsername.toLowerCase() === mainUser);
+    if (!sameAuthor || !verified) continue;
 
     let score = Math.max(0, 220 - ((i - idx) * 6));
     if (sameAuthor) {
@@ -2489,25 +2354,7 @@ async function collectSelfReplyLinks(mainTweetNode, mainTweet) {
   );
   const candidates = collectReplyCandidates(mainTweetNode, mainTweet);
 
-  if (candidates.length === 0) {
-    const firstReplyNode = findFirstReplyNode(mainTweetNode);
-    if (!firstReplyNode) {
-      return [];
-    }
-
-    candidates.push({
-      node: firstReplyNode,
-      tweetId: "",
-      replyUser: "",
-      sameAuthor: false,
-      links: dedupeUrls([
-        ...extractLinks(firstReplyNode),
-        ...extractCardLinks(firstReplyNode)
-      ]),
-      distance: 1,
-      score: 0
-    });
-  }
+  if (candidates.length === 0) return [];
 
   for (const candidate of candidates.slice(0, 12)) {
     const reply = await extractTweetWithRetries(candidate.node);
@@ -2522,7 +2369,7 @@ async function collectSelfReplyLinks(mainTweetNode, mainTweet) {
     }
 
     const sameAuthor = Boolean(mainUser && replyUser && replyUser === mainUser) || candidate.sameAuthor;
-    if (!mainUser || sameAuthor || mainTweetSuggestsResource) {
+    if (sameAuthor) {
       return replyLinks;
     }
   }
@@ -2626,7 +2473,7 @@ function dedupeCapture(tweetId) {
   if (typeof last === "number" && now - last < AUTO_CAPTURE_CONFIG.dedupeWindowMs) {
     return false;
   }
-  recentCapturedAtByTweet.set(tweetId, now);
+  if (capturesInFlight.has(tweetId)) return false;
   const expiryCutoff = now - AUTO_CAPTURE_CONFIG.dedupeWindowMs * 4;
   for (const [id, ts] of recentCapturedAtByTweet) {
     if (ts < expiryCutoff) {
@@ -2636,7 +2483,7 @@ function dedupeCapture(tweetId) {
   return true;
 }
 
-async function enqueueSingleBookmark(tweet, source, traceId) {
+async function enqueueSingleBookmark(tweet, source, traceId, namespace) {
   autoBatchIndex += 1;
   const bookmarkDebug = buildTweetDebugSnapshot(tweet);
 
@@ -2668,6 +2515,8 @@ async function enqueueSingleBookmark(tweet, source, traceId) {
       syncId: autoSyncId,
       batchIndex: autoBatchIndex,
       traceId,
+      requestId: traceId,
+      namespace,
       source,
       pageUrl: window.location.href,
       bookmarks: [tweet]
@@ -2710,162 +2559,50 @@ async function enqueueSingleBookmark(tweet, source, traceId) {
 }
 
 async function handleBookmarkSave(event, source) {
-  if (autoCaptureDisabledReason) {
-    return;
-  }
-
-  const actionElement = findActionElement(event.target);
-  if (!actionElement) {
-    return;
-  }
+  if (autoCaptureDisabledReason) return;
+  const action = findActionElement(event.target);
+  const node = action?.closest('article[data-testid="tweet"]');
+  const identity = node && extractBookmarkScannerIdentity(node);
+  if (!identity) return;
+  // Freeze identity and payload before X can recycle the virtualized article.
+  const snapshot = buildBookmarkScannerPendingItem(node, identity);
+  const tweet = { ...snapshot, source_url: snapshot.url, author_username: snapshot.author_handle };
   const traceId = createTraceId("cap");
-  rememberDebugEvent("info", "bookmark_click_detected", {
-    traceId,
-    source,
-    target: summarizeEventTarget(event.target)
-  });
-  safeEmit({
-    type: "SYNC_PROGRESS",
-    payload: {
-      stage: "auto_capture_detected",
-      traceId,
-      source
-    }
-  });
-
-  const tweetNode = actionElement.closest('article[data-testid="tweet"]');
-  if (!tweetNode) {
-    rememberDebugEvent("warn", "bookmark_click_missing_article", {
-      traceId,
-      source,
-      target: summarizeEventTarget(event.target)
-    });
-    return;
-  }
-
-  await sleep(AUTO_CAPTURE_CONFIG.captureDelayMs);
-  const tweet = await extractTweetWithRetries(tweetNode);
-  if (!tweet || !tweet.tweet_id) {
-    rememberDebugEvent("warn", "tweet_extract_failed", {
-      traceId,
-      source
-    });
-    safeEmit({
-      type: "SYNC_ERROR",
-      payload: {
-        stage: "auto_capture_extract_failed",
-        traceId,
-        source
-      }
-    });
-    return;
-  }
-  rememberDebugEvent("info", "tweet_extracted", {
-    traceId,
-    source,
-    tweet: buildTweetDebugSnapshot(tweet)
-  });
-  safeEmit({
-    type: "SYNC_PROGRESS",
-    payload: {
-      stage: "auto_capture_extracted",
-      traceId,
-      source,
-      tweetId: tweet.tweet_id,
-      author: tweet.author_username,
-      linkCount: Array.isArray(tweet.links) ? tweet.links.length : 0
-    }
-  });
-
-  if (!dedupeCapture(tweet.tweet_id)) {
-    rememberDebugEvent("info", "tweet_capture_deduped", {
-      traceId,
-      source,
-      tweetId: tweet.tweet_id
-    });
-    safeEmit({
-      type: "SYNC_PROGRESS",
-      payload: {
-        stage: "auto_capture_deduped",
-        traceId,
-        source,
-        tweetId: tweet.tweet_id
-      }
-    });
-    return;
-  }
-
+  if (!dedupeCapture(identity.tweetId)) return;
+  capturesInFlight.add(identity.tweetId);
   try {
-    const extraLinks = await collectSelfReplyLinks(tweetNode, tweet);
-    if (extraLinks.length > 0) {
-      const merged = new Set((tweet.links || []).map(String));
-      for (const link of extraLinks) {
-        merged.add(String(link));
-      }
-      tweet.links = Array.from(merged);
-      tweet.first_comment_links = extraLinks.slice();
-      rememberDebugEvent("info", "self_reply_links_merged", {
-        traceId,
-        source,
-        tweetId: tweet.tweet_id,
-        addedLinks: extraLinks.length
-      });
-      safeEmit({
-        type: "SYNC_PROGRESS",
-        payload: {
-          stage: "auto_capture_self_reply_merged",
-          traceId,
-          tweetId: tweet.tweet_id,
-          addedLinks: extraLinks.length
-        }
-      });
+    const settings = await sendRuntimeMessage({ type: "GET_SETTINGS" });
+    if (!settings?.ok) throw new Error("capture_settings_unavailable");
+    const namespace = JSON.stringify([settings.apiBaseUrl.replace(/\/+$/, ""), settings.userId]);
+    await sleep(AUTO_CAPTURE_CONFIG.captureDelayMs);
+    let confirmed = false;
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const current = extractBookmarkScannerIdentity(node);
+      if (current?.tweetId !== identity.tweetId) throw new Error("tweet_identity_changed");
+      if (node.querySelector('[data-testid="removeBookmark"]')) { confirmed = true; break; }
+      await sleep(250);
     }
+    if (!confirmed) throw new Error("x_bookmark_not_confirmed");
+    const network = networkTweetCache.get(identity.tweetId);
+    if (network) Object.assign(tweet, buildPendingItemFromNetworkEntry(identity.tweetId, network));
+    else {
+      const expanded = await extractTweetWithRetries(node);
+      if (extractBookmarkScannerIdentity(node)?.tweetId !== identity.tweetId || expanded?.tweet_id !== identity.tweetId) throw new Error("tweet_identity_changed");
+      if (expanded) Object.assign(tweet, expanded, { capture: "dom", content_truncated: buildBookmarkScannerPendingItem(node, identity).content_truncated });
+    }
+    tweet.author_username ||= tweet.author_handle;
+    tweet.first_comment_links = getNetworkFirstCommentLinks(tweet);
+    await enqueueSingleBookmark(tweet, source, traceId, namespace);
+    recentCapturedAtByTweet.set(identity.tweetId, Date.now());
+    rememberDebugEvent("info", "enqueue_completed", { traceId, tweetId: identity.tweetId });
   } catch (error) {
-    rememberDebugEvent("warn", "self_reply_lookup_failed", {
-      traceId,
-      source,
-      tweetId: tweet.tweet_id,
-      error: formatRuntimeError(error),
-      raw: safeJsonStringify(error, 500)
-    });
-  }
-
-  try {
-    await enqueueSingleBookmark(tweet, source, traceId);
-    rememberDebugEvent("info", "enqueue_completed", {
-      traceId,
-      source,
-      tweetId: tweet.tweet_id
-    });
-  } catch (error) {
-    const formattedError = formatRuntimeError(error);
-    // Mensaje inline: la página de Errors de Chrome/Brave solo muestra el
-    // primer argumento como string — un objeto queda como [object Object].
-    logWarn(`enqueue failed: ${formattedError}`, {
-      traceId,
-      tweetId: tweet.tweet_id,
-      source,
-      error: formattedError,
-      raw: safeJsonStringify(error)
-    });
-    rememberDebugEvent("warn", "enqueue_failed", {
-      traceId,
-      source,
-      tweetId: tweet.tweet_id,
-      error: formattedError,
-      raw: safeJsonStringify(error)
-    });
-    safeEmit({
-      type: "SYNC_ERROR",
-      payload: {
-        stage: "auto_capture_enqueue_failed",
-        traceId,
-        source,
-        tweetId: tweet.tweet_id,
-        error: formattedError,
-        debugEventCount: debugEventHistory.length
-      }
-    });
+    const message = formatRuntimeError(error);
+    rememberDebugEvent("warn", "auto_capture_failed", { traceId, tweetId: identity.tweetId, error: message });
+    showRuntimeNotice("La captura no se confirmó: " + message);
+    safeEmit({ type: "SYNC_ERROR", payload: { stage: "auto_capture_enqueue_failed", tweetId: identity.tweetId, error: message } });
+  } finally {
+    capturesInFlight.delete(identity.tweetId);
+    for (const [id, at] of recentCapturedAtByTweet) if (Date.now() - at > AUTO_CAPTURE_CONFIG.dedupeWindowMs * 4) recentCapturedAtByTweet.delete(id);
   }
 }
 
@@ -2912,6 +2649,21 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return false;
   }
 
+  if (message.type === "BOOKMARK_SCANNER_RUN_JOB") {
+    if (bookmarkScannerState.jobId) { sendResponse({ ok: bookmarkScannerState.jobId === message.payload?.id, error: "scan_already_running" }); return false; }
+    void runCaptureJob(message.payload);
+    sendResponse({ ok: true, started: true }); return false;
+  }
+  if (message.type === "DELIVERY_CONFIRMED" && message.payload?.namespace === bookmarkScannerState.namespace) {
+    for (const id of message.payload.ids || []) {
+      bookmarkScannerState.savedIds.add(String(id)); bookmarkScannerState.pendingBookmarks.delete(String(id)); bookmarkScannerState.queuedIds.delete(String(id));
+    }
+    scanVisibleBookmarkArticles({ markExisting: true }); return false;
+  }
+  if (message.type === "SETTINGS_CHANGED") {
+    void restoreScannerDrafts().then(() => loadBookmarkScannerSavedIds()).then(() => scanVisibleBookmarkArticles()).catch(error => showRuntimeNotice(formatRuntimeError(error)));
+    return false;
+  }
   if (message.type === "GET_CAPTURE_STATUS") {
     sendResponse({
       ok: true,
@@ -2940,9 +2692,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       .then((result) => sendResponse(result))
       .catch((error) =>
         sendResponse({
+          ...getBookmarkScannerStatus(),
           ok: false,
-          error: error instanceof Error ? error.message : String(error),
-          ...getBookmarkScannerStatus()
+          error: error instanceof Error ? error.message : String(error)
         })
       );
     return true;
@@ -2956,9 +2708,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       .then((result) => sendResponse(result))
       .catch((error) =>
         sendResponse({
+          ...getBookmarkScannerStatus(),
           ok: false,
-          error: error instanceof Error ? error.message : String(error),
-          ...getBookmarkScannerStatus()
+          error: error instanceof Error ? error.message : String(error)
         })
       );
     return true;
@@ -2979,8 +2731,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === "BOOKMARK_SCANNER_CLEAR_PENDING") {
-    sendResponse(clearBookmarkScannerPending());
-    return false;
+    void clearBookmarkScannerPending().then(sendResponse).catch(error => sendResponse(getBookmarkScannerStatus({ ok: false, error: formatRuntimeError(error) })));
+    return true;
   }
 
   if (message.type === "BOOKMARK_SCANNER_IMPORT_PENDING") {
@@ -2988,9 +2740,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       .then((result) => sendResponse(result))
       .catch((error) =>
         sendResponse({
+          ...getBookmarkScannerStatus(),
           ok: false,
-          error: error instanceof Error ? error.message : String(error),
-          ...getBookmarkScannerStatus()
+          error: error instanceof Error ? error.message : String(error)
         })
       );
     return true;

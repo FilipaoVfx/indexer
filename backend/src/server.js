@@ -1,5 +1,5 @@
 import http from "node:http";
-import { URL } from "node:url";
+import { URL, pathToFileURL } from "node:url";
 import { config, validateConfig } from "./config.js";
 import {
   buildClustersResponse,
@@ -19,17 +19,8 @@ import { BookmarkStore } from "./store.js";
 import { metrics, instrumentRequest, normalizeRoute } from "./metrics.js";
 import { createRateLimiter, requireApiKey } from "./auth.js";
 
-validateConfig();
-
-if (!config.apiKey) {
-  console.warn(
-    "[backend] API_KEY not set — write endpoints (/api/bookmarks/batch, /bookmarks/import-batch) accept unauthenticated requests"
-  );
-}
-
-const store = new BookmarkStore(config);
-await store.init();
-
+export function createBookmarkServer(store, settings = config) {
+const config = settings;
 const checkWriteRateLimit = createRateLimiter({
   windowMs: config.writeRateLimitWindowMs,
   max: config.writeRateLimitMax
@@ -154,6 +145,7 @@ function normalizeScannerImportItems(items) {
       first_comment_links: Array.isArray(item.first_comment_links)
         ? item.first_comment_links
         : [],
+      capture: item.capture, entity_type: item.entity_type, content_truncated: item.content_truncated,
       media: Array.isArray(item.media) ? item.media : []
     });
   }
@@ -433,7 +425,7 @@ const server = http.createServer(async (req, res) => {
         userId,
         tweetIds: normalized.map((item) => item.tweet_id)
       });
-      const duplicates = [...duplicateIds];
+      const duplicates = [];
       const newItems = [];
 
       for (const item of normalized) {
@@ -460,6 +452,10 @@ const server = http.createServer(async (req, res) => {
             warnings: []
           };
 
+      const committed = new Set(summary.stored_ids || []);
+      const racedIds = await store.getExistingTweetIds({ userId, tweetIds: newItems.map(item => item.tweet_id).filter(id => !committed.has(id)) });
+      duplicates.push(...racedIds);
+      const allInvalid = [...invalid, ...(summary.invalid || [])];
       metrics.bookmarksIngestedTotal.inc({ source }, summary.inserted || 0);
       metrics.ingestBatchesTotal.inc({ endpoint: "import_batch", status: "ok" });
 
@@ -473,8 +469,8 @@ const server = http.createServer(async (req, res) => {
         duplicates: [...new Set(duplicates)].length,
         failed: invalid.length + (summary.ignored_invalid || 0),
         duplicate_ids: [...new Set(duplicates)],
-        imported_ids: newItems.map((item) => item.tweet_id),
-        invalid,
+        imported_ids: summary.stored_ids || [],
+        invalid: allInvalid,
         total_stored: summary.total_stored ?? null,
         warnings: summary.warnings || []
       });
@@ -545,10 +541,9 @@ const server = http.createServer(async (req, res) => {
         20_000
       );
 
+      const startOffset = clampNumber(requestUrl.searchParams.get("offset"), 0, 0, 1_000_000);
       const result = await store.listFirstCommentRelookupCandidates({
-        userId: userId || null,
-        limit,
-        scanLimit
+        userId: userId || null, limit, scanLimit, startOffset
       });
 
       sendJson(res, 200, {
@@ -913,8 +908,14 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(config.port, () => {
-  console.log(
-    `[backend] listening on http://localhost:${config.port} | data file: ${config.dataFile}`
-  );
-});
+return server;
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  validateConfig();
+  if (!config.apiKey) console.warn("[backend] API_KEY not set — write endpoints accept unauthenticated requests");
+  const store = new BookmarkStore(config);
+  await store.init();
+  const server = createBookmarkServer(store);
+  server.listen(config.port, () => console.log(`[backend] listening on http://localhost:${config.port} | data file: ${config.dataFile}`));
+}

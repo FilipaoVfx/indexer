@@ -1,141 +1,79 @@
-# Funcionamiento del sistema (paso a paso, enfasis en ingesta)
+# Ingesta de X Indexer
 
-Este documento describe el recorrido completo de los datos desde X hasta almacenamiento y busqueda, con foco en la capa de ingesta.
-
-## 1) Vista general del pipeline
-
-```mermaid
-flowchart LR
-  A[Usuario en x.com/i/bookmarks] --> B[Extension popup: Sync]
-  B --> C[Content script: scraping + scroll infinito]
-  C --> D[Batch builder 25 items]
-  D --> E[Background queue local]
-  E --> F[POST /api/bookmarks/batch]
-  F --> G[Backend: validacion y normalizacion]
-  G --> H[Deduplicacion user_id + tweet_id]
-  H --> I[Persistencia]
-  I --> J[Search API]
-```
-
-## 2) Paso a paso detallado
-
-1. El usuario abre `https://x.com/i/bookmarks` y pulsa `Sync now` en el popup.
-2. `popup.js` envia `START_SYNC` al `content.js` de la pestana activa.
-3. `content.js` valida que la URL sea `/i/bookmarks` y crea un `syncId`.
-4. Comienza el loop de scroll infinito:
-   - Lee nodos `[data-testid="tweet"]`.
-   - Extrae `tweet_id`, texto, autor, fecha, links y media.
-   - Deduplica en memoria con `Set(tweet_id)`.
-5. Cada vez que el buffer llega a 25 items, el content script crea un lote.
-6. El lote se envia al background (`INGEST_ENQUEUE`).
-7. `background.js` agrega el lote a una cola local persistida en `chrome.storage.local`.
-8. El background consume la cola en orden FIFO y envia cada lote a `POST /api/bookmarks/batch`.
-9. Si falla la red o el backend, aplica reintentos (`MAX_RETRIES=3`) con backoff.
-10. Si un lote supera los reintentos, queda en cola para reintento manual (`Flush queue`) o proximo arranque.
-11. El backend valida payload, normaliza campos y realiza deduplicacion por `(user_id, tweet_id)`.
-12. El backend responde resumen de `inserted`, `updated`, `ignored_invalid`.
-13. Al terminar el scraping, el content script fuerza `INGEST_FLUSH` para vaciar cola.
-14. El popup recibe eventos de progreso y muestra estado final de la sync.
-
-## 3) Secuencia completa
+La extensión 0.5.0 conserva primero la captura en el navegador y elimina la copia pendiente únicamente después de confirmar IDs concretos en el backend. Un éxito de transporte no equivale a un bookmark guardado.
 
 ```mermaid
 sequenceDiagram
-  participant U as Usuario
   participant P as Popup
-  participant C as Content Script
-  participant B as Background Queue
-  participant API as Backend API
-  participant DB as Store/DB
-
-  U->>P: Click Sync now
-  P->>C: START_SYNC
-  C->>C: Scroll + extraer tweets
-  loop Cada 25 tweets
-    C->>B: INGEST_ENQUEUE(batch)
-    B->>B: Persistir lote en cola local
-    B->>API: POST /api/bookmarks/batch
-    API->>API: Validar y normalizar
-    API->>DB: Upsert user_id + tweet_id
-    DB-->>API: Resultado
-    API-->>B: 200 + resumen
-    B-->>P: SYNC_PROGRESS(ingesta_confirmada)
+  participant B as Background
+  participant C as Pestaña de X
+  participant J as Journal local
+  participant API as Backend
+  participant DB as PostgreSQL
+  P->>B: START_BOOKMARK_IMPORT(tabId, rango)
+  B->>J: Persistir trabajo
+  B-->>P: jobId
+  B->>C: BOOKMARK_SCANNER_RUN_JOB
+  loop Páginas observadas
+    C->>B: BOOKMARK_SCANNER_STAGE
+    B->>J: Persistir drafts
+    B-->>C: Checkpoint aceptado
   end
-  C->>B: INGEST_FLUSH
-  B-->>C: pendingQueue=0
-  C-->>P: SYNC_DONE
-  P-->>U: Estado final
+  C->>B: Fijar selección de IDs
+  B->>J: Persistir selección
+  C->>B: BOOKMARK_SCANNER_IMPORT_BATCH
+  B->>J: Encolar lotes de 10
+  B-->>C: En cola
+  B->>API: POST /api/bookmarks/batch
+  API->>DB: Insertar o fusionar atómicamente
+  DB-->>API: Filas guardadas
+  API-->>B: imported_ids / stored_ids / duplicate_ids
+  B->>J: Confirmar versión y conservar rechazos/mejoras
+  B-->>C: DELIVERY_CONFIRMED
 ```
 
-## 4) Logica de reintento en ingesta
+## Captura
 
-```mermaid
-stateDiagram-v2
-  [*] --> EnCola
-  EnCola --> Enviando: flushQueue()
-  Enviando --> Confirmado: HTTP 200
-  Enviando --> Reintento: Error y attempts < 3
-  Reintento --> Enviando: backoff + retry
-  Enviando --> Atascado: attempts >= 3
-  Atascado --> Enviando: Flush queue manual
-  Confirmado --> [*]
-```
+El puente corre en `MAIN` desde `document_start` y envía mensajes de protocolo 2. En Bookmarks solo interpreta miembros explícitos del timeline: `Tweet`, su envoltorio de visibilidad y módulos de tweets. El autor y el tweet citado son contexto. Un contenedor desconocido se informa como `schema_unknown`.
 
-## 5) Controles criticos de ingesta
+Se conservan párrafos, URLs de entidades expandidas y hasta 12 000 caracteres, con marca de truncamiento. El DOM complementa la captura. Las entradas desconocidas se reclasifican al recuperar los IDs del backend; un payload de red puede mejorar un draft DOM ya existente.
 
-- Deteccion temprana de duplicados en `content.js` para bajar trafico.
-- Cola persistente en background para tolerar cierres/reloads.
-- FIFO estricto para mantener orden de lotes.
-- Reintento con backoff para absorber fallos temporales.
-- Deduplicacion final en backend por clave `user_id + tweet_id`.
-- Lote maximo controlado por backend (`MAX_BATCH_SIZE`, default 50).
+La captura automática confirma el cambio de estado del botón de X y revalida el ID. La deduplicación temporal se registra después de aceptar el enqueue, permitiendo repetir una captura cuyo almacenamiento falló.
 
-## 6) Contrato de ingesta (extension -> backend)
+## Persistencia y entrega
 
-`POST /api/bookmarks/batch`
+`delivery_state_v2` contiene cola, rechazos, drafts por backend/usuario, trabajos, recibos y contadores. Todas las transiciones pasan por una promesa serial y una escritura del registro completo. Memoria solo cambia después de que `chrome.storage.local.set` termina. La migración guarda v2 antes de retirar v1; `unlimitedStorage` permite la coexistencia temporal.
 
-```json
-{
-  "user_id": "local-user",
-  "sync_id": "sync-1710000000000-ab12cd",
-  "batch_index": 4,
-  "bookmarks": [
-    {
-      "tweet_id": "1889900011223344556",
-      "text": "example text",
-      "author_name": "Example Author",
-      "author_username": "example",
-      "created_at": "2026-04-11T20:00:00.000Z",
-      "links": ["https://example.com"],
-      "media": ["https://pbs.twimg.com/media/example.jpg"],
-      "source_url": "https://x.com/example/status/1889900011223344556"
-    }
-  ]
-}
-```
+Los mensajes de captura contienen como máximo 40 items y se entregan en lotes de 10. Un job conserva su selección original y cada solicitud compara sus IDs al reutilizar una clave idempotente. Reiniciar el worker no asigna otra captura al mismo número de lote.
 
-Respuesta:
+Cada fetch JSON tiene un límite de 25 segundos que incluye leer el cuerpo. Una caída de red, 429 o 5xx conserva el lote con backoff exponencial entre 30 segundos y una hora, respetando `Retry-After`. Los errores 400/401/403/413/422 pasan a rechazos mediante la misma escritura que retira el lote activo; no hay límite de 50 ni poda de payloads fallidos. La alarma de un minuto retoma el drenaje.
+
+El ACK se valida por ID. Los IDs omitidos quedan rechazados y una respuesta antigua sin IDs permanece pendiente. Si falla el almacenamiento después del commit remoto, se reenvía el lote; la clave `(user_id, tweet_id)` y el merge permiten repetirlo sin perder contenido.
+
+Una mejora concurrente no se borra con el ACK de una versión anterior: se conserva en drafts y se encola contra `/api/bookmarks/batch` para actualizar el bookmark existente.
+
+## Contratos HTTP
+
+`POST /api/bookmarks/batch` recibe `user_id`, `sync_id`, `batch_index` y `bookmarks`. Responde:
 
 ```json
 {
   "ok": true,
-  "user_id": "local-user",
-  "sync_id": "sync-1710000000000-ab12cd",
-  "received": 25,
-  "inserted": 22,
-  "updated": 3,
-  "ignored_invalid": 0,
-  "total_stored": 1240
+  "received": 2,
+  "stored_ids": ["100"],
+  "ignored_invalid": 1,
+  "invalid": [{"index": 1, "tweet_id": "200", "reason": "unverified_network_entity"}]
 }
 ```
 
-## 7) Puntos donde puede romperse y mitigacion
+`POST /bookmarks/import-batch` recibe `user_id`, `source` e `items`. Conserva la semántica de insertar nuevos IDs. Responde `imported_ids`, `duplicate_ids` y `invalid`; los duplicados deben existir en storage, incluyendo una carrera de inserción concurrente. Toda entrega de la extensión usa `/api/bookmarks/batch`, también al importar y reintentar: el merge es necesario cuando un commit anterior pudo completarse sin recibir la respuesta. El endpoint import-batch se conserva para clientes legacy.
 
-- Cambio de DOM en X:
-  - Mitigar aislando selectores y fallback por links `/status/`.
-- Picos de rate limit:
-  - Mitigar con delay aleatorio y lotes pequenos.
-- Red inestable:
-  - Mitigar con cola local + reintentos + flush manual.
-- Datos incompletos:
-  - Mitigar con normalizacion y descarte de payload invalido.
+Los payloads network incluyen `capture:"network"` y `entity_type:"Tweet"`. Se rechazan URLs de origen incompatibles con el ID, entidades network no verificadas y capturas sin evidencia; arrays de enlaces admiten HTTP/HTTPS.
+
+La migración 017 habilita `merge_bookmark_captures`: conserva el texto más largo, une links/media/autorrespuestas, conserva fechas originales y devuelve las filas fusionadas. La expansión diferida y el PATCH de autorrespuestas usan `append_bookmark_links` para no sobrescribir arrays nuevos con snapshots anteriores. Ambas funciones quedan restringidas a `service_role`.
+
+## Límites operativos
+
+Guardar en PostgreSQL y terminar el enriquecimiento son estados distintos: el pipeline de repos/contextos sigue siendo asíncrono y sus fallos se registran en el backend. Su ejecución durable mediante outbox no forma parte de esta versión.
+
+Cerrar el popup no corta la importación. Cerrar/navegar la pestaña de X puede interrumpir el recorrido; los checkpoints aceptados permanecen. La cobertura solo es completa con evidencia terminal conocida. La identidad configurada de Indexer no identifica la sesión activa de X: para cambiar de cuenta en X, comenzar una nueva pestaña/recorrido y revisar el usuario destino.

@@ -1,23 +1,18 @@
+importScripts("delivery-store.js");
 const DEFAULT_API_BASE_URL = "https://indexer-hzto.onrender.com";
 const DEFAULT_USER_ID = "local-user";
 const QUEUE_STORAGE_KEY = "ingest_queue_v1";
-const ACTIVITY_STORAGE_KEY = "activity_log_v1";
-const COUNTERS_STORAGE_KEY = "counters_v1";
 const SCANNER_IDS_CACHE_KEY = "bookmark_scanner_saved_ids_v1";
 const SETTINGS_KEYS = ["apiBaseUrl", "userId", "apiKey"];
-const MAX_RETRIES = 3;
-const RETRY_BASE_DELAY_MS = 1200;
 const ACTIVITY_LOG_MAX = 25;
 const LOG_PREFIX = "[x-indexer:bg]";
 const URL_RESOLVE_TIMEOUT_MS = 4500;
 const MAX_URLS_PER_BOOKMARK = 40;
-const SCANNER_IMPORT_BATCH_SIZE = 40;
-const SCANNER_IDS_FETCH_TIMEOUT_MS = 30_000;
-const SCANNER_IMPORT_CHUNK_TIMEOUT_MS = 90_000;
+const SCANNER_IDS_FETCH_TIMEOUT_MS = 25_000;
 const DETAIL_LOOKUP_TIMEOUT_MS = 16_000;
-const POST_BATCH_TIMEOUT_MS = 60_000;
-const FAILED_QUEUE_STORAGE_KEY = "failed_queue_v1";
-const FAILED_QUEUE_MAX = 50;
+const POST_BATCH_TIMEOUT_MS = 25_000;
+const DELIVERY_BATCH_SIZE = 10;
+const DELIVERY_RUN_LIMIT = 8;
 const DETAIL_LOOKUP_MESSAGE_DELAY_MS = 900;
 const DETAIL_LOOKUP_MESSAGE_MAX_ATTEMPTS = 8;
 const FIRST_COMMENT_LOOKUP_CACHE_MAX = 200;
@@ -36,13 +31,12 @@ const FIRST_COMMENT_CUE_RE = /\b((?:1st|first)\s+(?:comment|reply)|primer\s+come
 const RESOURCE_HINT_RE = /\b(repo+|repository|github|source|code|codigo|demo|link|links|enlace|enlaces|url|urls|gist|tutorial|readme|doc|docs|article|post|thread|prompt)\b/i;
 const DOWNWARD_CUE_RE = /(?:\u{1F447}|\u2B07|\u2193|\bbelow\b|\babajo\b|\baca abajo\b|\baqui abajo\b|\bdown\b)/iu;
 
-const state = {
-  queue: [],
-  activity: [],
-  counters: { captured: 0, delivered: 0, failed: 0 },
-  loaded: false,
-  isFlushing: false
-};
+const deliveryStore = new IndexerDeliveryStore(chrome.storage.local);
+const state = { isFlushing: false, inFlightId: null };
+for (const field of ["queue", "failed", "activity", "counters", "jobs", "drafts"]) {
+  Object.defineProperty(state, field, { get: () => deliveryStore.data[field] });
+}
+
 
 function logInfo(...args) {
   try { console.info(LOG_PREFIX, ...args); } catch (_e) {}
@@ -243,6 +237,9 @@ function sleep(ms) {
 }
 
 function safeSendMessage(message) {
+  if (["DELIVERY_CONFIRMED", "SETTINGS_CHANGED"].includes(message.type)) {
+    void chrome.tabs.query({ url: ["https://x.com/*", "https://twitter.com/*"] }).then(tabs => Promise.allSettled(tabs.map(tab => chrome.tabs.sendMessage(tab.id, message)))).catch(() => {});
+  }
   try {
     chrome.runtime.sendMessage(message, () => {
       void chrome.runtime.lastError;
@@ -253,6 +250,7 @@ function safeSendMessage(message) {
 }
 
 async function ensureDefaults() {
+  await chrome.storage.local.setAccessLevel?.({ accessLevel: "TRUSTED_CONTEXTS" });
   const current = await chrome.storage.local.get([...SETTINGS_KEYS, QUEUE_STORAGE_KEY]);
   const updates = {};
 
@@ -295,97 +293,81 @@ function buildWriteHeaders(apiKey, base = {}) {
 }
 
 async function loadQueueState() {
-  if (state.loaded) {
-    return;
-  }
-
-  await ensureDefaults();
-  const current = await chrome.storage.local.get([
-    QUEUE_STORAGE_KEY,
-    ACTIVITY_STORAGE_KEY,
-    COUNTERS_STORAGE_KEY
-  ]);
-  state.queue = Array.isArray(current[QUEUE_STORAGE_KEY]) ? current[QUEUE_STORAGE_KEY] : [];
-  state.activity = Array.isArray(current[ACTIVITY_STORAGE_KEY])
-    ? current[ACTIVITY_STORAGE_KEY]
-    : [];
-  const counters = current[COUNTERS_STORAGE_KEY];
-  if (counters && typeof counters === "object") {
-    state.counters = {
-      captured: Number(counters.captured) || 0,
-      delivered: Number(counters.delivered) || 0,
-      failed: Number(counters.failed) || 0
-    };
-  }
-  state.loaded = true;
+  await deliveryStore.load();
   updateBadge();
 }
 
-async function persistQueue() {
-  // preparedBookmarks es pesado (links resueltos, media) y regenerable: se
-  // persiste la cola sin él para no acercarse a la quota de chrome.storage
-  // (10MB, sin unlimitedStorage) y abaratar cada set(). En memoria queda
-  // cacheado para los retries dentro de la misma vida del service worker.
-  const slimQueue = state.queue.map(
-    ({ preparedBookmarks: _drop, ...item }) => item
-  );
-
-  try {
-    await chrome.storage.local.set({
-      [QUEUE_STORAGE_KEY]: slimQueue
-    });
-  } catch (error) {
-    if (!/quota/i.test(extractErrorMessage(error))) {
-      throw error;
-    }
-    // Quota llena: sacrificar dead-letter y actividad (recuperables) antes
-    // que perder la cola activa.
-    await chrome.storage.local.remove([FAILED_QUEUE_STORAGE_KEY, ACTIVITY_STORAGE_KEY]);
-    reportBackgroundStage("bg_storage_quota_recovered", {
-      queueLength: slimQueue.length
-    }, { level: "warn", emit: true });
-    await chrome.storage.local.set({
-      [QUEUE_STORAGE_KEY]: slimQueue
-    });
-  }
+async function changeDelivery(change) {
+  const result = await deliveryStore.update(change);
+  updateBadge();
+  return result;
 }
 
 function updateBadge() {
   try {
-    const pending = state.queue.length;
-    const delivered = state.counters.delivered;
-    if (pending > 0) {
-      chrome.action.setBadgeBackgroundColor({ color: "#f59e0b" });
-      chrome.action.setBadgeText({ text: String(pending) });
-    } else if (delivered > 0) {
-      chrome.action.setBadgeBackgroundColor({ color: "#22c55e" });
-      chrome.action.setBadgeText({ text: String(delivered) });
-    } else {
-      chrome.action.setBadgeText({ text: "" });
-    }
-  } catch (_error) {
-    // action may not be available in some contexts.
-  }
+    const count = state.failed.length || state.queue.length;
+    chrome.action.setBadgeBackgroundColor({ color: state.failed.length ? "#dc2626" : state.queue.length ? "#f59e0b" : "#22c55e" });
+    chrome.action.setBadgeText({ text: count ? String(count) : "" });
+  } catch (_error) {}
+}
+
+function addActivity(draft, entry) {
+  draft.activity.unshift({ ts: Date.now(), ...entry });
+  draft.activity.length = Math.min(draft.activity.length, ACTIVITY_LOG_MAX);
 }
 
 async function recordActivity(entry) {
-  const enriched = {
-    ts: Date.now(),
-    ...entry
-  };
-  state.activity.unshift(enriched);
-  if (state.activity.length > ACTIVITY_LOG_MAX) {
-    state.activity.length = ACTIVITY_LOG_MAX;
-  }
-  try {
-    await chrome.storage.local.set({
-      [ACTIVITY_STORAGE_KEY]: state.activity,
-      [COUNTERS_STORAGE_KEY]: state.counters
-    });
-  } catch (_error) {
-    // Non-fatal.
-  }
-  updateBadge();
+  await changeDelivery(draft => addActivity(draft, entry));
+}
+
+function deliveryNamespace(settings) {
+  return JSON.stringify([sanitizeBaseUrl(settings.apiBaseUrl), sanitizeUserId(settings.userId)]);
+}
+
+function mergeCapture(old, incoming) {
+  if (!old) return incoming;
+  const richer = incoming.capture === "network" && old.capture !== "network" ||
+    (incoming.capture === old.capture && (incoming.text || "").length > (old.text || "").length);
+  const merged = { ...(richer ? old : incoming), ...(richer ? incoming : old) };
+  for (const field of ["author_handle", "author_username", "author_name", "created_at", "url", "source_url"]) merged[field] = old[field] || incoming[field] || merged[field];
+  for (const field of ["links", "first_comment_links", "media"]) merged[field] = uniqueUrls([...(old[field] || []), ...(incoming[field] || [])]);
+  return merged;
+}
+
+function captureFingerprint(item) {
+  return JSON.stringify([item.text || item.text_content || "", item.capture || "dom", item.content_truncated === true,
+    item.author_username || item.author_handle || "", item.author_name || "", item.created_at || "",
+    item.source_url || item.url || "", item.links || [], item.first_comment_links || [], item.media || []]);
+}
+function queueCaptureUpgrade(draft, namespace, item, context = {}) {
+  if (draft.queue.some(entry => deliveryNamespace(entry) === namespace && entry.bookmarks.some(bookmark => getTweetIdForBookmark(bookmark) === item.tweet_id && captureFingerprint(bookmark) === captureFingerprint(item)))) return;
+  const id = `upgrade-${item.tweet_id}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const { apiBaseUrl, userId } = context;
+  if (deliveryNamespace(context) !== namespace) throw new Error("capture_upgrade_binding_mismatch");
+  draft.queue.push({ id, requestId: id, requestIds: [item.tweet_id], kind: "capture_update", source: "capture_upgrade",
+    jobId: context.jobId || null, userId, apiBaseUrl, bookmarks: [item], attempts: 0, nextAttemptAt: 0, queuedAt: new Date().toISOString() });
+}
+async function stageScannerDrafts(items, namespace) {
+  const settings = await getSettings();
+  const activeNamespace = deliveryNamespace(settings);
+  if (namespace && namespace !== activeNamespace) throw new Error("settings_changed_restart_scan");
+  await changeDelivery(draft => {
+    draft.drafts[activeNamespace] ||= {};
+    for (const raw of items || []) {
+      const id = getTweetIdForBookmark({ tweet_id: raw?.tweet_id, source_url: raw?.url || raw?.source_url });
+      if (!id) throw new Error("invalid_capture_id");
+      const receipt = Object.values(draft.receipts).reverse().find(r => r.namespace === activeNamespace && r.ids.includes(id));
+      const item = normalizeScannerPendingItemForDelivery(raw, id);
+      const merged = mergeCapture(draft.drafts[activeNamespace][id], item);
+      if (receipt?.captures?.[id] === captureFingerprint(merged)) continue;
+      draft.drafts[activeNamespace][id] = merged;
+      const queued = draft.queue.find(entry => deliveryNamespace(entry) === activeNamespace && entry.bookmarks.some(b => getTweetIdForBookmark(b) === id));
+      if (queued && queued.id !== state.inFlightId) queued.bookmarks = queued.bookmarks.map(b => getTweetIdForBookmark(b) === id ? mergeCapture(b, merged) : b);
+      else if (!queued && receipt) queueCaptureUpgrade(draft, activeNamespace, merged, settings);
+    }
+  });
+  scheduleFlushQueue("capture_checkpoint");
+  return { ok: true, namespace: activeNamespace, staged: (items || []).length };
 }
 
 function sanitizeBaseUrl(value) {
@@ -393,7 +375,10 @@ function sanitizeBaseUrl(value) {
     return DEFAULT_API_BASE_URL;
   }
   const trimmed = value.trim().replace(/\/+$/, "");
-  return trimmed || DEFAULT_API_BASE_URL;
+  if (!trimmed) return DEFAULT_API_BASE_URL;
+  const parsed = new URL(trimmed);
+  if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password) throw new Error("invalid_backend_url");
+  return trimmed;
 }
 
 function sanitizeUserId(value) {
@@ -437,7 +422,7 @@ function sanitizeAbsoluteUrl(value) {
     return "";
   }
   const parsed = parseUrlSafe(candidate);
-  return parsed ? parsed.toString() : "";
+  return parsed && /^https?:$/.test(parsed.protocol) ? parsed.toString() : "";
 }
 
 function normalizeForLookup(value) {
@@ -722,12 +707,26 @@ function uniqueUrls(values, limit = MAX_URLS_PER_BOOKMARK) {
 
 function withTimeout(promiseFactory, timeoutMs) {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  let timer;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => { controller.abort(); reject(new Error("request_timeout")); }, timeoutMs);
+  });
+  return Promise.race([Promise.resolve().then(() => promiseFactory(controller.signal)), deadline])
+    .finally(() => clearTimeout(timer));
+}
 
-  return promiseFactory(controller.signal)
-    .finally(() => {
-      clearTimeout(timeoutId);
-    });
+async function fetchJson(url, options, timeoutMs = POST_BATCH_TIMEOUT_MS) {
+  return withTimeout(async signal => {
+    const response = await fetch(url, { ...options, signal });
+    const payload = await response.json().catch(error => { if (response.ok) throw error; return null; });
+    if (!response.ok || payload?.ok === false) {
+      const error = new Error(payload?.error?.message || `HTTP ${response.status}`);
+      error.status = response.status;
+      error.retryAfterMs = Math.max(0, Number(response.headers?.get("retry-after")) || 0) * 1000;
+      throw error;
+    }
+    return payload;
+  }, timeoutMs);
 }
 
 async function resolveShortUrl(rawUrl) {
@@ -795,25 +794,15 @@ async function resolveUrls(values) {
   };
 }
 
-function replaceResolvedUrlsInText(text, mappings) {
-  if (typeof text !== "string" || !text || !Array.isArray(mappings) || mappings.length === 0) {
-    return text;
-  }
-
-  let output = text;
-  for (const entry of mappings) {
-    if (!entry || !entry.original || !entry.resolved || entry.original === entry.resolved) {
-      continue;
-    }
-    output = output.split(entry.original).join(entry.resolved);
-  }
-  return output;
-}
 
 function normalizeScannerPendingItemForDelivery(item, tweetId) {
   return {
     tweet_id: tweetId || cleanText(item?.tweet_id || ""),
-    text: cleanText(item?.text || ""),
+    text: typeof item?.text === "string" ? item.text.slice(0, 12000) : "",
+    capture: item?.capture || "dom",
+    timeline_order: /^\d+$/.test(String(item?.timeline_order || "")) ? String(item.timeline_order) : "",
+    entity_type: item?.entity_type,
+    content_truncated: item?.content_truncated === true,
     author_username: cleanText(item?.author_handle || item?.author_username || "").replace(/^@+/, ""),
     author_name: cleanText(item?.author_name || ""),
     // Fecha real del tweet (captura network-first); el backend la normaliza.
@@ -877,25 +866,8 @@ async function fetchBookmarkScannerSavedIdsViaSearch(settings) {
       limit,
       offset
     });
-    const response = await withTimeout(
-      (signal) =>
-        fetch(endpoint, {
-          method: "GET",
-          cache: "no-store",
-          headers: {
-            Accept: "application/json"
-          },
-          signal
-        }),
-      SCANNER_IDS_FETCH_TIMEOUT_MS
-    );
-    const payload = await response.json().catch(() => null);
-
-    if (!response.ok || !payload || payload.ok === false || !Array.isArray(payload.items)) {
-      throw new Error(
-        payload?.error?.message || payload?.error || `HTTP ${response.status}`
-      );
-    }
+    const payload = await fetchJson(endpoint, { method: "GET", cache: "no-store", headers: { Accept: "application/json" } }, SCANNER_IDS_FETCH_TIMEOUT_MS);
+    if (!Array.isArray(payload?.items)) throw new Error("invalid_bookmark_search_response");
 
     const rows = payload.items;
     total = Number.isFinite(Number(payload.total)) ? Number(payload.total) : total;
@@ -932,35 +904,19 @@ async function fetchBookmarkScannerSavedIdsViaSearch(settings) {
 
 async function fetchBookmarkScannerSavedIds() {
   const settings = await getSettings();
+  const namespace = deliveryNamespace(settings);
   const endpoint = buildBackendUrl(settings.apiBaseUrl, "/bookmarks/ids", {
     user_id: settings.userId
   });
   let primaryError = null;
 
   try {
-    const response = await withTimeout(
-      (signal) =>
-        fetch(endpoint, {
-          method: "GET",
-          cache: "no-store",
-          headers: {
-            Accept: "application/json"
-          },
-          signal
-        }),
-      SCANNER_IDS_FETCH_TIMEOUT_MS
-    );
-
-    const payload = await response.json().catch(() => null);
-    if (!response.ok || !payload || !payload.ok || !Array.isArray(payload.ids)) {
-      throw new Error(
-        payload?.error?.message || payload?.error || `HTTP ${response.status}`
-      );
-    }
+    const payload = await fetchJson(endpoint, { method: "GET", cache: "no-store", headers: { Accept: "application/json" } }, SCANNER_IDS_FETCH_TIMEOUT_MS);
+    if (!payload?.ok || !Array.isArray(payload.ids)) throw new Error("invalid_bookmark_ids_response");
 
     const cached = await writeScannerIdsCache(settings, payload);
     return {
-      ok: true,
+      ok: true, namespace,
       online: true,
       cached: false,
       version: cached.version,
@@ -975,7 +931,7 @@ async function fetchBookmarkScannerSavedIds() {
     const fallbackPayload = await fetchBookmarkScannerSavedIdsViaSearch(settings);
     const cached = await writeScannerIdsCache(settings, fallbackPayload);
     return {
-      ok: true,
+      ok: true, namespace,
       online: true,
       cached: false,
       fallback: fallbackPayload.fallback,
@@ -990,7 +946,7 @@ async function fetchBookmarkScannerSavedIds() {
     const cached = await readScannerIdsCache(settings);
     if (cached) {
       return {
-        ok: true,
+        ok: true, namespace,
         online: false,
         cached: true,
         version: cached.version || "",
@@ -1004,7 +960,7 @@ async function fetchBookmarkScannerSavedIds() {
     }
 
     return {
-      ok: false,
+      ok: false, namespace,
       online: false,
       cached: false,
       version: "",
@@ -1018,336 +974,39 @@ async function fetchBookmarkScannerSavedIds() {
   }
 }
 
-async function postBookmarkScannerImportJson(endpoint, body, apiKey = "") {
-  const response = await withTimeout(
-    (signal) =>
-      fetch(endpoint, {
-        method: "POST",
-        headers: buildWriteHeaders(apiKey, {
-          "Content-Type": "application/json",
-          Accept: "application/json"
-        }),
-        body: JSON.stringify(body),
-        signal
-      }),
-    SCANNER_IMPORT_CHUNK_TIMEOUT_MS
-  );
-  const payload = await response.json().catch(() => null);
-
-  if (!response.ok || !payload || payload.ok === false) {
-    throw new Error(
-      payload?.error?.message || payload?.error || `HTTP ${response.status}`
-    );
-  }
-
-  return payload;
-}
-
-function shouldUseLegacyScannerImportEndpoint(error) {
-  return /HTTP 404|HTTP 405|not[_ -]?found|Cannot POST/i.test(
-    extractErrorMessage(error)
-  );
-}
-
-function normalizeLegacyScannerImportResponse(payload, chunk, settings, source) {
-  const warnings = Array.isArray(payload?.warnings) ? payload.warnings.slice() : [];
-  warnings.push("bookmark_import_legacy_batch_fallback_used");
-
-  return {
-    ok: true,
-    inserted: Number(payload?.inserted) || 0,
-    duplicates: 0,
-    failed: Number(payload?.ignored_invalid) || 0,
-    duplicate_ids: [],
-    imported_ids: chunk
-      .map((item) => getTweetIdForBookmark(item))
-      .filter(Boolean),
-    invalid: [],
-    warnings,
-    user_id: payload?.user_id || settings.userId,
-    source,
-    total_stored: payload?.total_stored ?? null,
-    used_legacy_endpoint: true
-  };
-}
-
-async function postBookmarkScannerImportChunk(settings, chunk, source, batchIndex, state) {
-  const normalizedSource = cleanText(source) || "x_bookmarks_dom_scan";
-
-  if (!state.useLegacyEndpoint) {
-    try {
-      return await postBookmarkScannerImportJson(
-        buildBackendUrl(settings.apiBaseUrl, "/bookmarks/import-batch"),
-        {
-          user_id: settings.userId,
-          source: normalizedSource,
-          items: chunk
-        },
-        settings.apiKey
-      );
-    } catch (error) {
-      if (!shouldUseLegacyScannerImportEndpoint(error)) {
-        throw error;
-      }
-      state.useLegacyEndpoint = true;
-    }
-  }
-
-  const legacyPayload = await postBookmarkScannerImportJson(
-    buildBackendUrl(settings.apiBaseUrl, "/api/bookmarks/batch"),
-    {
-      user_id: settings.userId,
-      sync_id: normalizedSource,
-      batch_index: batchIndex,
-      bookmarks: chunk
-    },
-    settings.apiKey
-  );
-
-  return normalizeLegacyScannerImportResponse(
-    legacyPayload,
-    chunk,
-    settings,
-    normalizedSource
-  );
-}
-
-async function importBookmarkScannerPending(items, source = "x_bookmarks_dom_scan") {
+async function importBookmarkScannerPending(items, source = "x_bookmarks_dom_scan", jobId = null, namespace = null, requestId = null, requestIds = null) {
   const settings = await getSettings();
-  const normalizedItems = Array.isArray(items) ? items : [];
-  const cached = await readScannerIdsCache(settings);
-  const cachedIds = new Set(Array.isArray(cached?.ids) ? cached.ids.map(String) : []);
-  const localSeenIds = new Set();
-  const payloadItems = [];
-  const localDuplicateIds = [];
-
-  for (const item of normalizedItems) {
-    const tweetId = getTweetIdForBookmark({
-      tweet_id: item?.tweet_id,
-      source_url: item?.url || item?.source_url
-    });
-
-    if (tweetId && (localSeenIds.has(tweetId) || cachedIds.has(tweetId))) {
-      localDuplicateIds.push(tweetId);
-      continue;
-    }
-
-    if (tweetId) {
-      localSeenIds.add(tweetId);
-    }
-    payloadItems.push(normalizeScannerPendingItemForDelivery(item, tweetId));
-  }
-
-  const aggregate = {
-    ok: true,
-    inserted: 0,
-    duplicates: localDuplicateIds.length,
-    failed: 0,
-    duplicate_ids: localDuplicateIds.slice(),
-    imported_ids: [],
-    invalid: [],
-    warnings: []
-  };
-
-  reportBackgroundStage("bg_scanner_import_started", {
-    received: normalizedItems.length,
-    afterLocalDedup: payloadItems.length,
-    localDuplicates: localDuplicateIds.length
-  }, { emit: true });
-
-  const preparedItems = await prepareBookmarksForDelivery(payloadItems, {
-    traceId: `scanner-${Date.now().toString(36)}`
-  });
-
-  reportBackgroundStage("bg_scanner_import_prepared", {
-    prepared: preparedItems.length
-  }, { emit: true });
-  const importState = {
-    useLegacyEndpoint: false
-  };
-
-  for (let index = 0; index < preparedItems.length; index += SCANNER_IMPORT_BATCH_SIZE) {
-    const chunk = preparedItems.slice(index, index + SCANNER_IMPORT_BATCH_SIZE);
-    const payload = await postBookmarkScannerImportChunk(
-      settings,
-      chunk,
-      source,
-      Math.floor(index / SCANNER_IMPORT_BATCH_SIZE),
-      importState
-    );
-
-    // Depuración: rastro por chunk con lo que el backend respondió realmente.
-    reportBackgroundStage("bg_scanner_import_chunk_result", {
-      chunkIndex: Math.floor(index / SCANNER_IMPORT_BATCH_SIZE),
-      chunkSize: chunk.length,
-      endpoint: payload.used_legacy_endpoint ? "legacy(/api/bookmarks/batch)" : "primary(/bookmarks/import-batch)",
-      inserted: Number(payload.inserted) || 0,
-      duplicates: Number(payload.duplicates) || 0,
-      failed: Number(payload.failed) || 0,
-      importedIds: Array.isArray(payload.imported_ids) ? payload.imported_ids.length : 0,
-      rawKeys: Object.keys(payload || {}).join(",").slice(0, 200)
-    }, { emit: true });
-
-    aggregate.inserted += Number(payload.inserted) || 0;
-    aggregate.duplicates += Number(payload.duplicates) || 0;
-    aggregate.failed += Number(payload.failed) || 0;
-    aggregate.duplicate_ids.push(
-      ...(Array.isArray(payload.duplicate_ids) ? payload.duplicate_ids : [])
-    );
-    aggregate.imported_ids.push(
-      ...(Array.isArray(payload.imported_ids) ? payload.imported_ids : [])
-    );
-    aggregate.invalid.push(...(Array.isArray(payload.invalid) ? payload.invalid : []));
-    aggregate.warnings.push(...(Array.isArray(payload.warnings) ? payload.warnings : []));
-    aggregate.user_id = payload.user_id || settings.userId;
-    aggregate.source = payload.source || source;
-    aggregate.total_stored = payload.total_stored ?? aggregate.total_stored ?? null;
-  }
-
-  aggregate.received = normalizedItems.length;
-  aggregate.imported_ids = [...new Set(aggregate.imported_ids.map(String).filter(Boolean))];
-  aggregate.duplicate_ids = [...new Set(aggregate.duplicate_ids.map(String).filter(Boolean))];
-
-  const importedIds = aggregate.imported_ids;
-  const duplicateIds = aggregate.duplicate_ids;
-
-  if (cached) {
-    const ids = new Set(cached.ids.map(String));
-    for (const id of [...importedIds, ...duplicateIds]) {
-      ids.add(id);
-    }
-    await writeScannerIdsCache(settings, {
-      version: new Date().toISOString(),
-      ids: [...ids]
-    });
-  }
-
-  // Usuario activo en X con sesión válida: buen momento para reintentar los
-  // densos viejos que quedaron sin link (el import normal los ve como
-  // duplicados y nunca los reprocesa).
-  scheduleFirstCommentRelookupPass("scanner_import");
-
-  return aggregate;
+  const normalized = (items || []).map(item => normalizeScannerPendingItemForDelivery(item, getTweetIdForBookmark({tweet_id:item.tweet_id, source_url:item.url || item.source_url})));
+  const result = await enqueueBatch({ bookmarks: normalized, source, kind: "scanner", jobId, namespace, requestId, requestIds });
+  return { ...result, queued: normalized.length, imported_ids: [], duplicate_ids: [] };
 }
 
-async function prepareBookmarksForDelivery(bookmarks, context = {}) {
-  const items = Array.isArray(bookmarks) ? bookmarks : [];
-  const traceId = cleanText(context.traceId || "");
-
-  // Pasada 1: decidir qué items necesitan el lookup del primer comentario.
-  // Captura network: t.co ya llega expandido (GraphQL), así que solo pagan el
-  // tab de detalle los posts "densos" cuyo texto manda al recurso en los
-  // comentarios ("REPOOO👇", "link below", ...). Captura DOM: criterio igual.
-  const tasks = items.map((bookmark) => ({
-    bookmark,
-    fcl: [],
-    needsLookup:
-      Boolean(bookmark && typeof bookmark === "object") &&
-      uniqueUrls(bookmark.first_comment_links).length === 0 &&
-      shouldAttemptFirstCommentLookup(bookmark)
-  }));
-
-  // Pasada 2: lookups con concurrencia 2 (antes serial, ~18s por post denso;
-  // un lote de densos dejaba el import "colgado" hasta el timeout).
-  const LOOKUP_CONCURRENCY = 2;
-  const lookupQueue = tasks.filter((task) => task.needsLookup);
-  if (lookupQueue.length > 0) {
-    reportBackgroundStage("bg_first_comment_lookup_queue", {
-      traceId,
-      pending: lookupQueue.length,
-      concurrency: LOOKUP_CONCURRENCY
-    }, { emit: true });
-
-    let cursor = 0;
-    const worker = async () => {
-      while (cursor < lookupQueue.length) {
-        const task = lookupQueue[cursor];
-        cursor += 1;
-        try {
-          task.fcl = await extractFirstCommentLinksViaDetailTab(task.bookmark, { traceId });
-        } catch (_error) {
-          task.fcl = [];
-        }
-      }
-    };
-    await Promise.all(
-      Array.from({ length: Math.min(LOOKUP_CONCURRENCY, lookupQueue.length) }, worker)
-    );
-  }
-
-  // Pasada 3: ensamblar. resolveUrls completo solo para captura DOM; para
-  // network solo se resuelven los first-comment links recién descubiertos.
-  const prepared = [];
-  for (const task of tasks) {
-    const bookmark = task.bookmark;
-    if (!bookmark || typeof bookmark !== "object") {
-      prepared.push(bookmark);
-      continue;
+async function startCaptureJob(tabId, range = {}) {
+  const settings = await getSettings();
+  const namespace = deliveryNamespace(settings);
+  const id = `scan-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  await changeDelivery(draft => {
+    for (const job of Object.values(draft.jobs)) if (job.namespace === namespace && job.phase === "scanning") {
+      if (Date.now() - job.updatedAt < 120000) throw new Error("scan_already_running");
+      job.phase = "interrupted"; job.error = "scan_heartbeat_expired";
     }
+    const completedJobs = Object.values(draft.jobs).filter(job => !["scanning", "delivering"].includes(job.phase));
+    if (completedJobs.length > 100) for (const job of completedJobs.sort((a,b) => a.updatedAt - b.updatedAt).slice(0, completedJobs.length - 100)) delete draft.jobs[job.id];
+    draft.jobs[id] = { id, namespace, tabId, range, phase: "scanning", scanFinished: false, confirmed: 0, failed: 0, queued: 0, updatedAt: Date.now() };
+  });
+  void launchCaptureJob(state.jobs[id]);
+  return { ok: true, jobId: id, phase: "scanning" };
+}
 
-    const firstCommentLinksRaw = uniqueUrls([
-      ...(Array.isArray(bookmark.first_comment_links) ? bookmark.first_comment_links : []),
-      ...(Array.isArray(task.fcl) ? task.fcl : [])
-    ]);
-
-    if (bookmark.capture === "network") {
-      let firstCommentLinks = firstCommentLinksRaw;
-      if (firstCommentLinksRaw.length > 0) {
-        try {
-          const resolvedFcl = await resolveUrls(firstCommentLinksRaw);
-          firstCommentLinks = uniqueUrls(resolvedFcl.urls);
-        } catch (_error) {
-          // se quedan las urls sin resolver: mejor eso que perderlas
-        }
-      }
-      prepared.push({ ...bookmark, first_comment_links: firstCommentLinks });
-      continue;
-    }
-
-    const rawLinks = uniqueUrls([
-      ...(Array.isArray(bookmark.links) ? bookmark.links : []),
-      ...firstCommentLinksRaw
-    ]);
-
-    if (rawLinks.length === 0) {
-      prepared.push({
-        ...bookmark,
-        first_comment_links: firstCommentLinksRaw
-      });
-      continue;
-    }
-
-    const resolved = await resolveUrls(rawLinks);
-    const firstCommentLinks = uniqueUrls(
-      firstCommentLinksRaw.map(
-        (url) =>
-          resolved.mappings.find((entry) => entry.original === sanitizeAbsoluteUrl(url))?.resolved ||
-          url
-      )
-    );
-
-    const originalText =
-      typeof bookmark.text === "string"
-        ? bookmark.text
-        : typeof bookmark.text_content === "string"
-        ? bookmark.text_content
-        : "";
-
-    const nextText = replaceResolvedUrlsInText(originalText, resolved.mappings);
-
-    prepared.push({
-      ...bookmark,
-      links: resolved.urls,
-      first_comment_links: firstCommentLinks,
-      ...(typeof bookmark.text === "string"
-        ? { text: nextText }
-        : typeof bookmark.text_content === "string"
-        ? { text_content: nextText }
-        : {})
+async function launchCaptureJob(job) {
+  try {
+    const response = await chrome.tabs.sendMessage(job.tabId, { type: "BOOKMARK_SCANNER_RUN_JOB", payload: job });
+    if (!response?.ok) throw new Error(response?.error || "scan_not_started");
+  } catch (error) {
+    await changeDelivery(draft => {
+      if (draft.jobs[job.id]?.phase === "scanning") Object.assign(draft.jobs[job.id], { phase: "interrupted", error: extractErrorMessage(error) });
     });
   }
-
-  return prepared;
 }
 
 // ─── Re-lookup diferido de posts densos sin repo ──────────────────────
@@ -1364,70 +1023,29 @@ async function readRelookupState() {
 }
 
 async function writeRelookupState(relookupState) {
-  let next = relookupState;
-  const entries = Object.entries(relookupState);
-  if (entries.length > RELOOKUP_STATE_MAX) {
-    entries.sort((a, b) => (Number(a[1]?.lastAt) || 0) - (Number(b[1]?.lastAt) || 0));
-    next = Object.fromEntries(entries.slice(entries.length - RELOOKUP_STATE_MAX));
+  for (const scope of Object.values(relookupState.scopes || {})) {
+    const entries = Object.entries(scope.tweets || {});
+    if (entries.length > RELOOKUP_STATE_MAX) {
+      entries.sort((a,b) => (Number(b[1]?.lastAt) || 0) - (Number(a[1]?.lastAt) || 0));
+      scope.tweets = Object.fromEntries(entries.slice(0, RELOOKUP_STATE_MAX));
+    }
   }
-  await chrome.storage.local.set({ [RELOOKUP_STATE_KEY]: next });
-  return next;
+  await chrome.storage.local.set({ [RELOOKUP_STATE_KEY]: relookupState });
+  return relookupState;
 }
 
-async function fetchRelookupCandidates(settings) {
-  const endpoint = buildBackendUrl(settings.apiBaseUrl, "/api/bookmarks/relookup-candidates", {
-    user_id: settings.userId,
-    limit: RELOOKUP_CANDIDATES_LIMIT
-  });
-  const response = await withTimeout(
-    (signal) =>
-      fetch(endpoint, {
-        method: "GET",
-        cache: "no-store",
-        headers: { Accept: "application/json" },
-        signal
-      }),
-    RELOOKUP_FETCH_TIMEOUT_MS
-  );
-  const payload = await response.json().catch(() => null);
-
-  if (!response.ok || !payload || payload.ok === false || !Array.isArray(payload.items)) {
-    throw new Error(
-      payload?.error?.message || payload?.error || `HTTP ${response.status}`
-    );
-  }
-
-  return payload.items;
-}
-
-async function patchFirstCommentLinks(settings, candidate, links) {
-  const endpoint = buildBackendUrl(settings.apiBaseUrl, "/api/bookmarks/first-comment-links");
-  const response = await withTimeout(
-    (signal) =>
-      fetch(endpoint, {
-        method: "PATCH",
-        headers: buildWriteHeaders(settings.apiKey, {
-          "Content-Type": "application/json",
-          Accept: "application/json"
-        }),
-        body: JSON.stringify({
-          user_id: settings.userId,
-          tweet_id: candidate.tweet_id,
-          first_comment_links: links
-        }),
-        signal
-      }),
-    RELOOKUP_FETCH_TIMEOUT_MS
-  );
-  const payload = await response.json().catch(() => null);
-
-  if (!response.ok || !payload || payload.ok === false) {
-    throw new Error(
-      payload?.error?.message || payload?.error || `HTTP ${response.status}`
-    );
-  }
-
+async function fetchRelookupCandidates(settings, offset = 0) {
+  const payload = await fetchJson(buildBackendUrl(settings.apiBaseUrl, "/api/bookmarks/relookup-candidates", {
+    user_id: settings.userId, limit: RELOOKUP_CANDIDATES_LIMIT, offset
+  }), { method: "GET", cache: "no-store", headers: { Accept: "application/json" } }, RELOOKUP_FETCH_TIMEOUT_MS);
+  if (!Array.isArray(payload?.items)) throw new Error("invalid_relookup_candidates");
   return payload;
+}
+async function patchFirstCommentLinks(settings, candidate, links) {
+  return fetchJson(buildBackendUrl(settings.apiBaseUrl, "/api/bookmarks/first-comment-links"), {
+    method: "PATCH", headers: buildWriteHeaders(settings.apiKey, { "Content-Type": "application/json" }),
+    body: JSON.stringify({ user_id: settings.userId, tweet_id: candidate.tweet_id, first_comment_links: links })
+  }, RELOOKUP_FETCH_TIMEOUT_MS);
 }
 
 async function runFirstCommentRelookupPass(trigger = "manual") {
@@ -1438,8 +1056,17 @@ async function runFirstCommentRelookupPass(trigger = "manual") {
 
   try {
     const settings = await getSettings();
-    const candidates = await fetchRelookupCandidates(settings);
-    const relookupState = await readRelookupState();
+    let allState = await readRelookupState();
+    if (allState.version !== 2) allState = { version: 2, scopes: {} };
+    allState.scopes ||= {};
+    const namespace = deliveryNamespace(settings);
+    const relookupState = allState.scopes[namespace] ||= { tweets: {}, offset: 0, pending: [] };
+    if (!relookupState.pending.length) {
+      const page = await fetchRelookupCandidates(settings, relookupState.offset);
+      relookupState.pending = page.items; relookupState.offset = page.next_offset || 0;
+      await writeRelookupState(allState);
+    }
+    const candidates = relookupState.pending;
     const now = Date.now();
 
     // Backoff por tweet: máx RELOOKUP_MAX_ATTEMPTS intentos, mínimo
@@ -1451,7 +1078,7 @@ async function runFirstCommentRelookupPass(trigger = "manual") {
         if (!tweetId) {
           return false;
         }
-        const entry = relookupState[tweetId];
+        const entry = relookupState.tweets[tweetId];
         if (!entry) {
           return true;
         }
@@ -1472,6 +1099,8 @@ async function runFirstCommentRelookupPass(trigger = "manual") {
     }, { emit: true });
 
     if (eligible.length === 0) {
+      relookupState.pending = [];
+      await writeRelookupState(allState);
       return { ok: true, trigger, candidates: candidates.length, attempted: 0, recovered: 0, failed: 0 };
     }
 
@@ -1481,10 +1110,11 @@ async function runFirstCommentRelookupPass(trigger = "manual") {
 
     for (const candidate of eligible) {
       const tweetId = getTweetIdForBookmark(candidate);
-      const entry = relookupState[tweetId] || { attempts: 0 };
+      const entry = relookupState.tweets[tweetId] || { attempts: 0 };
       entry.attempts = (Number(entry.attempts) || 0) + 1;
       entry.lastAt = Date.now();
-      relookupState[tweetId] = entry;
+      relookupState.tweets[tweetId] = entry;
+      await writeRelookupState(allState);
 
       try {
         const rawLinks = await extractFirstCommentLinksViaDetailTab(candidate, { traceId });
@@ -1521,7 +1151,8 @@ async function runFirstCommentRelookupPass(trigger = "manual") {
       }
     }
 
-    await writeRelookupState(relookupState);
+    relookupState.pending = candidates.filter(c => !eligible.includes(c));
+    await writeRelookupState(allState);
     await recordActivity({
       stage: "relookup_densos",
       traceId,
@@ -1551,347 +1182,162 @@ function scheduleFirstCommentRelookupPass(trigger) {
 }
 
 async function postBatch(queueItem) {
-  const settings = await getSettings();
-  const endpoint = `${sanitizeBaseUrl(settings.apiBaseUrl)}/api/bookmarks/batch`;
-  reportBackgroundStage("bg_post_batch_started", {
-    traceId: cleanText(queueItem.traceId || ""),
-    queueItemId: cleanText(queueItem.id || ""),
-    batchIndex: Number(queueItem.batchIndex) || 0,
-    bookmarkCount: Array.isArray(queueItem.bookmarks) ? queueItem.bookmarks.length : 0
-  }, {
-    emit: true
+  const current = await getSettings();
+  const settings = { ...current, apiBaseUrl: queueItem.apiBaseUrl, userId: queueItem.userId };
+  if (sanitizeBaseUrl(current.apiBaseUrl) !== settings.apiBaseUrl) {
+    const error = new Error("queued_destination_changed_restore_settings"); error.status = 401; throw error;
+  }
+  // Persist and deliver the original capture first. Reply enrichment runs separately.
+
+  return fetchJson(buildBackendUrl(settings.apiBaseUrl, "/api/bookmarks/batch"), {
+    method: "POST", headers: buildWriteHeaders(settings.apiKey, { "Content-Type": "application/json" }),
+    body: JSON.stringify({ user_id: settings.userId, sync_id: queueItem.syncId,
+      batch_index: queueItem.batchIndex, bookmarks: queueItem.bookmarks })
   });
+}
 
-  // Prepara UNA vez por item de cola: los retries no re-pagan los tabs de
-  // detalle de los posts densos (~18s c/u) ni la resolución de shorteners.
-  let preparedBookmarks = queueItem.preparedBookmarks;
-  if (!Array.isArray(preparedBookmarks)) {
-    preparedBookmarks = await prepareBookmarksForDelivery(queueItem.bookmarks, {
-      traceId: queueItem.traceId
-    });
-    queueItem.preparedBookmarks = preparedBookmarks;
-    await persistQueue();
-  }
-
-  reportBackgroundStage("bg_post_batch_prepared", {
-    traceId: cleanText(queueItem.traceId || ""),
-    queueItemId: cleanText(queueItem.id || ""),
-    bookmarkCount: preparedBookmarks.length,
-    firstBookmark: buildBookmarkDebugSnapshot(preparedBookmarks[0])
-  });
-
-  const payload = {
-    user_id: sanitizeUserId(queueItem.userId || settings.userId),
-    sync_id: queueItem.syncId,
-    batch_index: queueItem.batchIndex,
-    bookmarks: preparedBookmarks
-  };
-
-  // Timeout duro: un backend colgado (cold start, red) no puede congelar el
-  // drenaje de la cola — el AbortController corta y el retry/backoff decide.
-  const controller = new AbortController();
-  const fetchTimer = setTimeout(() => controller.abort(), POST_BATCH_TIMEOUT_MS);
-  let response;
-  try {
-    response = await fetch(endpoint, {
-      method: "POST",
-      headers: buildWriteHeaders(settings.apiKey, {
-        "Content-Type": "application/json"
-      }),
-      body: JSON.stringify(payload),
-      signal: controller.signal
-    });
-  } finally {
-    clearTimeout(fetchTimer);
-  }
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    reportBackgroundStage("bg_post_batch_http_error", {
-      traceId: cleanText(queueItem.traceId || ""),
-      queueItemId: cleanText(queueItem.id || ""),
-      status: response.status,
-      errorPreview: errorText.slice(0, 400)
-    }, {
-      level: "warn",
-      emit: true
-    });
-    throw new Error(`HTTP ${response.status}: ${errorText.slice(0, 400)}`);
-  }
-
-  return response.json();
+function acknowledgeBatch(item, response) {
+  if (!response || response.ok !== true) throw new Error("invalid_delivery_acknowledgement");
+  const ids = response.stored_ids || response.imported_ids;
+  if (!Array.isArray(ids) && !Array.isArray(response.duplicate_ids)) throw new Error("backend_id_ack_required_update_backend");
+  const sent = new Set(item.bookmarks.map(bookmark => getTweetIdForBookmark(bookmark)));
+  const accepted = [...new Set([...(ids || []), ...(response.duplicate_ids || [])].map(String))];
+  if (accepted.some(id => !sent.has(id))) throw new Error("unexpected_acknowledgement_id");
+  return accepted;
 }
 
 async function flushQueue() {
   await loadQueueState();
-  if (state.isFlushing) {
-    return;
-  }
-
+  if (state.isFlushing) return;
   state.isFlushing = true;
-
   try {
-    while (state.queue.length > 0) {
-      const current = state.queue[0];
-      current.attempts = Number(current.attempts) || 0;
-      let delivered = false;
-      let attemptsThisRun = 0;
-
-       reportBackgroundStage("bg_flush_batch_started", {
-        traceId: cleanText(current.traceId || ""),
-        queueItemId: cleanText(current.id || ""),
-        batchIndex: Number(current.batchIndex) || 0,
-        queuedBookmarks: Array.isArray(current.bookmarks) ? current.bookmarks.length : 0,
-        attemptsSoFar: current.attempts
-      }, {
-        emit: true
-      });
-
-      while (!delivered && attemptsThisRun < MAX_RETRIES) {
-        try {
-          const backendResult = await postBatch(current);
-          delivered = true;
-          state.queue.shift();
-          await persistQueue();
-
-          state.counters.delivered += (current.bookmarks || []).length;
-          await recordActivity({
-            stage: "ingesta_confirmada",
-            traceId: current.traceId || null,
-            syncId: current.syncId,
-            batchIndex: current.batchIndex,
-            pendingQueue: state.queue.length,
-            count: (current.bookmarks || []).length
-          });
-          logInfo("batch delivered", {
-            syncId: current.syncId,
-            batchIndex: current.batchIndex,
-            count: (current.bookmarks || []).length
-          });
-
-          safeSendMessage({
-            type: "SYNC_PROGRESS",
-            payload: {
-              stage: "ingesta_confirmada",
-              traceId: current.traceId || null,
-              syncId: current.syncId,
-              batchIndex: current.batchIndex,
-              pendingQueue: state.queue.length,
-              backendResult,
-              queueItemId: current.id || null
+    for (let round = 0; round < DELIVERY_RUN_LIMIT; round++) {
+      const item = state.queue.find(entry => (entry.nextAttemptAt || 0) <= Date.now());
+      if (!item) break;
+      state.inFlightId = item.id;
+      let response, accepted;
+      try { response = await postBatch(item); accepted = acknowledgeBatch(item, response); }
+      catch (error) {
+        await changeDelivery(draft => {
+          const current = draft.queue.find(entry => entry.id === item.id);
+          if (!current) return;
+          current.attempts = (current.attempts || 0) + 1;
+          current.lastError = extractErrorMessage(error);
+          const permanent = [400, 401, 403, 413, 422].includes(error.status);
+          if (permanent) {
+            draft.queue = draft.queue.filter(entry => entry.id !== item.id);
+            draft.failed.push({ ...current, failedAt: new Date().toISOString() });
+            draft.counters.failed += current.bookmarks.length;
+            if (current.jobId && draft.jobs[current.jobId]) {
+              const job = draft.jobs[current.jobId]; job.failed = (job.failed || 0) + current.bookmarks.length;
+              if (job.scanFinished) job.phase = "needs_attention";
             }
-          });
-        } catch (error) {
-          attemptsThisRun += 1;
-          current.attempts += 1;
-          current.lastError = extractErrorMessage(error) || safeJsonStringify(error, 500);
-          await persistQueue();
-
-          reportBackgroundStage("bg_flush_attempt_failed", {
-            traceId: current.traceId || null,
-            queueItemId: current.id || null,
-            batchIndex: current.batchIndex,
-            attempt: current.attempts,
-            error: current.lastError
-          }, {
-            level: "warn",
-            emit: true
-          });
-
-          if (attemptsThisRun >= MAX_RETRIES) {
-            state.counters.failed += 1;
-            await recordActivity({
-              stage: "ingesta_fallida",
-              traceId: current.traceId || null,
-              syncId: current.syncId,
-              batchIndex: current.batchIndex,
-              pendingQueue: state.queue.length,
-              attempts: current.attempts,
-              error: current.lastError
-            });
-            logWarn("batch failed after retries", {
-              syncId: current.syncId,
-              error: current.lastError
-            });
-            // Dead-letter: fuera de la cola activa para no bloquear al resto
-            // (head-of-line). Queda en failed_queue_v1, recuperable desde el
-            // popup con "Reintentar fallidos".
-            state.queue.shift();
-            await persistQueue();
-            await appendFailedQueueItem(current);
-            safeSendMessage({
-              type: "SYNC_ERROR",
-              payload: {
-                stage: "ingesta_fallida",
-                traceId: current.traceId || null,
-                syncId: current.syncId,
-                batchIndex: current.batchIndex,
-                pendingQueue: state.queue.length,
-                attempts: current.attempts,
-                error: current.lastError,
-                queueItemId: current.id || null
-              }
-            });
-            break;
-          }
-
-          const waitMs =
-            RETRY_BASE_DELAY_MS * attemptsThisRun + Math.floor(Math.random() * 500);
-          safeSendMessage({
-            type: "SYNC_PROGRESS",
-            payload: {
-              stage: "reintento_programado",
-              traceId: current.traceId || null,
-              syncId: current.syncId,
-              batchIndex: current.batchIndex,
-              attempt: current.attempts,
-              retryInMs: waitMs,
-              queueItemId: current.id || null
-            }
-          });
-          await sleep(waitMs);
-        }
-      }
-
-      if (!delivered) {
-        // Si el item fue movido a dead-letter ya no está en queue[0]:
-        // seguir drenando los demás. Si sigue ahí (fallo transitorio sin
-        // agotar retries), parar y esperar el próximo flush.
-        if (state.queue[0] === current) {
-          break;
-        }
+          } else current.nextAttemptAt = Date.now() + Math.max(error.retryAfterMs || 0,
+            Math.min(3600000, 30000 * 2 ** Math.min(current.attempts - 1, 7)));
+          addActivity(draft, { stage: permanent ? "rechazado" : "pendiente_reintento", error: current.lastError, queueItemId: item.id });
+        });
+        safeSendMessage({ type: "SYNC_ERROR", payload: { stage: "bg_delivery_pending", error: extractErrorMessage(error) } });
         continue;
       }
+      // Commit after transport handling: a local storage failure is NOT a network retry.
+      await changeDelivery(draft => {
+        const current = draft.queue.find(entry => entry.id === item.id);
+        if (!current) return;
+        const confirmed = new Set(accepted);
+        const remaining = current.bookmarks.filter(bookmark => !confirmed.has(getTweetIdForBookmark(bookmark)));
+        draft.queue = draft.queue.filter(entry => entry.id !== item.id);
+        if (remaining.length) {
+          draft.failed.push({ ...current, bookmarks: remaining, lastError: "items_not_acknowledged", failedAt: new Date().toISOString(), invalid: response.invalid || [] });
+          draft.counters.failed += remaining.length;
+        }
+        draft.counters.delivered += accepted.length;
+        const previousReceipt = draft.receipts[current.requestId];
+        draft.receipts[current.requestId] = { captures: { ...(previousReceipt?.captures || {}), ...Object.fromEntries(item.bookmarks.filter(b => confirmed.has(getTweetIdForBookmark(b))).map(b => [getTweetIdForBookmark(b), captureFingerprint(b)])) }, at: Date.now(), namespace: deliveryNamespace(current),
+          ids: [...new Set([...(previousReceipt?.ids || []), ...accepted])], requestIds: current.requestIds || current.bookmarks.map(getTweetIdForBookmark),
+          complete: !draft.queue.some(entry => entry.requestId === current.requestId) && !draft.failed.some(entry => entry.requestId === current.requestId) };
+        const receiptKeys = Object.keys(draft.receipts);
+        if (receiptKeys.length > 1000) delete draft.receipts[receiptKeys[0]];
+
+        const namespace = deliveryNamespace(current);
+        for (const id of accepted) {
+          const staged = draft.drafts[namespace]?.[id];
+          const sent = item.bookmarks.find(b => getTweetIdForBookmark(b) === id);
+          if (staged && captureFingerprint(staged) !== captureFingerprint(sent)) queueCaptureUpgrade(draft, namespace, staged, current);
+          else delete draft.drafts[namespace]?.[id];
+        }
+        if (current.jobId && draft.jobs[current.jobId]) {
+          const job = draft.jobs[current.jobId];
+          job.confirmedIds = [...new Set([...(job.confirmedIds || []), ...accepted])];
+          job.confirmed = job.confirmedIds.length;
+          job.failed = (job.failed || 0) + remaining.length;
+          const pending = draft.queue.some(entry => entry.jobId === job.id);
+          if (job.scanFinished) job.phase = pending ? "delivering" : job.failed ? "needs_attention" : "confirmed";
+        }
+        addActivity(draft, { stage: "ingesta_confirmada", queueItemId: item.id, count: accepted.length, rejected: remaining.length });
+      });
+      safeSendMessage({ type: "DELIVERY_CONFIRMED", payload: { namespace: deliveryNamespace(item), ids: accepted.filter(id => !state.queue.some(entry => deliveryNamespace(entry) === deliveryNamespace(item) && entry.bookmarks.some(b => getTweetIdForBookmark(b) === id))), jobId: item.jobId } });
     }
-  } finally {
-    state.isFlushing = false;
-  }
-}
-
-// ─── Dead-letter queue ────────────────────────────────────────────────
-
-async function appendFailedQueueItem(item) {
-  try {
-    const current = await chrome.storage.local.get([FAILED_QUEUE_STORAGE_KEY]);
-    const failed = Array.isArray(current[FAILED_QUEUE_STORAGE_KEY])
-      ? current[FAILED_QUEUE_STORAGE_KEY]
-      : [];
-    // preparedBookmarks puede ser pesado y quedar obsoleto: se re-prepara al reintentar.
-    const { preparedBookmarks: _drop, ...slim } = item || {};
-    failed.push({ ...slim, failedAt: new Date().toISOString() });
-    await chrome.storage.local.set({
-      [FAILED_QUEUE_STORAGE_KEY]: failed.slice(-FAILED_QUEUE_MAX)
-    });
-  } catch (error) {
-    reportAsyncError("append_failed_queue", error);
-  }
+  } finally { state.isFlushing = false; state.inFlightId = null; }
 }
 
 async function retryFailedQueueItems() {
-  const current = await chrome.storage.local.get([FAILED_QUEUE_STORAGE_KEY]);
-  const failed = Array.isArray(current[FAILED_QUEUE_STORAGE_KEY])
-    ? current[FAILED_QUEUE_STORAGE_KEY]
-    : [];
-  if (failed.length === 0) {
-    return { requeued: 0, pendingQueue: state.queue.length };
-  }
-
-  await loadQueueState();
-  for (const item of failed) {
-    item.attempts = 0;
-    delete item.lastError;
-    delete item.failedAt;
-    state.queue.push(item);
-  }
-  await persistQueue();
-  await chrome.storage.local.set({ [FAILED_QUEUE_STORAGE_KEY]: [] });
-  scheduleFlushQueue("retry_failed");
-  return { requeued: failed.length, pendingQueue: state.queue.length };
+  return changeDelivery(draft => {
+    const failed = draft.failed;
+    draft.queue.push(...failed.map(({ failedAt, lastError, ...item }) => ({ ...item, attempts: 0, nextAttemptAt: 0 })));
+    draft.failed = [];
+    for (const item of failed) if (item.jobId && draft.jobs[item.jobId]) { draft.jobs[item.jobId].failed = 0; draft.jobs[item.jobId].phase = "delivering"; }
+    return { requeued: failed.length, pendingQueue: draft.queue.length };
+  }).then(result => { scheduleFlushQueue("retry_failed"); return result; });
 }
 
 function scheduleFlushQueue(reason) {
-  void flushQueue().catch((error) => {
+  void flushQueue().catch(error => {
     reportAsyncError(`flush_queue_failed:${reason}`, error);
+    safeSendMessage({ type: "SYNC_ERROR", payload: { stage: "bg_delivery_storage_error", error: extractErrorMessage(error) } });
   });
 }
 
 function bootstrapQueue(reason) {
-  void (async () => {
-    await loadQueueState();
-    await flushQueue();
-  })().catch((error) => {
-    reportAsyncError(`bootstrap_failed:${reason}`, error);
-  });
+  scheduleFlushQueue(reason);
+  void loadQueueState().then(() => {
+    for (const job of Object.values(state.jobs)) if (job.phase === "scanning") void launchCaptureJob(job);
+  }).catch(error => reportAsyncError("restore_jobs", error));
 }
 
 async function enqueueBatch(payload) {
-  if (!payload || !Array.isArray(payload.bookmarks) || payload.bookmarks.length === 0) {
-    throw new Error("payload.bookmarks must be a non-empty array");
-  }
-
-  await loadQueueState();
-  const traceId = cleanText(payload.traceId || "") || `bg-${Date.now().toString(36)}`;
-  const queueItemId = `${payload.syncId || "sync"}-${payload.batchIndex || 0}-${Date.now()}`;
-
-  state.queue.push({
-    id: queueItemId,
-    syncId: payload.syncId || null,
-    traceId,
-    batchIndex: Number(payload.batchIndex) || 0,
-    userId: payload.userId || null,
-    source: cleanText(payload.source || ""),
-    pageUrl: cleanText(payload.pageUrl || ""),
-    bookmarks: payload.bookmarks,
-    attempts: 0,
-    queuedAt: new Date().toISOString()
-  });
-
-  await persistQueue();
-
-  state.counters.captured += payload.bookmarks.length;
-  const firstTweetId = (payload.bookmarks[0] && payload.bookmarks[0].tweet_id) || null;
-  await recordActivity({
-    stage: "lote_encolado",
-    traceId,
-    syncId: payload.syncId || null,
-    batchIndex: Number(payload.batchIndex) || 0,
-    pendingQueue: state.queue.length,
-    count: payload.bookmarks.length,
-    tweetId: firstTweetId
-  });
-  reportBackgroundStage("bg_enqueue_received", {
-    traceId,
-    queueItemId,
-    syncId: payload.syncId || null,
-    batchIndex: Number(payload.batchIndex) || 0,
-    source: cleanText(payload.source || ""),
-    pageUrl: cleanText(payload.pageUrl || ""),
-    pendingQueue: state.queue.length,
-    firstBookmark: buildBookmarkDebugSnapshot(payload.bookmarks[0])
-  }, {
-    emit: true
-  });
-
-  safeSendMessage({
-    type: "SYNC_PROGRESS",
-    payload: {
-      stage: "lote_encolado",
-      traceId,
-      syncId: payload.syncId || null,
-      batchIndex: Number(payload.batchIndex) || 0,
-      pendingQueue: state.queue.length,
-      queueItemId
+  if (!Array.isArray(payload?.bookmarks) || !payload.bookmarks.length || payload.bookmarks.length > 40) throw new Error("capture_batch_requires_1_to_40_items");
+  const settings = await getSettings();
+  if (payload.namespace && payload.namespace !== deliveryNamespace(settings)) throw new Error("settings_changed_restart_scan");
+  const id = payload.requestId || `${payload.syncId || "sync"}-${payload.batchIndex || 0}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const result = await changeDelivery(draft => {
+    if (payload.jobId && draft.jobs[payload.jobId]?.namespace !== deliveryNamespace(settings)) throw new Error("job_namespace_mismatch");
+    const requestIds = payload.requestIds || payload.bookmarks.map(getTweetIdForBookmark);
+    const previous = draft.receipts[id] || draft.queue.find(item => item.requestId === id) || draft.failed.find(item => item.requestId === id);
+    if (previous) {
+      if (JSON.stringify(previous.requestIds || previous.ids) !== JSON.stringify(requestIds)) throw new Error("request_id_payload_mismatch");
+      return { ok: true, queued: true, pendingQueue: draft.queue.length };
     }
+    const unique = new Map();
+    for (const bookmark of payload.bookmarks) {
+      const tweetId = getTweetIdForBookmark(bookmark);
+      if (!tweetId) throw new Error("invalid_capture_id");
+      unique.set(tweetId, mergeCapture(unique.get(tweetId), bookmark));
+    }
+    const namespace = deliveryNamespace(settings);
+    const bookmarks = [...unique.values()].map(item => payload.kind === "scanner" ? mergeCapture(item, draft.drafts[namespace]?.[getTweetIdForBookmark(item)] || item) : item);
+    for (let start = 0; start < bookmarks.length; start += DELIVERY_BATCH_SIZE) draft.queue.push({
+      id: `${id}-${start}`, requestId: id, requestIds, kind: payload.kind || "auto", jobId: payload.jobId || null,
+      syncId: payload.syncId || null, batchIndex: Math.floor(start / DELIVERY_BATCH_SIZE),
+      traceId: payload.traceId || id, source: payload.source || "auto", bookmarks: bookmarks.slice(start, start + DELIVERY_BATCH_SIZE),
+      userId: settings.userId, apiBaseUrl: sanitizeBaseUrl(settings.apiBaseUrl), attempts: 0, nextAttemptAt: 0, queuedAt: new Date().toISOString()
+    });
+    draft.counters.captured += bookmarks.length;
+    if (payload.jobId && draft.jobs[payload.jobId]) Object.assign(draft.jobs[payload.jobId], { queued: (draft.jobs[payload.jobId].queued || 0) + bookmarks.length, updatedAt: Date.now() });
+    addActivity(draft, { stage: "lote_encolado", count: bookmarks.length });
+    return { ok: true, queued: true, queuedCount: bookmarks.length, pendingQueue: draft.queue.length, queueItemId: id };
   });
-
-  scheduleFlushQueue("enqueue_batch");
-
-  return {
-    ok: true,
-    pendingQueue: state.queue.length,
-    traceId,
-    queueItemId
-  };
+  scheduleFlushQueue("enqueue");
+  return result;
 }
 
 async function updateSettings(payload) {
@@ -1954,11 +1400,17 @@ try {
   reportAsyncError("alarm_setup", error);
 }
 
+chrome.tabs.onRemoved?.addListener(tabId => {
+  void changeDelivery(draft => {
+    for (const job of Object.values(draft.jobs)) if (job.tabId === tabId && job.phase === "scanning") Object.assign(job, { phase: "interrupted", error: "x_tab_closed", coverage: "partial", updatedAt: Date.now() });
+  }).catch(error => reportAsyncError("scan_tab_closed", error));
+});
+
 chrome.runtime.onStartup.addListener(() => {
   bootstrapQueue("onStartup");
 });
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   void (async () => {
     await loadQueueState();
 
@@ -1970,6 +1422,62 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       return;
     }
 
+    const fromPopup = sender?.url === chrome.runtime.getURL("popup.html");
+    if (["SETTINGS_UPDATE", "RETRY_FAILED", "CLEAR_ACTIVITY", "START_BOOKMARK_IMPORT", "RELOOKUP_DENSE"].includes(message.type) && !fromPopup) throw new Error("popup_action_required");
+    if (sender?.id && sender.id !== chrome.runtime.id) throw new Error("invalid_message_sender");
+    if (message.type === "BOOKMARK_SCANNER_STAGE") {
+      if (!Array.isArray(message.payload?.items) || message.payload.items.length > 40) throw new Error("invalid_stage_batch");
+      sendResponse(await stageScannerDrafts(message.payload.items, message.payload.namespace)); return;
+    }
+    if (message.type === "BOOKMARK_SCANNER_CLEAR_DRAFTS") {
+      const namespace = deliveryNamespace(await getSettings());
+      if (message.payload?.namespace !== namespace) throw new Error("settings_changed_restart_scan");
+      await changeDelivery(draft => {
+        const queued = new Set([...draft.queue, ...draft.failed].filter(entry => deliveryNamespace(entry) === namespace).flatMap(entry => entry.bookmarks.map(getTweetIdForBookmark)));
+        for (const id of message.payload?.ids || []) if (!queued.has(id)) delete draft.drafts[namespace]?.[id];
+      });
+      sendResponse({ ok: true }); return;
+    }
+    if (message.type === "BOOKMARK_SCANNER_RESTORE" || message.type === "GET_DELIVERY_STATUS") {
+      const namespace = deliveryNamespace(await getSettings());
+      const jobs = Object.values(state.jobs).filter(job => job.namespace === namespace).sort((a,b) => b.updatedAt - a.updatedAt);
+      const queued = state.queue.filter(item => deliveryNamespace(item) === namespace);
+      const failed = state.failed.filter(item => deliveryNamespace(item) === namespace);
+      sendResponse({ ok: true, namespace, items: Object.values(state.drafts[namespace] || {}),
+        queuedIds: queued.flatMap(item => item.bookmarks.map(getTweetIdForBookmark)),
+        confirmedIds: Object.values(deliveryStore.data.receipts).filter(r => r.namespace === namespace).flatMap(r => r.ids),
+        pendingCount: queued.reduce((n,item) => n + item.bookmarks.length, 0),
+        failedCount: failed.reduce((n,item) => n + item.bookmarks.length, 0), job: jobs[0] || null }); return;
+    }
+    if (message.type === "START_BOOKMARK_IMPORT") {
+      const tab = await chrome.tabs.get(message.payload?.tabId);
+      if (!/^https:\/\/(x\.com|twitter\.com)\/i\/bookmarks(?:[/?#]|$)/.test(tab?.url || "")) throw new Error("open_x_bookmarks_first");
+      sendResponse(await startCaptureJob(tab.id, message.payload?.range || {})); return;
+    }
+    if (message.type === "BOOKMARK_SCANNER_SELECT_JOB") {
+      const p = message.payload || {};
+      const ids = await changeDelivery(draft => {
+        const job = draft.jobs[p.jobId];
+        if (!job || job.namespace !== p.namespace || sender?.tab?.id !== job.tabId) throw new Error("invalid_scan_job");
+        if (job.selectedIds) return job.selectedIds;
+        if (!Array.isArray(p.ids) || p.ids.some(id => !draft.drafts[job.namespace]?.[id])) throw new Error("selected_capture_not_durable");
+        job.selectedIds = [...new Set(p.ids)]; job.updatedAt = Date.now();
+        return job.selectedIds;
+      });
+      sendResponse({ ok: true, ids }); return;
+    }
+    if (message.type === "BOOKMARK_SCANNER_JOB_PROGRESS") {
+      const p = message.payload || {};
+      await changeDelivery(draft => {
+        const job = draft.jobs[p.jobId];
+        if (!job || job.namespace !== p.namespace || sender?.tab?.id !== job.tabId) throw new Error("invalid_scan_job");
+        for (const key of ["coverage", "rounds", "error", "scanFinished"]) if (p[key] !== undefined) job[key] = p[key];
+        job.updatedAt = Date.now();
+        if (p.error) job.phase = "interrupted";
+        else if (job.scanFinished) job.phase = draft.queue.some(item => item.jobId === job.id) ? "delivering" : job.failed ? "needs_attention" : "confirmed";
+      });
+      sendResponse({ ok: true }); return;
+    }
     if (message.type === "INGEST_ENQUEUE") {
       reportBackgroundStage("bg_message_received", {
         traceId: cleanText(message?.payload?.traceId || ""),
@@ -2002,7 +1510,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.type === "BOOKMARK_SCANNER_IMPORT_BATCH") {
       const result = await importBookmarkScannerPending(
         message?.payload?.items,
-        message?.payload?.source
+        message?.payload?.source, message?.payload?.jobId, message?.payload?.namespace, message?.payload?.requestId, message?.payload?.requestIds
       );
       sendResponse(result);
       return;
@@ -2028,6 +1536,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       sendResponse({
         ok: true,
         ...settings,
+        apiKey: fromPopup ? settings.apiKey : undefined,
         pendingQueue: state.queue.length
       });
       return;
@@ -2035,6 +1544,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     if (message.type === "SETTINGS_UPDATE") {
       const updatedSettings = await updateSettings(message.payload || {});
+      safeSendMessage({ type: "SETTINGS_CHANGED" });
       sendResponse({
         ok: true,
         ...updatedSettings
@@ -2053,10 +1563,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           resolve(-1);
         }
       });
-      const stored = await chrome.storage.local.get([FAILED_QUEUE_STORAGE_KEY]);
-      const failed = Array.isArray(stored[FAILED_QUEUE_STORAGE_KEY])
-        ? stored[FAILED_QUEUE_STORAGE_KEY]
-        : [];
+      const failed = state.failed;
       const head = state.queue[0] || null;
       const lastFailed = failed[failed.length - 1] || null;
 
@@ -2106,12 +1613,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     }
 
     if (message.type === "CLEAR_ACTIVITY") {
-      state.activity = [];
-      state.counters = { captured: 0, delivered: 0, failed: 0 };
-      await chrome.storage.local.set({
-        [ACTIVITY_STORAGE_KEY]: [],
-        [COUNTERS_STORAGE_KEY]: state.counters
-      });
+      await changeDelivery(draft => { draft.activity = []; });
       updateBadge();
       sendResponse({ ok: true });
       return;

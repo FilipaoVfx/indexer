@@ -5,7 +5,7 @@
   const MAX_URLS_PER_TWEET = 30;
   const MAX_ENTRIES_PER_EVENT = 80;
   // Note tweets can exceed 1200 chars; keep full text for RAG-quality capture.
-  const SHORT_TEXT_LIMIT = 4000;
+  const SHORT_TEXT_LIMIT = 12000;
   const MAX_MEDIA_PER_TWEET = 8;
   const URL_TEXT_RE = /\b((?:https?:\/\/)?(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:\/[^\s<>"')\]]*)?)/gi;
   const X_HOST_RE = /(^|\.)x\.com$|(^|\.)twitter\.com$/i;
@@ -52,7 +52,8 @@
     let match = null;
 
     while ((match = URL_TEXT_RE.exec(text)) !== null) {
-      const candidate = stripTrailingEllipsis(match[1] || "").replace(/[),.;:!?]+$/g, "");
+      if (/[…]|\.\.\./.test(match[1] || "")) continue;
+      const candidate = (match[1] || "").replace(/[),.;:!?]+$/g, "");
       if (!candidate || !looksLikeUrlText(candidate)) {
         continue;
       }
@@ -69,7 +70,7 @@
       return false;
     }
 
-    return !MEDIA_HOST_RE.test(parsed.hostname);
+    return /^(https?:)$/.test(parsed.protocol) && !MEDIA_HOST_RE.test(parsed.hostname);
   }
 
   function uniqueUrls(values, limit = MAX_URLS_PER_TWEET) {
@@ -170,14 +171,11 @@
   }
 
   function getTweetText(tweetNode) {
-    const noteTweetText = getFirstString([
-      tweetNode?.note_tweet?.note_tweet_results?.result?.text,
+    const values = [tweetNode?.note_tweet?.note_tweet_results?.result?.text,
       tweetNode?.note_tweet?.note_tweet_results?.result?.note_tweet?.text,
-      tweetNode?.legacy?.full_text,
-      tweetNode?.legacy?.text
-    ]);
-
-    return noteTweetText.slice(0, SHORT_TEXT_LIMIT);
+      tweetNode?.legacy?.full_text, tweetNode?.legacy?.text];
+    return (values.find(value => typeof value === "string" && value.trim()) || "")
+      .replace(/\r\n?/g, "\n").trim();
   }
 
   function getAuthorUsername(tweetNode) {
@@ -282,7 +280,7 @@
       node?.id_str
     ]);
 
-    if (!restId || !node?.legacy || typeof node.legacy !== "object") {
+    if (node.__typename !== "Tweet" || !/^\d+$/.test(restId) || !node?.legacy || typeof node.legacy !== "object") {
       return null;
     }
 
@@ -295,6 +293,7 @@
     ]);
 
     return {
+      entityType: "Tweet",
       tweetId: restId,
       inReplyToTweetId,
       conversationId: getFirstString([
@@ -305,48 +304,66 @@
       authorName: getAuthorName(node),
       createdAt: getFirstString([node?.legacy?.created_at]),
       media: getTweetMedia(node),
-      text,
+      text: text.slice(0, SHORT_TEXT_LIMIT),
+      contentTruncated: text.length > SHORT_TEXT_LIMIT,
       links,
       sortIndex: order,
       sourceUrl: authorUsername ? `https://x.com/${authorUsername}/status/${restId}` : ""
     };
   }
 
-  function collectTweetEntries(root) {
-    const entries = [];
-    const seen = new Set();
-    let order = 0;
+  function unwrapTweet(node) {
+    return node?.__typename === "TweetWithVisibilityResults" ? node.tweet : node;
+  }
 
-    function visit(node) {
-      if (!node || typeof node !== "object") {
-        return;
+  function collectTweetEntries(root, bookmarksOnly = false) {
+    const entries = [], seen = new Set();
+    const add = (node, bookmarkOrder = "") => {
+      const candidate = maybeExtractTweetEntry(unwrapTweet(node), entries.length);
+      if (!candidate) return false;
+      if (!seen.has(candidate.tweetId)) {
+        if (bookmarkOrder) candidate.bookmarkOrder = String(bookmarkOrder);
+        seen.add(candidate.tweetId); entries.push(candidate);
       }
-
-      if (Array.isArray(node)) {
-        for (const item of node) {
-          visit(item);
+      return true;
+    };
+    let recognized = false, terminal = false, cursor = "", unsupported = false;
+    function visit(node, depth = 0) {
+      if (!node || typeof node !== "object" || depth > 30) return;
+      if (Array.isArray(node)) { node.forEach(value => visit(value, depth + 1)); return; }
+      if (bookmarksOnly && Array.isArray(node.instructions)) {
+        recognized = true;
+        for (const instruction of node.instructions) {
+          if (instruction.type === "TimelineTerminateTimeline" && instruction.direction === "Bottom") terminal = true;
+          for (const entry of [...(instruction.entries || []), ...(instruction.entry ? [instruction.entry] : [])]) {
+            if (entry.content?.cursorType === "Bottom") cursor = cleanText(entry.content.value);
+            const item = entry.content?.itemContent;
+            if (/^tweet-/.test(entry.entryId || "")) {
+              const result = unwrapTweet(item?.tweet_results?.result);
+              if (result?.__typename !== "Tweet" || !add(result, entry.sortIndex)) unsupported = true;
+            }
+            for (const moduleItem of entry.content?.items || []) {
+              const content = moduleItem.item?.itemContent;
+              if (/tweet-/.test(moduleItem.entryId || "")) {
+                const result = unwrapTweet(content?.tweet_results?.result);
+                if (result?.__typename !== "Tweet" || !add(result)) unsupported = true;
+              }
+            }
+          }
         }
         return;
       }
-
-      const candidate = maybeExtractTweetEntry(node, order);
-      if (candidate) {
-        order += 1;
-        if (!seen.has(candidate.tweetId)) {
-          seen.add(candidate.tweetId);
-          entries.push(candidate);
-        }
+      if (node.__typename === "User") return;
+      if (node.__typename === "Tweet" || node.__typename === "TweetWithVisibilityResults") {
+        if (!bookmarksOnly) add(node);
+        return; // Quoted tweets and authors are context, never timeline membership.
       }
-
-      for (const nestedValue of Object.values(node)) {
-        if (nestedValue && typeof nestedValue === "object") {
-          visit(nestedValue);
-        }
+      for (const [key, value] of Object.entries(node)) {
+        if (!['core', 'quoted_status_result', 'retweeted_status_result', 'legacy'].includes(key)) visit(value, depth + 1);
       }
     }
-
     visit(root);
-    return entries.slice(0, MAX_ENTRIES_PER_EVENT);
+    return { entries, recognized: bookmarksOnly ? recognized && !unsupported : entries.length > 0, terminal, cursor };
   }
 
   function shouldInspectUrl(url) {
@@ -359,7 +376,7 @@
       return false;
     }
 
-    return /tweetdetail|conversation|timeline|bookmarks|byrestid|tweetresult/i.test(normalized);
+    return /tweetdetail|conversation|timeline|bookmarks|byrestid|tweetresult|createbookmark|hometimeline|homelatesttimeline|usertweets|searchtimeline/i.test(normalized);
   }
 
   function shouldInspectBody(bodyText) {
@@ -368,67 +385,61 @@
     );
   }
 
-  function emitEntries(entries, url, timeline) {
-    if (!entries.length) {
-      return;
-    }
-
-    window.dispatchEvent(new CustomEvent(EVENT_NAME, {
-      detail: {
-        source: SOURCE,
-        url: cleanText(url),
-        ts: Date.now(),
-        timeline: timeline || "",
-        entries
-      }
-    }));
+  function emitEntries(entries, url, timeline, extra = {}) {
+    window.dispatchEvent(new CustomEvent(EVENT_NAME, { detail: {
+      source: SOURCE, protocol: 2, url: cleanText(url), ts: Date.now(),
+      timeline: timeline || "", entries, ...extra
+    } }));
   }
-
   function isBookmarksTimelineUrl(url) {
-    return /\/graphql\/[^/]+\/Bookmarks/i.test(String(url || ""));
+    return /\/graphql\/[^/]+\/Bookmarks(?:[/?]|$)/i.test(String(url || ""));
   }
-
-  function inspectBody(bodyText, url) {
-    if (!shouldInspectUrl(url) || !shouldInspectBody(bodyText)) {
-      return;
-    }
-
+  function inspectBody(bodyText, url, requestId = "") {
+    if (!shouldInspectUrl(url)) return;
+    const bookmarks = isBookmarksTimelineUrl(url);
     try {
       const payload = JSON.parse(bodyText);
-      const allEntries = collectTweetEntries(payload);
-
-      // Bookmarks timeline: every entry IS a bookmark — emit unfiltered so the
-      // scanner can use the network payload (full text, expanded t.co links,
-      // author, media) as the primary capture source instead of DOM scraping.
-      if (isBookmarksTimelineUrl(url)) {
-        emitEntries(allEntries, url, "bookmarks");
+      if (Array.isArray(payload.errors) && payload.errors.length) {
+        emitEntries([], url, bookmarks ? "bookmarks" : "", { health: "api_error", pending: false, requestId });
         return;
       }
-
-      const entries = allEntries.filter(
-        (entry) => entry.inReplyToTweetId || entry.links.length > 0
-      );
-      emitEntries(entries, url);
+      const decoded = collectTweetEntries(payload, bookmarks);
+      for (let start = 0; start < Math.max(1, decoded.entries.length); start += MAX_ENTRIES_PER_EVENT) {
+        emitEntries(decoded.entries.slice(start, start + MAX_ENTRIES_PER_EVENT), url, bookmarks ? "bookmarks" : "",
+          { health: decoded.recognized ? "ok" : "schema_unknown", pending: false, requestId,
+            terminal: decoded.terminal, cursor: decoded.cursor });
+      }
     } catch (_error) {
-      // Ignore non-JSON or unexpected payloads.
+      emitEntries([], url, bookmarks ? "bookmarks" : "", { health: "decode_error", pending: false, requestId });
     }
   }
 
+  window.addEventListener("x-indexer:bridge-ping", () => emitEntries([], "", "", { health: "ready" }));
+  emitEntries([], "", "", { health: "ready" });
+  let requestSequence = 0;
   const originalFetch = window.fetch;
   if (typeof originalFetch === "function") {
     window.fetch = async function patchedFetch(...args) {
-      const response = await originalFetch.apply(this, args);
+      const requestUrl = cleanText(args?.[0]?.url || args?.[0]);
+      const requestId = `fetch-${++requestSequence}`;
+      if (isBookmarksTimelineUrl(requestUrl)) emitEntries([], requestUrl, "bookmarks", { pending: true, requestId });
+      let response;
+      try { response = await originalFetch.apply(this, args); }
+      catch (error) {
+        if (isBookmarksTimelineUrl(requestUrl)) emitEntries([], requestUrl, "bookmarks", { pending: false, requestId, health: "network_error" });
+        throw error;
+      }
 
       try {
         const url = cleanText(response?.url || args?.[0]?.url || args?.[0]);
         if (shouldInspectUrl(url)) {
           const cloned = response.clone();
           void cloned.text().then((text) => {
-            inspectBody(text, url);
-          }).catch(() => {});
+            inspectBody(text, url, requestId);
+          }).catch(() => emitEntries([], requestUrl, isBookmarksTimelineUrl(requestUrl) ? "bookmarks" : "", { pending: false, requestId, health: "decode_error" }));
         }
       } catch (_error) {
-        // Ignore fetch inspection failures.
+        emitEntries([], requestUrl, isBookmarksTimelineUrl(requestUrl) ? "bookmarks" : "", { pending: false, requestId, health: "decode_error" });
       }
 
       return response;
@@ -444,6 +455,11 @@
   };
 
   XMLHttpRequest.prototype.send = function patchedSend(...args) {
+    const requestId = `xhr-${++requestSequence}`;
+    if (isBookmarksTimelineUrl(this.__xIndexerUrl)) emitEntries([], this.__xIndexerUrl, "bookmarks", { pending: true, requestId });
+    for (const type of ["error", "abort", "timeout"]) this.addEventListener(type, () => {
+      if (isBookmarksTimelineUrl(this.__xIndexerUrl)) emitEntries([], this.__xIndexerUrl, "bookmarks", { pending: false, requestId, health: "network_error" });
+    }, { once: true });
     this.addEventListener("load", () => {
       try {
         const url = cleanText(this.__xIndexerUrl || this.responseURL || "");
@@ -454,11 +470,9 @@
             ? this.response
             : "";
 
-        if (bodyText) {
-          inspectBody(bodyText, url);
-        }
+        inspectBody(bodyText, url, requestId);
       } catch (_error) {
-        // Ignore XHR inspection failures.
+        emitEntries([], this.__xIndexerUrl, "bookmarks", { pending: false, requestId, health: "decode_error" });
       }
     }, { once: true });
 

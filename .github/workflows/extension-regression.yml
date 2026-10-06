@@ -1,0 +1,25 @@
+name: Extension and ingestion regression
+on:
+  pull_request:
+    paths: ['extension/**', 'backend/**', 'test/**', 'scripts/check-extension.mjs', 'package*.json', '.github/workflows/extension-regression.yml']
+  push:
+    branches: [main]
+    paths: ['extension/**', 'backend/**', 'test/**', 'scripts/check-extension.mjs', 'package*.json', '.github/workflows/extension-regression.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  regression:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run check:extension
+      - run: node --check backend/src/server.js && node --check backend/src/store.js && node --check backend/src/normalize.js
+      - run: npm test
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:browser

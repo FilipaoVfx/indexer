@@ -44,7 +44,7 @@ a objetivos** (*goal mode*) que devuelve rutas de implementación, no solo resul
 | **Frontend** | Astro 5 + React 19 + `@xyflow/react` (React Flow) — SPA estática |
 | **Extensión** | Chrome Manifest V3 (JS vanilla) |
 | **Persistencia** | Supabase (PostgreSQL): FTS `tsvector`, `pg_trgm`, funciones RPC |
-| **Migraciones** | 13 archivos SQL versionados (`001` → `013`) |
+| **Migraciones** | 13 archivos SQL versionados (`001` → `017`) |
 | **Empaquetado** | Docker multi-stage → GitLab Container Registry |
 | **CI/CD** | GitLab CI/CD (`install → validate → build → deploy`) + GitHub Actions |
 | **Hosting** | Backend en Render · Frontend en GitHub Pages / GitLab Pages |
@@ -72,7 +72,7 @@ que keywords · relaciones antes que registros · ejecución antes que exploraci
 - Scraping de *bookmarks* de `x.com` / `twitter.com` con scroll infinito y *batch builder*.
 - Resolución de URLs acortadas (`t.co`, `bit.ly`, `lnkd.in`, …) siguiendo redirecciones.
 - Detección y extracción de **"links del primer comentario"** abriendo el detalle del tweet en una pestaña silenciosa.
-- **Cola persistente** en `chrome.storage.local` con reintentos exponenciales (`MAX_RETRIES = 3`) y *badge* de estado.
+- **Journal persistente** en `chrome.storage.local` con selección estable, reintentos con backoff, rechazos conservados y confirmación por ID.
 - Deduplicación local contra los IDs ya almacenados en backend (`/bookmarks/ids` con *fallback* a búsqueda).
 
 ### 2. Ingesta y normalización (backend)
@@ -220,7 +220,7 @@ flowchart TD
 
 ## Modelo de datos
 
-13 migraciones SQL versionadas en [`backend/sql/`](./backend/sql) (`001` → `013`). Núcleo relacional:
+17 migraciones SQL versionadas en [`backend/sql/`](./backend/sql) (`001` → `017`). Núcleo relacional:
 
 ```mermaid
 erDiagram
@@ -296,7 +296,8 @@ erDiagram
 
 ### Extensión (`extension/`)
 - JS vanilla, sin dependencias de build. Chrome **Manifest V3**.
-- Permisos: `storage`, `tabs`, `activeTab`, `scripting`; `host_permissions: *://*/*`.
+- Chrome 111+, permisos `storage`, `unlimitedStorage`, `tabs`, `activeTab`, `scripting`, `alarms`; acceso a X, backend predeterminado y localhost. Otros backends requieren permiso opcional.
+- [Instalación y recuperación de la extensión](extension/README.md); [robustecimiento y pruebas](docs/extension-hardening.md).
 
 ### Tooling
 - `scripts/demo-video/` — generador de video demo (record / narrate / compose).
@@ -444,7 +445,7 @@ Guías detalladas: [`docs/production-deploy.md`](./docs/production-deploy.md),
 indexer/
 ├── backend/                # API HTTP Node.js + clasificador + fetch READMEs
 │   ├── src/                # server, store, knowledge, repo-classifier, ...
-│   └── sql/                # 13 migraciones (001 → 013)
+│   └── sql/                # 17 migraciones (001 → 017)
 ├── web-astro/              # SPA Astro + React (search, goal, repos, authors)
 │   └── src/{components,lib,pages}
 ├── extension/              # Chrome MV3 (background, content, popup, page-bridge)
@@ -484,7 +485,7 @@ npm run start:backend
 **Cargar la extensión en Chrome:**
 1. Ir a `chrome://extensions` → activar **Modo de desarrollador**.
 2. **Cargar descomprimida** → seleccionar la carpeta `extension/`.
-3. Abrir `https://x.com/i/bookmarks`, abrir el popup y pulsar **Sync now**.
+3. Abrir `https://x.com/i/bookmarks`, abrir el popup y pulsar **Importar bookmarks**. Aplicar la migración 017 y desplegar backend antes de actualizar la extensión.
 
 **Scripts de backend útiles:** `npm run migrate:data`, `readmes:github`, `readmes:backfill`, `classify:repos`.
 

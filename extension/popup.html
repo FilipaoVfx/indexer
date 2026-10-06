@@ -88,7 +88,7 @@
   <body>
     <main>
       <h1>X Bookmarks Indexer</h1>
-      <p class="sub">Auto-sync activo: al guardar un post en X se envía solo. Usa el botón para importar los bookmarks ya existentes.</p>
+      <p class="sub">Auto-sync: se encola después de confirmar el guardado en X. Usa el botón para importar los bookmarks ya existentes.</p>
 
       <div class="field">
         <label for="apiBaseUrl">Backend URL</label>
@@ -107,6 +107,7 @@
         <button id="saveButton">Guardar ajustes</button>
       </div>
 
+      <p class="sub">Rango de pendientes; incluye capturas recuperadas.</p>
       <div class="range-row">
         <div class="field">
           <label for="rangeMin">Desde #</label>
@@ -124,12 +125,12 @@
       <div class="stats">
         <div class="stat"><span>Escaneados</span><strong id="scannerScanned">0</strong></div>
         <div class="stat"><span>Guardados</span><strong id="scannerSaved">0</strong></div>
-        <div class="stat"><span>Nuevos</span><strong id="scannerPending">0</strong></div>
+        <div class="stat"><span>Pendientes</span><strong id="scannerPending">0</strong></div>
         <div class="stat"><span>Errores</span><strong id="scannerErrors">0</strong></div>
       </div>
 
       <div class="secondary-row">
-        <button id="scannerClearButton">Reiniciar cola</button>
+        <button id="scannerClearButton">Descartar pendientes</button>
         <button id="retryFailedButton">Reintentar fallidos</button>
         <button id="diagButton">Diagnóstico</button>
         <button id="clearActivityButton">Limpiar log</button>

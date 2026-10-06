@@ -580,42 +580,24 @@ export class BookmarkStore {
   }
 
   async upsertBookmarksWithFallback(bookmarksToUpsert) {
-    let effectiveBookmarks = this.capabilities.bookmarksFirstCommentLinks
-      ? bookmarksToUpsert
-      : stripFirstCommentLinks(bookmarksToUpsert);
-    const warnings = [];
-
-    let { data, error } = await this.supabase
-      .from("bookmarks")
-      .upsert(effectiveBookmarks, { onConflict: "id" })
-      .select("id");
-
-    if (error && this.capabilities.bookmarksFirstCommentLinks && isMissingFirstCommentLinksColumnError(error)) {
-      this.capabilities.bookmarksFirstCommentLinks = false;
-      const warning =
-        "Stored bookmarks without the first_comment_links column because Supabase schema is outdated. " +
-        "Apply backend/sql/004_search_bookmarks_scalable.sql or backend/sql/005_bookmark_context_links.sql.";
-      warnings.push(warning);
-      console.warn("[store]", warning, {
-        details: extractDbErrorMessage(error)
-      });
-
-      effectiveBookmarks = stripFirstCommentLinks(bookmarksToUpsert);
-      ({ data, error } = await this.supabase
-        .from("bookmarks")
-        .upsert(effectiveBookmarks, { onConflict: "id" })
-        .select("id"));
-    }
-
+    const { data, error } = await this.supabase.rpc("merge_bookmark_captures", {
+      p_bookmarks: bookmarksToUpsert
+    });
     if (error) {
-      throw new Error(`Failed to upsert bookmarks: ${extractDbErrorMessage(error)}`);
+      const failure = new Error(`Capture merge failed. Apply backend/sql/017_preserve_bookmark_capture.sql: ${extractDbErrorMessage(error)}`);
+      failure.statusCode = 503;
+      failure.code = "capture_merge_unavailable";
+      throw failure; // Never fall back to a destructive full-column upsert.
     }
+    return { data: Array.isArray(data) ? data : [], effectiveBookmarks: bookmarksToUpsert, warnings: [] };
+  }
 
-    return {
-      data: Array.isArray(data) ? data : [],
-      effectiveBookmarks,
-      warnings
-    };
+  async appendBookmarkLinks({ id, links = [], firstCommentLinks = [], receivedAt }) {
+    const { data, error } = await this.supabase.rpc("append_bookmark_links", {
+      p_id: id, p_links: links, p_first_comment_links: firstCommentLinks, p_updated_at: receivedAt
+    });
+    if (error) throw new Error(`Atomic link merge failed. Apply backend/sql/017_preserve_bookmark_capture.sql: ${extractDbErrorMessage(error)}`);
+    return Array.isArray(data) ? data[0] || null : null;
   }
 
   async insertBookmarksWithFallback(bookmarksToInsert) {
@@ -630,7 +612,7 @@ export class BookmarkStore {
         onConflict: "id",
         ignoreDuplicates: true
       })
-      .select("id");
+      .select("*");
 
     if (error && this.capabilities.bookmarksFirstCommentLinks && isMissingFirstCommentLinksColumnError(error)) {
       this.capabilities.bookmarksFirstCommentLinks = false;
@@ -649,7 +631,7 @@ export class BookmarkStore {
           onConflict: "id",
           ignoreDuplicates: true
         })
-        .select("id"));
+        .select("*"));
     }
 
     if (error) {
@@ -1817,16 +1799,10 @@ export class BookmarkStore {
       if (Object.keys(patch).length === 0) continue;
       patch.updated_at = receivedAt;
 
-      const { error } = await this.supabase
-        .from("bookmarks")
-        .update(patch)
-        .eq("id", after.id);
-      if (error) {
-        console.warn("[store] failed to persist resolved shortener links", {
-          bookmark_id: after.id,
-          details: extractDbErrorMessage(error)
-        });
-      }
+      const merged = await this.appendBookmarkLinks({ id: after.id, links: patch.links,
+        firstCommentLinks: patch.first_comment_links, receivedAt });
+      if (merged) expanded[index] = merged;
+
     }
 
     return expanded;
@@ -1835,20 +1811,21 @@ export class BookmarkStore {
   // Candidatos para el re-lookup diferido: posts densos ya guardados sin
   // link de GitHub. Pagina el corpus y filtra en memoria (los criterios son
   // regex sobre text_content + arrays, inviables en PostgREST directo).
-  async listFirstCommentRelookupCandidates({ userId, limit = 50, scanLimit = 4000 }) {
+  async listFirstCommentRelookupCandidates({ userId, limit = 50, scanLimit = 4000, startOffset = 0 }) {
     await this.init();
 
-    const pageSize = 500;
+    const pageSize = Math.min(500, limit);
     const items = [];
-    let scanned = 0;
+    let scanned = 0, reachedEnd = false;
 
-    for (let offset = 0; offset < scanLimit && items.length < limit; offset += pageSize) {
+    for (let offset = startOffset; offset < startOffset + scanLimit && items.length < limit; offset += pageSize) {
       let query = this.supabase
         .from("bookmarks")
         .select(
           "id,user_id,tweet_id,text_content,author_username,source_url,links,first_comment_links,created_at"
         )
         .order("created_at", { ascending: false, nullsFirst: false })
+        .order("id", { ascending: true })
         .range(offset, offset + pageSize - 1);
 
       if (userId) {
@@ -1863,12 +1840,9 @@ export class BookmarkStore {
       }
 
       const rows = data || [];
-      scanned += rows.length;
-
       for (const row of rows) {
-        if (items.length >= limit) {
-          break;
-        }
+        if (items.length >= limit) break;
+        scanned += 1;
         if (!/^\d+$/.test(String(row?.tweet_id || ""))) {
           continue;
         }
@@ -1891,12 +1865,10 @@ export class BookmarkStore {
         });
       }
 
-      if (rows.length < pageSize) {
-        break;
-      }
+      if (rows.length < pageSize && items.length < limit) { reachedEnd = true; break; }
     }
 
-    return { total_scanned: scanned, items };
+    return { total_scanned: scanned, items, next_offset: reachedEnd ? 0 : startOffset + scanned };
   }
 
   // Merge de first_comment_links sobre una fila existente + re-disparo del
@@ -1915,7 +1887,7 @@ export class BookmarkStore {
     const bookmarkId = `${userId}:${tweetId}`;
     const { data, error } = await this.supabase
       .from("bookmarks")
-      .select("id,user_id,tweet_id,text_content,source_url,links,first_comment_links")
+      .select("*")
       .eq("id", bookmarkId)
       .maybeSingle();
 
@@ -1948,23 +1920,16 @@ export class BookmarkStore {
     const changed = JSON.stringify(merged) !== JSON.stringify(existing);
     const receivedAt = new Date().toISOString();
 
+    let committed = data;
     if (changed) {
-      const { error: updateError } = await this.supabase
-        .from("bookmarks")
-        .update({ first_comment_links: merged, updated_at: receivedAt })
-        .eq("id", bookmarkId);
-
-      if (updateError) {
-        throw new Error(
-          `Failed to update first_comment_links: ${extractDbErrorMessage(updateError)}`
-        );
-      }
+      committed = await this.appendBookmarkLinks({ id: bookmarkId, firstCommentLinks: links, receivedAt });
+      if (!committed) return null;
     }
 
     const pipelineScheduled = changed
       ? this.schedulePostIngestPipeline({
           userId,
-          bookmarks: [{ ...data, first_comment_links: merged }],
+          bookmarks: [committed],
           receivedAt
         })
       : false;
@@ -1974,8 +1939,8 @@ export class BookmarkStore {
       user_id: userId,
       tweet_id: String(tweetId),
       updated: changed,
-      first_comment_links: merged,
-      added: merged.length - existing.length,
+      first_comment_links: committed.first_comment_links,
+      added: committed.first_comment_links.length - existing.length,
       post_ingest_scheduled: pipelineScheduled
     };
   }
@@ -1986,11 +1951,13 @@ export class BookmarkStore {
     let inserted = 0;
     let updated = 0;
     let ignoredInvalid = 0;
+    const invalid = [];
+    let storedIds = [];
     const warnings = [];
 
     const bookmarksToUpsert = [];
 
-    for (const rawBookmark of bookmarks) {
+    for (const [index, rawBookmark] of bookmarks.entries()) {
       const normalized = normalizeBookmark(rawBookmark, {
         userId,
         syncId,
@@ -1999,15 +1966,26 @@ export class BookmarkStore {
 
       if (!normalized.valid) {
         ignoredInvalid += 1;
+        invalid.push({ index, tweet_id: String(rawBookmark?.tweet_id || ""), reason: normalized.reason });
         continue;
       }
 
       const bookmark = normalized.bookmark;
-      bookmarksToUpsert.push({
-        ...bookmark,
-        inserted_at: receivedAt,
-        updated_at: receivedAt
-      });
+      const existingIndex = bookmarksToUpsert.findIndex(item => item.id === bookmark.id);
+      const next = { ...bookmark, inserted_at: receivedAt, updated_at: receivedAt };
+      if (existingIndex < 0) bookmarksToUpsert.push(next);
+      else {
+        const previous = bookmarksToUpsert[existingIndex];
+        bookmarksToUpsert[existingIndex] = { ...previous,
+          ...(next.text_content.length > previous.text_content.length ? next : {}),
+          links: [...new Set([...previous.links, ...next.links])],
+          first_comment_links: [...new Set([...previous.first_comment_links, ...next.first_comment_links])],
+          media: [...new Set([...previous.media, ...next.media])],
+          author_username: previous.author_username || next.author_username,
+          author_name: previous.author_name || next.author_name,
+          created_at: previous.created_at || next.created_at,
+          source_url: previous.source_url || next.source_url };
+      }
     }
 
     let postProcessingScheduled = false;
@@ -2025,14 +2003,14 @@ export class BookmarkStore {
       // We can distinguish between inserted and updated if we query before,
       // but for simplicity in a batch we'll count total successes.
       inserted = data.length;
+      storedIds = data.map(row => String(row.id).slice(userId.length + 1));
       const storedBookmarkIds = new Set(
         (Array.isArray(data) ? data : [])
           .map((row) => String(row?.id || "").trim())
           .filter(Boolean)
       );
-      const storedBookmarks = insertOnly
-        ? bookmarksToUpsert.filter((bookmark) => storedBookmarkIds.has(String(bookmark.id || "")))
-        : bookmarksToUpsert;
+      // RPC/insert RETURNING rows are the committed snapshot; enrichment needs no second read.
+      const storedBookmarks = data;
 
       postProcessingScheduled = this.schedulePostIngestPipeline({
         userId,
@@ -2051,6 +2029,8 @@ export class BookmarkStore {
       inserted,
       updated, // In Supabase upsert, we don't easily distinguish without extra checks
       ignored_invalid: ignoredInvalid,
+      invalid,
+      stored_ids: storedIds,
       // README fetch/skip ahora ocurre en el pipeline diferido; las claves se
       // conservan por compatibilidad con clientes existentes.
       github_readmes_fetched: 0,

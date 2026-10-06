@@ -96,11 +96,17 @@ medias y reintentar no debe duplicar ni corromper. Mecanismos vigentes:
 
 MV3 mata el service worker; X cambia su DOM; Render duerme; los tabs en background
 se throttlean. Defensas obligatorias, ya implementadas:
-- timeout duro en todo `fetch` de salida,
-- dead-letter queue (el item que agota reintentos sale de la cola activa),
+- límite para `fetch` JSON, incluyendo lectura del cuerpo,
+- journal serial: cola, rechazos, drafts y trabajos se cambian en una escritura; fallos de storage no se reconocen como aceptación,
+- caídas transitorias conservan capturas con backoff; rechazos permanentes conservan su payload sin poda,
+- confirmación por ID y versión de captura; una mejora recibida durante el envío no se borra con el ACK anterior,
 - `chrome.alarms` para retomar el drenaje tras muerte del worker,
 - solo se cachean lookups **exitosos** (un fallo por timing no envenena un tweet),
-- captura network-first como fuente primaria; DOM solo como fallback.
+- captura network-first de miembros explícitos del timeline; DOM como fallback y esquema desconocido visible,
+- trabajo persistente fuera del popup y selección de IDs fija para reanudar,
+- merge SQL monotónico de texto y arrays, incluyendo enriquecimiento diferido (migración 017).
+
+Ver `docs/extension-hardening.md` y `npm test` para las regresiones reproducibles.
 
 ---
 

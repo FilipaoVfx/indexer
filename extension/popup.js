@@ -78,6 +78,10 @@ async function loadSettings() {
 }
 
 async function saveSettings() {
+  const backend = new URL(apiBaseUrlInput.value);
+  if (!["https:", "http:"].includes(backend.protocol) || backend.username || backend.password) throw new Error("URL de backend inválida.");
+  const origins = [backend.origin + "/*"];
+  if (!await chrome.permissions.contains({ origins }) && !await chrome.permissions.request({ origins })) throw new Error("Permiso de acceso al backend pendiente.");
   const response = await sendRuntimeMessage({
     type: "SETTINGS_UPDATE",
     payload: {
@@ -110,6 +114,7 @@ async function injectContentScript(tabId) {
   if (!chrome.scripting || typeof chrome.scripting.executeScript !== "function") {
     throw new Error("scripting_permission_unavailable");
   }
+  await chrome.scripting.executeScript({ target: { tabId }, world: "MAIN", files: ["page-bridge.js"] });
   await chrome.scripting.executeScript({ target: { tabId }, files: ["content.js"] });
   await sleep(250);
 }
@@ -134,7 +139,7 @@ async function sendActiveTabMessage(message, options = {}) {
   }
 }
 
-// Rango 1-based sobre la lista de bookmarks NUEVOS (orden del timeline).
+// Rango 1-based de pendientes; los recuperados también participan. La selección se fija por ID.
 // min vacío = 1; max vacío = todos. max también corta el scroll temprano.
 function readRange() {
   const min = Math.max(1, Math.floor(Number(rangeMinInput.value) || 1));
@@ -149,79 +154,31 @@ function readRange() {
 // Flujo único: scroll-scan network-first, luego importa lo nuevo. Un botón.
 async function scrapeAllBookmarks() {
   scrapeButton.disabled = true;
-  scrapeButton.textContent = "Escaneando...";
   try {
-    const activeTab = await getActiveTab();
-    if (!activeTab || !/\/i\/bookmarks/i.test(activeTab.url || "")) {
-      appendLog("Abre x.com/i/bookmarks primero.");
-      return;
-    }
-
-    const { min, max } = readRange();
-    const rangeLabel = max > 0 ? `#${min}–#${max}` : min > 1 ? `#${min} en adelante` : "todos";
-    appendLog(`Escaneando bookmarks (${rangeLabel}, scroll + captura de red)...`);
-    const scan = await sendActiveTabMessage({
-      type: "BOOKMARK_SCANNER_RESCAN",
-      payload: { maxPending: max },
-    });
-    renderScannerStatus(scan || {});
-    if (!scan || !scan.ok) throw new Error(scan?.error || "scan_failed");
-    appendLog(
-      `Escaneo: escaneados=${scan.scannedCount || 0} guardados=${scan.savedCount || 0} nuevos=${scan.pendingCount || 0}`
-    );
-
-    if (!scan.pendingCount) {
-      appendLog("No hay bookmarks nuevos que importar.");
-      return;
-    }
-
-    const toImport = Math.min(
-      scan.pendingCount - Math.min(min - 1, scan.pendingCount),
-      max > 0 ? max - min + 1 : scan.pendingCount
-    );
-    if (toImport <= 0) {
-      appendLog(`El rango ${rangeLabel} queda fuera de los ${scan.pendingCount} nuevos.`);
-      return;
-    }
-
-    scrapeButton.textContent = "Importando...";
-    appendLog(`Importando ${toImport} de ${scan.pendingCount} nuevos (${rangeLabel})...`);
-    const imp = await sendActiveTabMessage({
-      type: "BOOKMARK_SCANNER_IMPORT_PENDING",
-      payload: { rangeStart: min, rangeEnd: max > 0 ? max : 0 },
-    });
-    renderScannerStatus(imp || {});
-    if (!imp || !imp.ok) throw new Error(imp?.error || "import_failed");
-
-    const r = imp.backendResult || {};
-    appendLog(
-      `Importado. insertados=${r.inserted || 0} duplicados=${r.duplicates || 0} fallidos=${r.failed || 0}` +
-      ` recibidos=${r.received ?? "?"} ids=${Array.isArray(r.imported_ids) ? r.imported_ids.length : "?"}`
-    );
-    if (Array.isArray(r.warnings) && r.warnings.length) {
-      appendLog(`Avisos: ${r.warnings.slice(0, 3).join(" | ").slice(0, 200)}`);
-    }
-    if (!r.inserted && !r.duplicates && !r.failed) {
-      appendLog("⚠ Conteos en cero: revisa las líneas bg_scanner_* de arriba para ver dónde se perdió.");
-    }
-    await sendRuntimeMessage({ type: "INGEST_FLUSH" });
-  } catch (error) {
-    const message = toErrorMessage(error);
-    if (isMissingContentScriptError(message)) {
-      appendLog("Abre x.com/i/bookmarks primero. El scraper corre en esa página.");
-    } else {
-      appendLog(`Error: ${message}`);
-    }
-  } finally {
-    scrapeButton.disabled = false;
-    scrapeButton.textContent = "⬇ Importar bookmarks";
-  }
+    const tab = await getActiveTab();
+    if (!tab || !/\/i\/bookmarks/.test(tab.url || "")) throw new Error("Abre x.com/i/bookmarks primero.");
+    await sendActiveTabMessage({ type: "GET_BOOKMARK_SCANNER_STATUS" });
+    const response = await sendRuntimeMessage({ type: "START_BOOKMARK_IMPORT", payload: { tabId: tab.id, range: readRange() } });
+    if (!response?.ok) throw new Error(response?.error || "scan_not_started");
+    appendLog("Importación iniciada. Puedes cerrar este popup; mantén abierta la pestaña de X durante el escaneo.");
+    await refreshDeliveryStatus();
+  } catch (error) { appendLog(toErrorMessage(error)); }
+  finally { scrapeButton.disabled = false; }
+}
+async function refreshDeliveryStatus() {
+  const status = await sendRuntimeMessage({ type: "GET_DELIVERY_STATUS" });
+  if (!status?.ok) return;
+  const job = status.job;
+  const phase = { scanning: "Escaneando", delivering: "Enviando", confirmed: "Guardado", needs_attention: "Requiere revisión", interrupted: "Interrumpido: vuelve a iniciar para continuar" }[job?.phase] || "Listo";
+  const coverage = { complete: "recorrido completo", partial: "recorrido parcial", range_limit: "rango solicitado" }[job?.coverage];
+  scannerStatusElement.textContent = `${phase}${coverage ? " · " + coverage : ""} · en cola: ${status.pendingCount} · confirmados: ${job?.confirmed || 0} · rechazados: ${status.failedCount}`;
 }
 
 async function clearScannerPending() {
   const response = await sendActiveTabMessage({ type: "BOOKMARK_SCANNER_CLEAR_PENDING" });
-  renderScannerStatus(response || {});
-  appendLog(`Cola reiniciada. Nuevos=${response?.pendingCount || 0}`);
+  if (!response?.ok) throw new Error(response?.error || "clear_drafts_failed");
+  renderScannerStatus(response);
+  appendLog(`Pendientes descartados. Restantes=${response.pendingCount || 0}`);
 }
 
 async function refreshScannerStatus() {
@@ -278,6 +235,7 @@ clearActivityButton.addEventListener("click", () => {
 retryFailedButton.addEventListener("click", () => {
   void (async () => {
     const res = await sendRuntimeMessage({ type: "RETRY_FAILED" });
+    if (!res?.ok) throw new Error(res?.error || "retry_failed");
     appendLog(`Fallidos reencolados: ${res?.requeued ?? 0}. En cola: ${res?.pendingQueue ?? "?"}`);
   })().catch((error) => appendLog(`Retry error: ${toErrorMessage(error)}`));
 });
@@ -312,3 +270,6 @@ diagButton.addEventListener("click", () => {
 
 void loadSettings().catch((error) => appendLog(`Error init: ${toErrorMessage(error)}`));
 void refreshScannerStatus().catch(() => {});
+
+void refreshDeliveryStatus().catch(() => {});
+setInterval(() => void refreshDeliveryStatus().catch(() => {}), 1500);

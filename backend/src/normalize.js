@@ -15,7 +15,7 @@ function uniqueStringArray(values, maxItems = 30, maxLength = 1500) {
 
   for (const value of values) {
     const normalized = asString(value, maxLength);
-    if (!normalized || seen.has(normalized)) {
+    if (!normalized || !/^https?:\/\//i.test(normalized) || seen.has(normalized)) {
       continue;
     }
     seen.add(normalized);
@@ -111,6 +111,18 @@ export function normalizeBookmark(rawBookmark, context) {
   );
   const media = normalizeMediaArray(rawBookmark.media);
 
+  if (rawBookmark.capture === 'network' && rawBookmark.entity_type !== 'Tweet') {
+    return { valid: false, reason: 'unverified_network_entity' };
+  }
+  if (sourceUrl && !/^https:\/\/(?:x\.com|twitter\.com)\/(?:[^/]+\/status|i\/web\/status)\//i.test(sourceUrl)) {
+    return { valid: false, reason: 'invalid_source_url' };
+  }
+  const urlId = sourceUrl.match(/\/status\/(\d+)/)?.[1];
+  if (urlId && urlId !== tweetId) return { valid: false, reason: 'source_id_mismatch' };
+  if (!textContent && !authorUsername && media.length === 0 && links.length === 0) {
+    return { valid: false, reason: 'capture_has_no_evidence' };
+  }
+
   return {
     valid: true,
     bookmark: {
@@ -126,6 +138,8 @@ export function normalizeBookmark(rawBookmark, context) {
       first_comment_links: firstCommentLinks,
       media,
       source_url: sourceUrl || null,
+      capture_source: rawBookmark.capture === 'network' ? 'network' : rawBookmark.capture === 'dom' ? 'dom' : 'legacy',
+      content_truncated: rawBookmark.content_truncated === true || String(rawBookmark.text || rawBookmark.text_content || '').length > 12000,
       ingested_at: context.receivedAt,
       updated_at: context.receivedAt
     }
